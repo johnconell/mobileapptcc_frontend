@@ -1,0 +1,27 @@
+[
+  {
+    "id": "prog-bsit",
+    "code": "BSIT",
+    "name": "BS Information Technology"
+  },
+  {
+    "id": "prog-bsba",
+    "code": "BSBA",
+    "name": "BS Business Administration"
+  },
+  {
+    "id": "prog-bsed",
+    "code": "BSED",
+    "name": "BS Education"
+  },
+  {
+    "id": "prog-beed",
+    "code": "BEED",
+    "name": "BEED"
+  },
+  {
+    "id": "prog-crim",
+    "code": "CRIM",
+    "name": "Criminology"
+  }
+]

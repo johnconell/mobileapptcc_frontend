@@ -1,0 +1,14 @@
+[
+  {
+    "id": "proctor-001",
+    "username": "proctor",
+    "password": "tcc2026",
+    "displayName": "Maria Santos"
+  },
+  {
+    "id": "proctor-002",
+    "username": "proctor2",
+    "password": "exam2026",
+    "displayName": "Juan Dela Cruz"
+  }
+]

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "rs-1",
+    "title": "Lobby open",
+    "description": "Proctors have opened the examination lobby.",
+    "timestamp": "Today · 7:45 AM",
+    "tone": "info"
+  },
+  {
+    "id": "rs-2",
+    "title": "Device ready",
+    "description": "Your device is configured for offline LAN examination.",
+    "timestamp": "Today · 7:40 AM",
+    "tone": "success"
+  },
+  {
+    "id": "rs-3",
+    "title": "Reminder",
+    "description": "Keep your phone awake during the examination period.",
+    "timestamp": "Today · 7:30 AM",
+    "tone": "warning"
+  }
+]

@@ -1,0 +1,38 @@
+[
+  {
+    "id": "subj-eng",
+    "code": "ENG",
+    "name": "English Proficiency",
+    "questionCount": 15
+  },
+  {
+    "id": "subj-math",
+    "code": "MATH",
+    "name": "Mathematics",
+    "questionCount": 15
+  },
+  {
+    "id": "subj-sci",
+    "code": "SCI",
+    "name": "Science",
+    "questionCount": 15
+  },
+  {
+    "id": "subj-log",
+    "code": "LOG",
+    "name": "Logical Reasoning",
+    "questionCount": 15
+  },
+  {
+    "id": "subj-gen",
+    "code": "GEN",
+    "name": "General Knowledge",
+    "questionCount": 10
+  },
+  {
+    "id": "subj-fil",
+    "code": "FIL",
+    "name": "Filipino",
+    "questionCount": 10
+  }
+]

@@ -1,0 +1,62 @@
+[
+  {
+    "id": "sess-2026-a-am",
+    "scheduleId": "sched-2026-entrance",
+    "timeLabel": "8:00 AM - 10:00 AM",
+    "startTime": "08:00 AM",
+    "endTime": "10:00 AM",
+    "venue": "Computer Laboratory 1",
+    "batchNumber": "Batch A",
+    "registeredStudents": 50,
+    "durationMinutes": 90,
+    "totalQuestions": 80
+  },
+  {
+    "id": "sess-2026-b-mid",
+    "scheduleId": "sched-2026-entrance",
+    "timeLabel": "10:30 AM - 12:30 PM",
+    "startTime": "10:30 AM",
+    "endTime": "12:30 PM",
+    "venue": "Computer Laboratory 2",
+    "batchNumber": "Batch B",
+    "registeredStudents": 48,
+    "durationMinutes": 90,
+    "totalQuestions": 80
+  },
+  {
+    "id": "sess-2026-c-pm",
+    "scheduleId": "sched-2026-entrance",
+    "timeLabel": "1:30 PM - 3:30 PM",
+    "startTime": "01:30 PM",
+    "endTime": "03:30 PM",
+    "venue": "ICT Laboratory — Main Building",
+    "batchNumber": "Batch C",
+    "registeredStudents": 45,
+    "durationMinutes": 90,
+    "totalQuestions": 80
+  },
+  {
+    "id": "sess-2026-sp-am",
+    "scheduleId": "sched-2026-special",
+    "timeLabel": "8:00 AM - 10:00 AM",
+    "startTime": "08:00 AM",
+    "endTime": "10:00 AM",
+    "venue": "Computer Laboratory 1",
+    "batchNumber": "Batch A",
+    "registeredStudents": 30,
+    "durationMinutes": 90,
+    "totalQuestions": 80
+  },
+  {
+    "id": "sess-2026-sp-pm",
+    "scheduleId": "sched-2026-special",
+    "timeLabel": "1:00 PM - 3:00 PM",
+    "startTime": "01:00 PM",
+    "endTime": "03:00 PM",
+    "venue": "Computer Laboratory 2",
+    "batchNumber": "Batch B",
+    "registeredStudents": 28,
+    "durationMinutes": 90,
+    "totalQuestions": 80
+  }
+]

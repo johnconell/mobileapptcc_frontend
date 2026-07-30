@@ -1,0 +1,20 @@
+[
+  {
+    "id": "sched-2026-entrance",
+    "name": "Entrance Examination 2026",
+    "schoolYear": "2026–2027",
+    "examinationDate": "July 30, 2026",
+    "examinationDateIso": "2026-07-30",
+    "batchCount": 3,
+    "description": "Official TCC entrance examination for incoming first-year students."
+  },
+  {
+    "id": "sched-2026-special",
+    "name": "Special Entrance Examination 2026",
+    "schoolYear": "2026–2027",
+    "examinationDate": "August 15, 2026",
+    "examinationDateIso": "2026-08-15",
+    "batchCount": 2,
+    "description": "Special schedule for late applicants."
+  }
+]

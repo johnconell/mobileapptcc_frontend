@@ -1,0 +1,28 @@
+{
+  "id": "exam-tcc-2026-entrance",
+  "name": "TCC Entrance Examination 2026",
+  "date": "July 28, 2026",
+  "startTime": "08:30 AM",
+  "endTime": "10:00 AM",
+  "estimatedStartTime": "08:30 AM",
+  "venue": "ICT Laboratory — Main Building",
+  "batch": "Batch A — Morning",
+  "durationMinutes": 90,
+  "totalQuestions": 80,
+  "status": "lobby_open",
+  "instructions": [
+    "Arrive at the venue and connect to the campus examination LAN.",
+    "Keep your device charged. Screen lock and notifications should be disabled.",
+    "Read each question carefully before selecting an answer.",
+    "You may navigate between questions using Previous, Next, or the question palette.",
+    "Answers are auto-saved as you select choices.",
+    "Submit only when you have reviewed all unanswered items."
+  ],
+  "rules": [
+    "No switching apps or leaving the examination screen once the exam starts.",
+    "Do not communicate with other examinees during the test.",
+    "Proctors may end the examination for all students at any time.",
+    "Any form of cheating will result in disqualification.",
+    "Official results will be released by the Admissions Office."
+  ]
+}

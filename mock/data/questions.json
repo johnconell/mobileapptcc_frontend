@@ -1,0 +1,1202 @@
+[
+  {
+    "id": "q-001",
+    "number": 1,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Which word is a synonym of \"rapid\"?",
+    "choices": {
+      "A": "Slow",
+      "B": "Quick",
+      "C": "Quiet",
+      "D": "Rough"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-002",
+    "number": 2,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Select the correctly spelled word.",
+    "choices": {
+      "A": "Accomodate",
+      "B": "Acommodate",
+      "C": "Accommodate",
+      "D": "Acomodate"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-003",
+    "number": 3,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Identify the noun in the sentence: \"The cat sleeps.\"",
+    "choices": {
+      "A": "The",
+      "B": "cat",
+      "C": "sleeps",
+      "D": "."
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-004",
+    "number": 4,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Which is an antonym of \"scarce\"?",
+    "choices": {
+      "A": "Rare",
+      "B": "Abundant",
+      "C": "Limited",
+      "D": "Sparse"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-005",
+    "number": 5,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Choose the proper article: ___ honest man.",
+    "choices": {
+      "A": "A",
+      "B": "An",
+      "C": "The",
+      "D": "No article"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-006",
+    "number": 6,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Which word is a synonym of \"rapid\"? (Set 2)",
+    "choices": {
+      "A": "Slow",
+      "B": "Quick",
+      "C": "Quiet",
+      "D": "Rough"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-007",
+    "number": 7,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Select the correctly spelled word. (Set 2)",
+    "choices": {
+      "A": "Accomodate",
+      "B": "Acommodate",
+      "C": "Accommodate",
+      "D": "Acomodate"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-008",
+    "number": 8,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Identify the noun in the sentence: \"The cat sleeps.\" (Set 2)",
+    "choices": {
+      "A": "The",
+      "B": "cat",
+      "C": "sleeps",
+      "D": "."
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-009",
+    "number": 9,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Which is an antonym of \"scarce\"? (Set 2)",
+    "choices": {
+      "A": "Rare",
+      "B": "Abundant",
+      "C": "Limited",
+      "D": "Sparse"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-010",
+    "number": 10,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Choose the proper article: ___ honest man. (Set 2)",
+    "choices": {
+      "A": "A",
+      "B": "An",
+      "C": "The",
+      "D": "No article"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-011",
+    "number": 11,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Which word is a synonym of \"rapid\"? (Set 3)",
+    "choices": {
+      "A": "Slow",
+      "B": "Quick",
+      "C": "Quiet",
+      "D": "Rough"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-012",
+    "number": 12,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Select the correctly spelled word. (Set 3)",
+    "choices": {
+      "A": "Accomodate",
+      "B": "Acommodate",
+      "C": "Accommodate",
+      "D": "Acomodate"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-013",
+    "number": 13,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Identify the noun in the sentence: \"The cat sleeps.\" (Set 3)",
+    "choices": {
+      "A": "The",
+      "B": "cat",
+      "C": "sleeps",
+      "D": "."
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-014",
+    "number": 14,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Which is an antonym of \"scarce\"? (Set 3)",
+    "choices": {
+      "A": "Rare",
+      "B": "Abundant",
+      "C": "Limited",
+      "D": "Sparse"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-015",
+    "number": 15,
+    "subjectId": "subj-eng",
+    "type": "multiple_choice",
+    "question": "Choose the proper article: ___ honest man. (Set 3)",
+    "choices": {
+      "A": "A",
+      "B": "An",
+      "C": "The",
+      "D": "No article"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review English Proficiency fundamentals for related items."
+  },
+  {
+    "id": "q-016",
+    "number": 16,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "What is 15% of 200?",
+    "choices": {
+      "A": "20",
+      "B": "25",
+      "C": "30",
+      "D": "35"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-017",
+    "number": 17,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "Solve: 3x + 6 = 18. What is x?",
+    "choices": {
+      "A": "2",
+      "B": "3",
+      "C": "4",
+      "D": "6"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-018",
+    "number": 18,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "What is the area of a rectangle 8 by 5?",
+    "choices": {
+      "A": "13",
+      "B": "26",
+      "C": "40",
+      "D": "45"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-019",
+    "number": 19,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "Simplify: 2/4 + 1/4",
+    "choices": {
+      "A": "1/4",
+      "B": "2/4",
+      "C": "3/4",
+      "D": "1"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-020",
+    "number": 20,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "What is the next number: 2, 4, 8, 16, ?",
+    "choices": {
+      "A": "18",
+      "B": "24",
+      "C": "30",
+      "D": "32"
+    },
+    "correctAnswer": "D",
+    "explanation": "The correct answer is D. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-021",
+    "number": 21,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "What is 15% of 200? (Set 2)",
+    "choices": {
+      "A": "20",
+      "B": "25",
+      "C": "30",
+      "D": "35"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-022",
+    "number": 22,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "Solve: 3x + 6 = 18. What is x? (Set 2)",
+    "choices": {
+      "A": "2",
+      "B": "3",
+      "C": "4",
+      "D": "6"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-023",
+    "number": 23,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "What is the area of a rectangle 8 by 5? (Set 2)",
+    "choices": {
+      "A": "13",
+      "B": "26",
+      "C": "40",
+      "D": "45"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-024",
+    "number": 24,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "Simplify: 2/4 + 1/4 (Set 2)",
+    "choices": {
+      "A": "1/4",
+      "B": "2/4",
+      "C": "3/4",
+      "D": "1"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-025",
+    "number": 25,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "What is the next number: 2, 4, 8, 16, ? (Set 2)",
+    "choices": {
+      "A": "18",
+      "B": "24",
+      "C": "30",
+      "D": "32"
+    },
+    "correctAnswer": "D",
+    "explanation": "The correct answer is D. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-026",
+    "number": 26,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "What is 15% of 200? (Set 3)",
+    "choices": {
+      "A": "20",
+      "B": "25",
+      "C": "30",
+      "D": "35"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-027",
+    "number": 27,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "Solve: 3x + 6 = 18. What is x? (Set 3)",
+    "choices": {
+      "A": "2",
+      "B": "3",
+      "C": "4",
+      "D": "6"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-028",
+    "number": 28,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "What is the area of a rectangle 8 by 5? (Set 3)",
+    "choices": {
+      "A": "13",
+      "B": "26",
+      "C": "40",
+      "D": "45"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-029",
+    "number": 29,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "Simplify: 2/4 + 1/4 (Set 3)",
+    "choices": {
+      "A": "1/4",
+      "B": "2/4",
+      "C": "3/4",
+      "D": "1"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-030",
+    "number": 30,
+    "subjectId": "subj-math",
+    "type": "multiple_choice",
+    "question": "What is the next number: 2, 4, 8, 16, ? (Set 3)",
+    "choices": {
+      "A": "18",
+      "B": "24",
+      "C": "30",
+      "D": "32"
+    },
+    "correctAnswer": "D",
+    "explanation": "The correct answer is D. Review Mathematics fundamentals for related items."
+  },
+  {
+    "id": "q-031",
+    "number": 31,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "What gas do plants absorb for photosynthesis?",
+    "choices": {
+      "A": "Oxygen",
+      "B": "Nitrogen",
+      "C": "Carbon dioxide",
+      "D": "Hydrogen"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-032",
+    "number": 32,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "Water boils at what temperature at sea level (°C)?",
+    "choices": {
+      "A": "90",
+      "B": "95",
+      "C": "100",
+      "D": "110"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-033",
+    "number": 33,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "Which planet is known as the Red Planet?",
+    "choices": {
+      "A": "Venus",
+      "B": "Mars",
+      "C": "Jupiter",
+      "D": "Mercury"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-034",
+    "number": 34,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "The basic unit of life is the:",
+    "choices": {
+      "A": "Atom",
+      "B": "Tissue",
+      "C": "Cell",
+      "D": "Organ"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-035",
+    "number": 35,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "Which organ pumps blood throughout the body?",
+    "choices": {
+      "A": "Lungs",
+      "B": "Liver",
+      "C": "Heart",
+      "D": "Kidney"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-036",
+    "number": 36,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "What gas do plants absorb for photosynthesis? (Set 2)",
+    "choices": {
+      "A": "Oxygen",
+      "B": "Nitrogen",
+      "C": "Carbon dioxide",
+      "D": "Hydrogen"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-037",
+    "number": 37,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "Water boils at what temperature at sea level (°C)? (Set 2)",
+    "choices": {
+      "A": "90",
+      "B": "95",
+      "C": "100",
+      "D": "110"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-038",
+    "number": 38,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "Which planet is known as the Red Planet? (Set 2)",
+    "choices": {
+      "A": "Venus",
+      "B": "Mars",
+      "C": "Jupiter",
+      "D": "Mercury"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-039",
+    "number": 39,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "The basic unit of life is the: (Set 2)",
+    "choices": {
+      "A": "Atom",
+      "B": "Tissue",
+      "C": "Cell",
+      "D": "Organ"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-040",
+    "number": 40,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "Which organ pumps blood throughout the body? (Set 2)",
+    "choices": {
+      "A": "Lungs",
+      "B": "Liver",
+      "C": "Heart",
+      "D": "Kidney"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-041",
+    "number": 41,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "What gas do plants absorb for photosynthesis? (Set 3)",
+    "choices": {
+      "A": "Oxygen",
+      "B": "Nitrogen",
+      "C": "Carbon dioxide",
+      "D": "Hydrogen"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-042",
+    "number": 42,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "Water boils at what temperature at sea level (°C)? (Set 3)",
+    "choices": {
+      "A": "90",
+      "B": "95",
+      "C": "100",
+      "D": "110"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-043",
+    "number": 43,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "Which planet is known as the Red Planet? (Set 3)",
+    "choices": {
+      "A": "Venus",
+      "B": "Mars",
+      "C": "Jupiter",
+      "D": "Mercury"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-044",
+    "number": 44,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "The basic unit of life is the: (Set 3)",
+    "choices": {
+      "A": "Atom",
+      "B": "Tissue",
+      "C": "Cell",
+      "D": "Organ"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-045",
+    "number": 45,
+    "subjectId": "subj-sci",
+    "type": "multiple_choice",
+    "question": "Which organ pumps blood throughout the body? (Set 3)",
+    "choices": {
+      "A": "Lungs",
+      "B": "Liver",
+      "C": "Heart",
+      "D": "Kidney"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Science fundamentals for related items."
+  },
+  {
+    "id": "q-046",
+    "number": 46,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "If all roses are flowers and some flowers fade quickly, which is true?",
+    "choices": {
+      "A": "All roses fade quickly",
+      "B": "Some roses may fade quickly",
+      "C": "No roses fade",
+      "D": "Roses are not flowers"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-047",
+    "number": 47,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "Find the odd one out: Apple, Banana, Carrot, Mango",
+    "choices": {
+      "A": "Apple",
+      "B": "Banana",
+      "C": "Carrot",
+      "D": "Mango"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-048",
+    "number": 48,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "Complete the analogy: Book is to Reading as Fork is to ___",
+    "choices": {
+      "A": "Drawing",
+      "B": "Writing",
+      "C": "Eating",
+      "D": "Cooking"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-049",
+    "number": 49,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "If today is Wednesday, what day is 10 days later?",
+    "choices": {
+      "A": "Friday",
+      "B": "Saturday",
+      "C": "Sunday",
+      "D": "Monday"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-050",
+    "number": 50,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "Which number does not belong: 3, 5, 7, 9, 11?",
+    "choices": {
+      "A": "3",
+      "B": "5",
+      "C": "7",
+      "D": "9"
+    },
+    "correctAnswer": "D",
+    "explanation": "The correct answer is D. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-051",
+    "number": 51,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "If all roses are flowers and some flowers fade quickly, which is true? (Set 2)",
+    "choices": {
+      "A": "All roses fade quickly",
+      "B": "Some roses may fade quickly",
+      "C": "No roses fade",
+      "D": "Roses are not flowers"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-052",
+    "number": 52,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "Find the odd one out: Apple, Banana, Carrot, Mango (Set 2)",
+    "choices": {
+      "A": "Apple",
+      "B": "Banana",
+      "C": "Carrot",
+      "D": "Mango"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-053",
+    "number": 53,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "Complete the analogy: Book is to Reading as Fork is to ___ (Set 2)",
+    "choices": {
+      "A": "Drawing",
+      "B": "Writing",
+      "C": "Eating",
+      "D": "Cooking"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-054",
+    "number": 54,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "If today is Wednesday, what day is 10 days later? (Set 2)",
+    "choices": {
+      "A": "Friday",
+      "B": "Saturday",
+      "C": "Sunday",
+      "D": "Monday"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-055",
+    "number": 55,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "Which number does not belong: 3, 5, 7, 9, 11? (Set 2)",
+    "choices": {
+      "A": "3",
+      "B": "5",
+      "C": "7",
+      "D": "9"
+    },
+    "correctAnswer": "D",
+    "explanation": "The correct answer is D. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-056",
+    "number": 56,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "If all roses are flowers and some flowers fade quickly, which is true? (Set 3)",
+    "choices": {
+      "A": "All roses fade quickly",
+      "B": "Some roses may fade quickly",
+      "C": "No roses fade",
+      "D": "Roses are not flowers"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-057",
+    "number": 57,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "Find the odd one out: Apple, Banana, Carrot, Mango (Set 3)",
+    "choices": {
+      "A": "Apple",
+      "B": "Banana",
+      "C": "Carrot",
+      "D": "Mango"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-058",
+    "number": 58,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "Complete the analogy: Book is to Reading as Fork is to ___ (Set 3)",
+    "choices": {
+      "A": "Drawing",
+      "B": "Writing",
+      "C": "Eating",
+      "D": "Cooking"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-059",
+    "number": 59,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "If today is Wednesday, what day is 10 days later? (Set 3)",
+    "choices": {
+      "A": "Friday",
+      "B": "Saturday",
+      "C": "Sunday",
+      "D": "Monday"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-060",
+    "number": 60,
+    "subjectId": "subj-log",
+    "type": "multiple_choice",
+    "question": "Which number does not belong: 3, 5, 7, 9, 11? (Set 3)",
+    "choices": {
+      "A": "3",
+      "B": "5",
+      "C": "7",
+      "D": "9"
+    },
+    "correctAnswer": "D",
+    "explanation": "The correct answer is D. Review Logical Reasoning fundamentals for related items."
+  },
+  {
+    "id": "q-061",
+    "number": 61,
+    "subjectId": "subj-gen",
+    "type": "multiple_choice",
+    "question": "What is the capital of the Philippines?",
+    "choices": {
+      "A": "Cebu",
+      "B": "Davao",
+      "C": "Manila",
+      "D": "Quezon City"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review General Knowledge fundamentals for related items."
+  },
+  {
+    "id": "q-062",
+    "number": 62,
+    "subjectId": "subj-gen",
+    "type": "multiple_choice",
+    "question": "Who wrote the Philippine National Anthem lyrics?",
+    "choices": {
+      "A": "Jose Rizal",
+      "B": "Julian Felipe",
+      "C": "Jose Palma",
+      "D": "Andres Bonifacio"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review General Knowledge fundamentals for related items."
+  },
+  {
+    "id": "q-063",
+    "number": 63,
+    "subjectId": "subj-gen",
+    "type": "multiple_choice",
+    "question": "Tagoloan is a municipality in which province?",
+    "choices": {
+      "A": "Bukidnon",
+      "B": "Misamis Oriental",
+      "C": "Lanao del Norte",
+      "D": "Camiguin"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review General Knowledge fundamentals for related items."
+  },
+  {
+    "id": "q-064",
+    "number": 64,
+    "subjectId": "subj-gen",
+    "type": "multiple_choice",
+    "question": "How many continents are there?",
+    "choices": {
+      "A": "5",
+      "B": "6",
+      "C": "7",
+      "D": "8"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review General Knowledge fundamentals for related items."
+  },
+  {
+    "id": "q-065",
+    "number": 65,
+    "subjectId": "subj-gen",
+    "type": "multiple_choice",
+    "question": "Which color is typically associated with caution signs?",
+    "choices": {
+      "A": "Blue",
+      "B": "Green",
+      "C": "Yellow",
+      "D": "Purple"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review General Knowledge fundamentals for related items."
+  },
+  {
+    "id": "q-066",
+    "number": 66,
+    "subjectId": "subj-gen",
+    "type": "multiple_choice",
+    "question": "What is the capital of the Philippines? (Set 2)",
+    "choices": {
+      "A": "Cebu",
+      "B": "Davao",
+      "C": "Manila",
+      "D": "Quezon City"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review General Knowledge fundamentals for related items."
+  },
+  {
+    "id": "q-067",
+    "number": 67,
+    "subjectId": "subj-gen",
+    "type": "multiple_choice",
+    "question": "Who wrote the Philippine National Anthem lyrics? (Set 2)",
+    "choices": {
+      "A": "Jose Rizal",
+      "B": "Julian Felipe",
+      "C": "Jose Palma",
+      "D": "Andres Bonifacio"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review General Knowledge fundamentals for related items."
+  },
+  {
+    "id": "q-068",
+    "number": 68,
+    "subjectId": "subj-gen",
+    "type": "multiple_choice",
+    "question": "Tagoloan is a municipality in which province? (Set 2)",
+    "choices": {
+      "A": "Bukidnon",
+      "B": "Misamis Oriental",
+      "C": "Lanao del Norte",
+      "D": "Camiguin"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review General Knowledge fundamentals for related items."
+  },
+  {
+    "id": "q-069",
+    "number": 69,
+    "subjectId": "subj-gen",
+    "type": "multiple_choice",
+    "question": "How many continents are there? (Set 2)",
+    "choices": {
+      "A": "5",
+      "B": "6",
+      "C": "7",
+      "D": "8"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review General Knowledge fundamentals for related items."
+  },
+  {
+    "id": "q-070",
+    "number": 70,
+    "subjectId": "subj-gen",
+    "type": "multiple_choice",
+    "question": "Which color is typically associated with caution signs? (Set 2)",
+    "choices": {
+      "A": "Blue",
+      "B": "Green",
+      "C": "Yellow",
+      "D": "Purple"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review General Knowledge fundamentals for related items."
+  },
+  {
+    "id": "q-071",
+    "number": 71,
+    "subjectId": "subj-fil",
+    "type": "multiple_choice",
+    "question": "Ano ang kahulugan ng \"masipag\"?",
+    "choices": {
+      "A": "Tamad",
+      "B": "Masigasig",
+      "C": "Galit",
+      "D": "Malungkot"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Filipino fundamentals for related items."
+  },
+  {
+    "id": "q-072",
+    "number": 72,
+    "subjectId": "subj-fil",
+    "type": "multiple_choice",
+    "question": "Alin ang pangngalan?",
+    "choices": {
+      "A": "Tumakbo",
+      "B": "Maganda",
+      "C": "Bahay",
+      "D": "Mabilis"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Filipino fundamentals for related items."
+  },
+  {
+    "id": "q-073",
+    "number": 73,
+    "subjectId": "subj-fil",
+    "type": "multiple_choice",
+    "question": "Ano ang kasalungat ng \"maaga\"?",
+    "choices": {
+      "A": "Madali",
+      "B": "Huli",
+      "C": "Mabilis",
+      "D": "Mabagal"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Filipino fundamentals for related items."
+  },
+  {
+    "id": "q-074",
+    "number": 74,
+    "subjectId": "subj-fil",
+    "type": "multiple_choice",
+    "question": "Piliin ang wastong baybay.",
+    "choices": {
+      "A": "Kaibigan",
+      "B": "Kaibgan",
+      "C": "Kaibgaan",
+      "D": "Kaibegan"
+    },
+    "correctAnswer": "A",
+    "explanation": "The correct answer is A. Review Filipino fundamentals for related items."
+  },
+  {
+    "id": "q-075",
+    "number": 75,
+    "subjectId": "subj-fil",
+    "type": "multiple_choice",
+    "question": "Ano ang pantig sa salitang \"araw\"?",
+    "choices": {
+      "A": "1",
+      "B": "2",
+      "C": "3",
+      "D": "4"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Filipino fundamentals for related items."
+  },
+  {
+    "id": "q-076",
+    "number": 76,
+    "subjectId": "subj-fil",
+    "type": "multiple_choice",
+    "question": "Ano ang kahulugan ng \"masipag\"? (Set 2)",
+    "choices": {
+      "A": "Tamad",
+      "B": "Masigasig",
+      "C": "Galit",
+      "D": "Malungkot"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Filipino fundamentals for related items."
+  },
+  {
+    "id": "q-077",
+    "number": 77,
+    "subjectId": "subj-fil",
+    "type": "multiple_choice",
+    "question": "Alin ang pangngalan? (Set 2)",
+    "choices": {
+      "A": "Tumakbo",
+      "B": "Maganda",
+      "C": "Bahay",
+      "D": "Mabilis"
+    },
+    "correctAnswer": "C",
+    "explanation": "The correct answer is C. Review Filipino fundamentals for related items."
+  },
+  {
+    "id": "q-078",
+    "number": 78,
+    "subjectId": "subj-fil",
+    "type": "multiple_choice",
+    "question": "Ano ang kasalungat ng \"maaga\"? (Set 2)",
+    "choices": {
+      "A": "Madali",
+      "B": "Huli",
+      "C": "Mabilis",
+      "D": "Mabagal"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Filipino fundamentals for related items."
+  },
+  {
+    "id": "q-079",
+    "number": 79,
+    "subjectId": "subj-fil",
+    "type": "multiple_choice",
+    "question": "Piliin ang wastong baybay. (Set 2)",
+    "choices": {
+      "A": "Kaibigan",
+      "B": "Kaibgan",
+      "C": "Kaibgaan",
+      "D": "Kaibegan"
+    },
+    "correctAnswer": "A",
+    "explanation": "The correct answer is A. Review Filipino fundamentals for related items."
+  },
+  {
+    "id": "q-080",
+    "number": 80,
+    "subjectId": "subj-fil",
+    "type": "multiple_choice",
+    "question": "Ano ang pantig sa salitang \"araw\"? (Set 2)",
+    "choices": {
+      "A": "1",
+      "B": "2",
+      "C": "3",
+      "D": "4"
+    },
+    "correctAnswer": "B",
+    "explanation": "The correct answer is B. Review Filipino fundamentals for related items."
+  }
+]
