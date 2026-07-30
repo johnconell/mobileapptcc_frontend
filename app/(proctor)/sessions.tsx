@@ -6,6 +6,7 @@ import { SessionCard } from '@/features/proctor/SessionCard';
 import { useSchedules, useSessions } from '@/hooks/useRepositories';
 import { useProctorStore } from '@/stores';
 import { colors } from '@/theme';
+import { safeBack } from '@/utils';
 
 export default function SessionsScreen() {
   const router = useRouter();
@@ -29,7 +30,7 @@ export default function SessionsScreen() {
       <Header
         title="Examination Time"
         subtitle={schedule?.name ?? 'Select a session'}
-        onBack={() => router.back()}
+        onBack={() => safeBack(router, '/(proctor)/schedules')}
       />
       <FlatList
         data={sessionsQuery.data ?? []}
@@ -50,7 +51,7 @@ export default function SessionsScreen() {
             onPress={() => {
               setSelectedSession(item);
               router.push({
-                pathname: '/(proctor)/lobby',
+                pathname: '/(proctor)/rooms',
                 params: { sessionId: item.id },
               });
             }}

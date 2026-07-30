@@ -33,13 +33,23 @@ export default function ScanScreen() {
     router.replace('/(student)/verify');
   };
 
-  /** Simulate a successful scan using the active lobby code when available. */
+  /** Dev helper: reuse a stored exam code, otherwise send user to manual entry. */
   const simulateScan = async () => {
     setBusy(true);
     setError(null);
-    // Open default demo session lobby so a code exists, then scan that code.
-    const lobby = await LobbyRepository.openLobby('sess-2026-a-am');
-    await handlePayload(lobby.examinationCode);
+    try {
+      const stored = await LobbyRepository.getLobby();
+      if (stored?.examinationCode) {
+        await handlePayload(stored.examinationCode);
+        return;
+      }
+      setBusy(false);
+      router.replace('/(student)/enter-code');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to simulate scan.');
+      setBusy(false);
+      setScanning(true);
+    }
   };
 
   if (!permission) {
@@ -101,11 +111,18 @@ export default function ScanScreen() {
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <View style={styles.footer}>
         <Button
-          title="Simulate Successful Scan"
+          title="Enter Examination Code Instead"
           variant="outline"
+          fullWidth
+          onPress={() => router.replace('/(student)/enter-code')}
+        />
+        <Button
+          title="Simulate Successful Scan"
+          variant="ghost"
           fullWidth
           loading={busy}
           onPress={simulateScan}
+          style={{ marginTop: 8 }}
         />
       </View>
     </View>

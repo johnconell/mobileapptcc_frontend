@@ -63,6 +63,9 @@ export interface ExamSchedule {
 export interface ExamSession {
   id: string;
   scheduleId: string;
+  examSessionId?: number;
+  roomId?: string | null;
+  roomName?: string | null;
   timeLabel: string;
   startTime: string;
   endTime: string;
@@ -70,8 +73,26 @@ export interface ExamSession {
   batchNumber: string;
   registeredStudents: number;
   durationMinutes: number;
+  remainingSeconds?: number | null;
+  endsAt?: string | null;
   totalQuestions: number;
+  questionBankId?: number;
 }
+
+export interface ExamRoom {
+  id: string;
+  scheduleId: string;
+  roomName: string;
+  capacity: number;
+  examSessionId?: number | null;
+  examinationCode?: string | null;
+  status: 'idle' | ExamLifecycleStatus | string;
+  connectedCount: number;
+  proctorId?: number | null;
+  proctorName?: string | null;
+}
+
+export type StudentSelectionStatus = 'available' | 'ready' | 'completed';
 
 export interface StudentRecord {
   id: string;
@@ -86,6 +107,12 @@ export interface StudentRecord {
   programName: string;
   sex: Sex;
   avatarInitials: string;
+  registration_id?: number;
+  selectionStatus?: StudentSelectionStatus;
+  statusLabel?: string;
+  selectable?: boolean;
+  lobby_status?: string | null;
+  exam_session_id?: number | null;
 }
 
 export interface LobbyStudent {
@@ -120,6 +147,12 @@ export interface LobbySnapshot {
   terminatedCount: number;
   violationsDetected: number;
   students: LobbyStudent[];
+  proctor_id?: number | null;
+  proctor_name?: string | null;
+  can_control?: boolean;
+  is_owner?: boolean;
+  remainingSeconds?: number | null;
+  allow_late_entry?: boolean;
 }
 
 export interface SecurityViolation {
@@ -151,11 +184,13 @@ export interface ProctorProfile {
   username: string;
   displayName: string;
   roleLabel: string;
+  token?: string;
 }
 
 export interface AuthResult {
   success: boolean;
   profile?: ProctorProfile;
+  token?: string;
   message?: string;
 }
 

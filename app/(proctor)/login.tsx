@@ -53,7 +53,7 @@ export default function ProctorLoginScreen() {
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Header title="Proctor Login" subtitle="Secure local access" onBack={() => router.back()} />
+      <Header title="Proctor Login" subtitle="Secure local access" onBack={() => router.replace('/')} />
       <View style={styles.content}>
         <Card>
           <View style={styles.iconWrap}>
@@ -69,9 +69,10 @@ export default function ProctorLoginScreen() {
             name="username"
             render={({ field: { onChange, onBlur, value } }) => (
               <Input
-                label="Username"
-                placeholder="proctor"
+                label="Email"
+                placeholder="proctor@example.com"
                 autoCapitalize="none"
+                keyboardType="email-address"
                 value={value}
                 onChangeText={onChange}
                 onBlur={onBlur}

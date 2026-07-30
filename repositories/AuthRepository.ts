@@ -1,57 +1,122 @@
-import { delay } from '@/utils';
-import proctorsData from '@/mock/data/proctors.json';
 import { STORAGE_KEYS } from '@/constants';
-import type { AuthResult, ProctorAccount, ProctorProfile } from '@/types';
-import * as SecureStore from 'expo-secure-store';
+import { ApiError, apiRequest } from '@/services/api';
+import { appStorage } from '@/services/storage';
+import type { AuthResult, ProctorProfile } from '@/types';
+
+type LoginResponse = {
+  success: boolean;
+  message?: string;
+  data?: {
+    token: string;
+    profile: ProctorProfile;
+    user?: unknown;
+  };
+};
 
 /**
- * AuthRepository — mock credentials today.
- * Future Laravel: POST /api/proctor/login
+ * AuthRepository — Laravel Sanctum proctor login.
+ * POST /api/v1/proctor/login
  */
 export const AuthRepository = {
   async login(username: string, password: string): Promise<AuthResult> {
-    await delay(500);
-    const account = (proctorsData as ProctorAccount[]).find(
-      (item) =>
-        item.username.toLowerCase() === username.trim().toLowerCase() &&
-        item.password === password,
-    );
-
-    if (!account) {
-      return { success: false, message: 'Invalid username or password.' };
-    }
-
-    const profile: ProctorProfile = {
-      id: account.id,
-      username: account.username,
-      displayName: account.displayName,
-      roleLabel: 'Examination Proctor',
-    };
-
     try {
-      await SecureStore.setItemAsync(STORAGE_KEYS.proctorSession, JSON.stringify(profile));
-    } catch {
-      // SecureStore may be unavailable on some targets
-    }
+      const json = await apiRequest<LoginResponse>('/proctor/login', {
+        method: 'POST',
+        auth: false,
+        body: {
+          email: username.trim(),
+          username: username.trim(),
+          password,
+        },
+      });
 
-    return { success: true, profile };
+      const profile = json.data?.profile;
+      const token = json.data?.token;
+      if (!profile || !token) {
+        return { success: false, message: json.message || 'Login failed.' };
+      }
+
+      const stored: ProctorProfile = { ...profile, token };
+      await appStorage.setItem(STORAGE_KEYS.proctorSession, JSON.stringify(stored));
+      await appStorage.setItem(STORAGE_KEYS.proctorToken, token);
+
+      // Confirm token persisted before continuing.
+      const verified = await appStorage.getItem(STORAGE_KEYS.proctorToken);
+      if (verified !== token) {
+        return {
+          success: false,
+          message: 'Could not save your session. Please try again.',
+        };
+      }
+
+      // Avoid student participation tokens stealing proctor lobby polls.
+      await appStorage.deleteItem(STORAGE_KEYS.participationToken);
+      await appStorage.deleteItem(STORAGE_KEYS.examinationCode);
+      await appStorage.deleteItem(STORAGE_KEYS.studentProgress);
+
+      return { success: true, profile: stored, token };
+    } catch (error) {
+      if (error instanceof ApiError) {
+        return { success: false, message: error.message };
+      }
+      return {
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unable to reach the server. Check EXPO_PUBLIC_API_URL.',
+      };
+    }
   },
 
   async getSession(): Promise<ProctorProfile | null> {
     try {
-      const raw = await SecureStore.getItemAsync(STORAGE_KEYS.proctorSession);
-      if (!raw) return null;
-      return JSON.parse(raw) as ProctorProfile;
+      const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
+      const raw = await appStorage.getItem(STORAGE_KEYS.proctorSession);
+      if (!token || !raw) return null;
+
+      try {
+        const me = await apiRequest<{ success: boolean; data?: { profile: ProctorProfile } }>(
+          '/proctor/me',
+          { token },
+        );
+        if (me.data?.profile) {
+          const profile = { ...me.data.profile, token };
+          await appStorage.setItem(STORAGE_KEYS.proctorSession, JSON.stringify(profile));
+          return profile;
+        }
+      } catch (error) {
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          // Only clear session if this token is still the active one
+          // (avoids wiping a brand-new login during an in-flight /me race).
+          const current = await appStorage.getItem(STORAGE_KEYS.proctorToken);
+          if (current === token) {
+            await this.logout();
+          }
+          return null;
+        }
+      }
+
+      return { ...(JSON.parse(raw) as ProctorProfile), token };
     } catch {
       return null;
     }
   },
 
+  async hasToken(): Promise<boolean> {
+    const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
+    return Boolean(token);
+  },
+
   async logout(): Promise<void> {
     try {
-      await SecureStore.deleteItemAsync(STORAGE_KEYS.proctorSession);
-    } catch {
-      // no-op
+      const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
+      if (token) {
+        await apiRequest('/proctor/logout', { method: 'POST', token }).catch(() => undefined);
+      }
+    } finally {
+      await appStorage.deleteItem(STORAGE_KEYS.proctorSession);
+      await appStorage.deleteItem(STORAGE_KEYS.proctorToken);
     }
   },
 };

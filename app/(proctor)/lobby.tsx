@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { FlatList, Modal, Pressable, Text, View, StyleSheet, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -17,9 +17,10 @@ import { LobbyStudentCard } from '@/features/proctor/LobbyStudentCard';
 import { useLobby } from '@/hooks/useRepositories';
 import { LobbyRepository } from '@/repositories';
 import { QUERY_KEYS } from '@/constants';
-import { useLobbyStore } from '@/stores';
+import { useLobbyStore, useProctorStore } from '@/stores';
 import { colors } from '@/theme';
 import type { LobbyStudent } from '@/types';
+import { safeBack } from '@/utils';
 import {
   Copy,
   Users,
@@ -35,29 +36,77 @@ function formatTime(iso: string | null) {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function formatRemaining(seconds: number | null | undefined) {
+  if (seconds == null || Number.isNaN(seconds)) return '—';
+  const total = Math.max(0, Math.floor(seconds));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
 export default function ProctorLobbyScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { sessionId } = useLocalSearchParams<{ sessionId: string }>();
+  const { sessionId, roomId } = useLocalSearchParams<{
+    sessionId: string;
+    roomId?: string;
+  }>();
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
+  const storeLobby = useLobbyStore((s) => s.snapshot);
+  const selectedSchedule = useProctorStore((s) => s.selectedSchedule);
   const [busy, setBusy] = useState(false);
   const [startOpen, setStartOpen] = useState(false);
+  const [endOpen, setEndOpen] = useState(false);
   const [ready, setReady] = useState(false);
+  const [openError, setOpenError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [selected, setSelected] = useState<LobbyStudent | null>(null);
+  const knownStudentIds = useRef<Set<string>>(new Set());
+  const checkInReady = useRef(false);
 
-  const lobbyQuery = useLobby(sessionId);
+  const lobbyQuery = useLobby(
+    ready && !openError ? sessionId : undefined,
+    roomId,
+  );
 
   useEffect(() => {
-    async function open() {
+    let cancelled = false;
+    async function load() {
       if (!sessionId) return;
-      const snapshot = await LobbyRepository.seedDemoStudents(sessionId);
-      setSnapshot(snapshot);
-      await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.lobby(sessionId) });
-      setReady(true);
+      setOpenError(null);
+      setReady(false);
+      setSnapshot(null);
+      knownStudentIds.current = new Set();
+      checkInReady.current = false;
+      try {
+        const snapshot = await LobbyRepository.fetchProctorLobby(sessionId, roomId);
+        if (cancelled) return;
+        if (!snapshot) {
+          setOpenError(
+            'This room lobby is not open yet. Go back and tap Open Lobby.',
+          );
+          return;
+        }
+        knownStudentIds.current = new Set(snapshot.students.map((s) => s.id));
+        checkInReady.current = true;
+        setSnapshot(snapshot);
+        await queryClient.invalidateQueries({
+          queryKey: QUERY_KEYS.lobby(sessionId, roomId),
+        });
+      } catch (error) {
+        if (cancelled) return;
+        setOpenError(
+          error instanceof Error ? error.message : 'Unable to load examination lobby.',
+        );
+      } finally {
+        if (!cancelled) setReady(true);
+      }
     }
-    void open();
-  }, [sessionId, setSnapshot, queryClient]);
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, roomId, setSnapshot, queryClient]);
 
   useEffect(() => {
     if (lobbyQuery.data) {
@@ -66,17 +115,77 @@ export default function ProctorLobbyScreen() {
         const latest = lobbyQuery.data.students.find((s) => s.id === selected.id) ?? null;
         setSelected(latest);
       }
+
+      // Notify proctor when a student checks in (QR scan / name claim) before exam starts.
+      if (checkInReady.current && lobbyQuery.data.status === 'lobby_open') {
+        const newcomers = lobbyQuery.data.students.filter(
+          (s) => !knownStudentIds.current.has(s.id),
+        );
+        newcomers.forEach((student) => {
+          knownStudentIds.current.add(student.id);
+          Alert.alert('Student checked in', `${student.fullName} scanned the QR code.`);
+        });
+        lobbyQuery.data.students.forEach((s) => knownStudentIds.current.add(s.id));
+      } else if (lobbyQuery.data.students.length) {
+        lobbyQuery.data.students.forEach((s) => knownStudentIds.current.add(s.id));
+      }
     }
   }, [lobbyQuery.data, setSnapshot, selected]);
 
-  const lobby = lobbyQuery.data;
+  const lobby = lobbyQuery.data ?? storeLobby;
 
-  if (!ready || !lobby) {
-    return <Loader fullscreen label="Opening examination lobby…" />;
+  const goBack = () => {
+    if (sessionId && roomId) {
+      safeBack(router, {
+        pathname: '/(proctor)/room',
+        params: { sessionId, roomId },
+      });
+      return;
+    }
+    if (sessionId) {
+      safeBack(router, {
+        pathname: '/(proctor)/rooms',
+        params: { sessionId },
+      });
+      return;
+    }
+    const scheduleId =
+      lobby?.session?.scheduleId ?? selectedSchedule?.id ?? undefined;
+    safeBack(
+      router,
+      scheduleId
+        ? { pathname: '/(proctor)/sessions', params: { scheduleId } }
+        : '/(proctor)/schedules',
+    );
+  };
+
+  if (!ready) {
+    return <Loader fullscreen label="Loading examination lobby…" />;
+  }
+
+  if (openError || !lobby) {
+    return (
+      <View style={styles.screen}>
+        <Header title="Examination Lobby" onBack={goBack} />
+        <View style={styles.errorWrap}>
+          <Text style={styles.errorTitle}>Lobby not available</Text>
+          <Text style={styles.errorBody}>
+            {openError || 'No examination session is available for this room.'}
+          </Text>
+          <Button
+            title="Back to room"
+            fullWidth
+            onPress={goBack}
+          />
+        </View>
+      </View>
+    );
   }
 
   const refresh = async () => {
-    await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.lobby(sessionId) });
+    await queryClient.invalidateQueries({
+      queryKey: QUERY_KEYS.lobby(sessionId, roomId),
+    });
   };
 
   const copyCode = async () => {
@@ -93,8 +202,12 @@ export default function ProctorLobbyScreen() {
     <View style={styles.screen}>
       <Header
         title="Examination Lobby"
-        subtitle={lobby.session.batchNumber}
-        onBack={() => router.back()}
+        subtitle={
+          lobby.session.roomName
+            ? `${lobby.session.roomName} · ${lobby.session.batchNumber}`
+            : lobby.session.batchNumber
+        }
+        onBack={goBack}
       />
 
       <FlatList
@@ -110,7 +223,12 @@ export default function ProctorLobbyScreen() {
                   <Text style={styles.line}>School Year: {lobby.schedule.schoolYear}</Text>
                   <Text style={styles.line}>Date: {lobby.schedule.examinationDate}</Text>
                   <Text style={styles.line}>Time: {lobby.session.timeLabel}</Text>
-                  <Text style={styles.line}>Venue: {lobby.session.venue}</Text>
+                  <Text style={styles.line}>
+                    Room: {lobby.session.roomName || lobby.session.venue}
+                  </Text>
+                  {lobby.proctor_name ? (
+                    <Text style={styles.line}>Proctored by: {lobby.proctor_name}</Text>
+                  ) : null}
                   <Text style={styles.line}>Batch: {lobby.session.batchNumber}</Text>
                   <Text style={styles.line}>
                     Total Registered Students: {lobby.registeredCount}
@@ -123,7 +241,11 @@ export default function ProctorLobbyScreen() {
             <Card delay={40}>
               <QrCodePanel
                 value={lobby.qrValue}
-                note="Students must scan this QR Code to join the examination."
+                note={
+                  lobby.status === 'in_progress'
+                    ? 'Examination in progress. New QR scans are blocked.'
+                    : 'Students must scan this QR Code to join the examination.'
+                }
               />
               <View style={styles.codeBlock}>
                 <Text style={styles.codeLabel}>Examination Code</Text>
@@ -137,13 +259,32 @@ export default function ProctorLobbyScreen() {
                 variant="outline"
                 fullWidth
                 loading={busy}
+                disabled={lobby.can_control === false || lobby.status === 'ended' || lobby.status === 'in_progress'}
                 onPress={async () => {
                   if (!sessionId) return;
+                  if (lobby.can_control === false) {
+                    Alert.alert(
+                      'Not allowed',
+                      'Only the proctor who opened this lobby can regenerate the code.',
+                    );
+                    return;
+                  }
                   setBusy(true);
-                  const snapshot = await LobbyRepository.regenerateQr(sessionId);
-                  setSnapshot(snapshot);
-                  await refresh();
-                  setBusy(false);
+                  try {
+                    const snapshot = await LobbyRepository.regenerateQr(
+                      sessionId,
+                      roomId,
+                    );
+                    setSnapshot(snapshot);
+                    await refresh();
+                  } catch (error) {
+                    Alert.alert(
+                      'Unable to regenerate',
+                      error instanceof Error ? error.message : 'Please try again.',
+                    );
+                  } finally {
+                    setBusy(false);
+                  }
                 }}
               />
               <Button
@@ -157,10 +298,62 @@ export default function ProctorLobbyScreen() {
                 title="Start Examination"
                 size="lg"
                 fullWidth
-                onPress={() => setStartOpen(true)}
-                disabled={lobby.status === 'in_progress' || lobby.status === 'ended'}
+                onPress={() => {
+                  if (lobby.can_control === false) {
+                    Alert.alert(
+                      'Not allowed',
+                      'Only the proctor who opened this lobby can start the examination.',
+                    );
+                    return;
+                  }
+                  setStartOpen(true);
+                }}
+                disabled={
+                  lobby.can_control === false ||
+                  lobby.status === 'in_progress' ||
+                  lobby.status === 'ended'
+                }
               />
+              {lobby.status === 'in_progress' ? (
+                <Button
+                  title="End Examination"
+                  variant="danger"
+                  size="lg"
+                  fullWidth
+                  disabled={lobby.can_control === false}
+                  onPress={() => {
+                    if (lobby.can_control === false) {
+                      Alert.alert(
+                        'Not allowed',
+                        'Only the proctor who opened this lobby can end the examination.',
+                      );
+                      return;
+                    }
+                    setEndOpen(true);
+                  }}
+                />
+              ) : null}
+              {lobby.can_control === false ? (
+                <Text style={styles.ownerHint}>
+                  Viewing only — opened by {lobby.proctor_name || 'another proctor'}.
+                </Text>
+              ) : null}
             </View>
+
+            {lobby.status === 'in_progress' ? (
+              <Card>
+                <Text style={styles.monitorTitle}>Live monitoring</Text>
+                <Text style={styles.monitorLine}>
+                  Remaining time:{' '}
+                  {formatRemaining(
+                    lobby.session.remainingSeconds ?? lobby.remainingSeconds ?? null,
+                  )}
+                </Text>
+                <Text style={styles.monitorLine}>
+                  Still taking exam: {lobby.takingCount} · Submitted: {lobby.finishedCount}
+                </Text>
+              </Card>
+            ) : null}
 
             <Text style={styles.section}>Security Monitoring</Text>
             <View style={styles.statsRow}>
@@ -176,35 +369,34 @@ export default function ProctorLobbyScreen() {
                 icon={<UserCheck size={18} color={colors.info} />}
                 delay={40}
               />
-            </View>
-            <View style={styles.statsRow}>
               <StatisticCard
                 label="Not Connected"
                 value={lobby.notYetConnectedCount}
                 tone="warning"
                 icon={<UserX size={18} color={colors.warning} />}
+                delay={80}
               />
+            </View>
+            <View style={styles.statsRow}>
               <StatisticCard
                 label="Taking Exam"
                 value={lobby.takingCount}
                 tone="default"
                 icon={<Play size={18} color={colors.primary} />}
-                delay={40}
               />
-            </View>
-            <View style={styles.statsRow}>
               <StatisticCard
                 label="Finished"
                 value={lobby.finishedCount}
                 tone="success"
                 icon={<CheckCircle2 size={18} color={colors.success} />}
+                delay={40}
               />
               <StatisticCard
                 label="Violations"
                 value={lobby.violationsDetected}
                 tone="warning"
                 icon={<ShieldAlert size={18} color={colors.danger} />}
-                delay={40}
+                delay={80}
               />
             </View>
 
@@ -231,7 +423,7 @@ export default function ProctorLobbyScreen() {
       <ConfirmationModal
         visible={startOpen}
         title="Start Examination?"
-        description="Connected and waiting students will move to Taking Examination status. Exam Security Mode will activate on student devices."
+        description="Connected and waiting students will move to Taking Examination status. Exam Security Mode will activate on student devices. New QR scans will be blocked."
         confirmLabel="Yes, start"
         cancelLabel="No"
         loading={busy}
@@ -239,11 +431,50 @@ export default function ProctorLobbyScreen() {
         onConfirm={async () => {
           if (!sessionId) return;
           setBusy(true);
-          const snapshot = await LobbyRepository.startExamination(sessionId);
-          setSnapshot(snapshot);
-          await refresh();
-          setBusy(false);
-          setStartOpen(false);
+          try {
+            const snapshot = await LobbyRepository.startExamination(
+              sessionId,
+              roomId,
+            );
+            setSnapshot(snapshot);
+            await refresh();
+            setStartOpen(false);
+          } catch (error) {
+            Alert.alert(
+              'Unable to start',
+              error instanceof Error ? error.message : 'Please try again.',
+            );
+          } finally {
+            setBusy(false);
+          }
+        }}
+      />
+
+      <ConfirmationModal
+        visible={endOpen}
+        title="End Examination?"
+        description="This immediately ends the exam, auto-submits every student still taking it, and closes the session. This cannot be undone."
+        confirmLabel="Yes, end now"
+        cancelLabel="Cancel"
+        loading={busy}
+        onCancel={() => setEndOpen(false)}
+        onConfirm={async () => {
+          if (!sessionId) return;
+          setBusy(true);
+          try {
+            const snapshot = await LobbyRepository.endExamination(sessionId, roomId);
+            setSnapshot(snapshot);
+            await refresh();
+            setEndOpen(false);
+            Alert.alert('Examination ended', 'All active examinees were submitted and the session is closed.');
+          } catch (error) {
+            Alert.alert(
+              'Unable to end',
+              error instanceof Error ? error.message : 'Please try again.',
+            );
+          } finally {
+            setBusy(false);
+          }
         }}
       />
 
@@ -347,8 +578,27 @@ const styles = StyleSheet.create({
     color: colors.primary,
     letterSpacing: 2,
   },
+  monitorTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: colors.ink,
+    marginBottom: 8,
+  },
+  monitorLine: {
+    fontSize: 14,
+    color: colors.inkSecondary,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  ownerHint: {
+    fontSize: 12,
+    color: colors.warning,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginTop: 4,
+  },
   actions: { gap: 10 },
-  statsRow: { flexDirection: 'row', gap: 12 },
+  statsRow: { flexDirection: 'row', gap: 8, flexWrap: 'nowrap' },
   section: {
     fontSize: 12,
     fontWeight: '800',
@@ -363,6 +613,23 @@ const styles = StyleSheet.create({
     color: colors.inkMuted,
     fontSize: 13,
     paddingVertical: 20,
+  },
+  errorWrap: {
+    flex: 1,
+    padding: 24,
+    justifyContent: 'center',
+    gap: 12,
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: colors.ink,
+  },
+  errorBody: {
+    fontSize: 14,
+    color: colors.inkSecondary,
+    lineHeight: 21,
+    marginBottom: 8,
   },
   detailOverlay: {
     flex: 1,

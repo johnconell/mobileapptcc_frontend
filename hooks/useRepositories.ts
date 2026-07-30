@@ -8,10 +8,16 @@ import {
   StudentRepository,
 } from '@/repositories';
 
-export function useSchedules() {
+export function useSchedules(enabled = true) {
   return useQuery({
     queryKey: QUERY_KEYS.schedules,
     queryFn: () => ScheduleRepository.getSchedules(),
+    enabled,
+    retry: (count, error) => {
+      const status = (error as { status?: number })?.status;
+      if (status === 401 || status === 403) return false;
+      return count < 1;
+    },
   });
 }
 
@@ -23,6 +29,20 @@ export function useSessions(scheduleId?: string) {
   });
 }
 
+export function useRooms(sessionId?: string, enabled = true) {
+  return useQuery({
+    queryKey: QUERY_KEYS.rooms(sessionId ?? ''),
+    queryFn: () => ScheduleRepository.getRoomsBySession(sessionId!),
+    enabled: Boolean(sessionId) && enabled,
+    refetchInterval: 2000,
+    retry: (count, error) => {
+      const status = (error as { status?: number })?.status;
+      if (status === 401 || status === 403) return false;
+      return count < 1;
+    },
+  });
+}
+
 export function useStudents(search?: string) {
   return useQuery({
     queryKey: [...QUERY_KEYS.students, search ?? ''],
@@ -30,6 +50,7 @@ export function useStudents(search?: string) {
       search?.trim()
         ? StudentRepository.search(search)
         : StudentRepository.getAll(),
+    refetchInterval: 2000,
   });
 }
 
@@ -48,12 +69,13 @@ export function useQuestions(sessionId?: string) {
   });
 }
 
-export function useLobby(sessionId?: string) {
+export function useLobby(sessionId?: string, roomId?: string, enabled = true) {
   return useQuery({
-    queryKey: QUERY_KEYS.lobby(sessionId),
-    queryFn: () => LobbyRepository.getLobby(sessionId),
+    queryKey: QUERY_KEYS.lobby(sessionId, roomId),
+    queryFn: () => LobbyRepository.getLobby(sessionId, roomId),
     refetchInterval: 2500,
-    enabled: Boolean(sessionId),
+    enabled: Boolean(sessionId) && enabled,
+    retry: 1,
   });
 }
 

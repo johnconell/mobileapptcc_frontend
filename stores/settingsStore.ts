@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { STORAGE_KEYS } from '@/constants';
-import * as SecureStore from 'expo-secure-store';
+import { appStorage } from '@/services/storage';
 
 interface SettingsState {
   keepAwakeDuringExam: boolean;
@@ -28,7 +28,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   hydrate: async () => {
     try {
-      const raw = await SecureStore.getItemAsync(STORAGE_KEYS.settings);
+      const raw = await appStorage.getItem(STORAGE_KEYS.settings);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<SettingsState>;
         set({
@@ -46,15 +46,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 }));
 
 async function persistSettings(state: SettingsState) {
-  try {
-    await SecureStore.setItemAsync(
-      STORAGE_KEYS.settings,
-      JSON.stringify({
-        keepAwakeDuringExam: state.keepAwakeDuringExam,
-        reducedMotion: state.reducedMotion,
-      }),
-    );
-  } catch {
-    // ignore
-  }
+  await appStorage.setItem(
+    STORAGE_KEYS.settings,
+    JSON.stringify({
+      keepAwakeDuringExam: state.keepAwakeDuringExam,
+      reducedMotion: state.reducedMotion,
+    }),
+  );
 }

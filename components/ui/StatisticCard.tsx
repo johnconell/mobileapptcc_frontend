@@ -32,7 +32,7 @@ export function StatisticCard({
 }
 
 const styles = StyleSheet.create({
-  card: { flex: 1, minWidth: '46%' },
+  card: { flex: 1, minWidth: '30%' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   iconWrap: {
     width: 42,

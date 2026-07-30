@@ -12,7 +12,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Button, Card, Header, Input, Loader } from '@/components/ui';
-import { LobbyRepository } from '@/repositories';
+import { LobbyRepository, StudentRepository } from '@/repositories';
 import { useLobbyStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
 
@@ -36,6 +36,7 @@ export default function StudentConfirmationScreen() {
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
   const setVerifiedStudent = useStudentStore((s) => s.setVerifiedStudent);
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
+  const [joinError, setJoinError] = React.useState<string | null>(null);
 
   const {
     control,
@@ -52,19 +53,31 @@ export default function StudentConfirmationScreen() {
     }
   }, [selectedStudent, scannedSessionId, router]);
 
+  const goBack = React.useCallback(() => {
+    if (selectedStudent?.id) {
+      void StudentRepository.releaseClaim(selectedStudent.id);
+    }
+    router.back();
+  }, [selectedStudent?.id, router]);
+
   if (!selectedStudent || !scannedSessionId) {
     return <Loader fullscreen label="Loading confirmation…" />;
   }
 
   const onConfirm = handleSubmit(async (values) => {
-    const verified = {
-      ...selectedStudent,
-      email: values.email.trim().toLowerCase(),
-    };
-    setVerifiedStudent(verified);
-    const lobby = await LobbyRepository.joinStudent(verified, scannedSessionId);
-    setSnapshot(lobby);
-    router.replace('/(student)/lobby');
+    setJoinError(null);
+    try {
+      const verified = {
+        ...selectedStudent,
+        email: values.email.trim().toLowerCase(),
+      };
+      setVerifiedStudent(verified);
+      const lobby = await LobbyRepository.joinStudent(verified, scannedSessionId);
+      setSnapshot(lobby);
+      router.replace('/(student)/lobby');
+    } catch (error) {
+      setJoinError(error instanceof Error ? error.message : 'Unable to join examination.');
+    }
   });
 
   return (
@@ -75,7 +88,7 @@ export default function StudentConfirmationScreen() {
       <Header
         title="Confirm Identity"
         subtitle="Enter your Gmail for results"
-        onBack={() => router.back()}
+        onBack={goBack}
       />
       <ScrollView
         contentContainerStyle={styles.content}
@@ -110,12 +123,14 @@ export default function StudentConfirmationScreen() {
             )}
           />
 
+          {joinError ? <Text style={styles.error}>{joinError}</Text> : null}
+
           <View style={styles.actions}>
             <Button
               title="Back"
               variant="outline"
               style={styles.btn}
-              onPress={() => router.back()}
+              onPress={goBack}
               disabled={isSubmitting}
             />
             <Button
@@ -168,6 +183,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   value: { fontSize: 15, fontWeight: '600', color: colors.ink },
+  error: {
+    marginTop: 8,
+    fontSize: 13,
+    color: '#B42318',
+    fontWeight: '600',
+  },
   actions: { flexDirection: 'row', gap: 10, marginTop: 18 },
   btn: { flex: 1 },
 });

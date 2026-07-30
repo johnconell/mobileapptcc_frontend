@@ -14,30 +14,38 @@ export default function SubmittingScreen() {
   const markSubmitting = useExamStore((s) => s.markSubmitting);
   const markSubmitted = useExamStore((s) => s.markSubmitted);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
+  const [error, setError] = React.useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
 
     async function submit() {
-      markSubmitting(true);
-      const payload = Object.fromEntries(
-        Object.values(answers).map((answer) => [answer.questionId, answer.selectedAnswer]),
-      );
+      try {
+        markSubmitting(true);
+        setError(null);
+        const payload = Object.fromEntries(
+          Object.values(answers).map((answer) => [answer.questionId, answer.selectedAnswer]),
+        );
 
-      await QuestionRepository.submitAnswers({
-        sessionId: sessionId ?? 'unknown',
-        studentId: verifiedStudent?.id ?? 'unknown',
-        answers: payload,
-      });
+        await QuestionRepository.submitAnswers({
+          sessionId: sessionId ?? 'unknown',
+          studentId: verifiedStudent?.id ?? 'unknown',
+          answers: payload,
+        });
 
-      const reason = terminationReason ?? 'submitted';
-      if (verifiedStudent?.id) {
-        await LobbyRepository.finishStudent(verifiedStudent.id, reason);
+        const reason = terminationReason ?? 'submitted';
+        if (verifiedStudent?.id) {
+          await LobbyRepository.finishStudent(verifiedStudent.id, reason);
+        }
+
+        if (!active) return;
+        markSubmitted(reason);
+        router.replace('/(student)/completed');
+      } catch (err) {
+        if (!active) return;
+        markSubmitting(false);
+        setError(err instanceof Error ? err.message : 'Submission failed. Please try again.');
       }
-
-      if (!active) return;
-      markSubmitted(reason);
-      router.replace('/(student)/completed');
     }
 
     void submit();
@@ -53,6 +61,27 @@ export default function SubmittingScreen() {
     markSubmitted,
     router,
   ]);
+
+  if (error) {
+    return (
+      <View style={styles.screen}>
+        <Text style={styles.errorTitle}>Could not submit</Text>
+        <Text style={styles.errorBody}>{error}</Text>
+        <Text
+          style={styles.retry}
+          onPress={() => {
+            setError(null);
+            markSubmitting(true);
+            // Re-trigger by remounting flow: navigate back to exam then user resubmits,
+            // or simply retry current effect via state flip.
+            router.replace('/(student)/exam');
+          }}
+        >
+          Go back and try again
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.screen}>
@@ -78,4 +107,18 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   note: { fontSize: 13, color: colors.inkMuted, fontWeight: '500' },
+  errorTitle: { fontSize: 18, fontWeight: '700', color: colors.ink, textAlign: 'center' },
+  errorBody: {
+    fontSize: 14,
+    color: colors.inkMuted,
+    textAlign: 'center',
+    lineHeight: 20,
+    maxWidth: 320,
+  },
+  retry: {
+    marginTop: 12,
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.primary,
+  },
 });

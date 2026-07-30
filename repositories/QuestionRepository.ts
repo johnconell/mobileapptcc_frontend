@@ -1,16 +1,23 @@
-import { delay } from '@/utils';
-import questionsData from '@/mock/data/questions.json';
+import { STORAGE_KEYS } from '@/constants';
+import { apiRequest } from '@/services/api';
+import { appStorage } from '@/services/storage';
 import type { Question } from '@/types';
 
 /**
- * QuestionRepository — mock question bank.
- * Future Laravel: GET /api/sessions/:id/questions, POST /api/exams/submit
+ * QuestionRepository — load selected questions + submit answers.
+ * GET /api/v1/exam/questions , POST /api/v1/exam/submit
  */
 export const QuestionRepository = {
   async getQuestions(sessionId: string): Promise<Question[]> {
-    await delay(450);
     void sessionId;
-    return questionsData as Question[];
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) throw new Error('Missing participation token. Rejoin the examination.');
+
+    const json = await apiRequest<{ success: boolean; data: Question[]; message?: string }>(
+      `/exam/questions?participation_token=${encodeURIComponent(token)}`,
+      { auth: false },
+    );
+    return json.data || [];
   },
 
   async submitAnswers(payload: {
@@ -18,8 +25,33 @@ export const QuestionRepository = {
     studentId: string;
     answers: Record<string, string | null>;
   }): Promise<{ success: true; submittedAt: string }> {
-    await delay(900);
-    void payload;
-    return { success: true, submittedAt: new Date().toISOString() };
+    void payload.sessionId;
+    void payload.studentId;
+
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) throw new Error('Missing participation token.');
+
+    const answers = Object.entries(payload.answers).map(([questionId, selected]) => ({
+      exam_question_id: Number(questionId),
+      selected_answer: selected,
+    }));
+
+    const json = await apiRequest<{
+      success: boolean;
+      submittedAt?: string;
+      message?: string;
+    }>('/exam/submit', {
+      method: 'POST',
+      auth: false,
+      body: {
+        participation_token: token,
+        answers,
+      },
+    });
+
+    return {
+      success: true,
+      submittedAt: json.submittedAt || new Date().toISOString(),
+    };
   },
 };

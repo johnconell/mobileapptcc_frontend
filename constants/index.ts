@@ -11,16 +11,21 @@ export const QUERY_KEYS = {
   schedule: (id: string) => ['schedules', id] as const,
   sessions: (scheduleId: string) => ['sessions', scheduleId] as const,
   session: (id: string) => ['session', id] as const,
+  rooms: (sessionId: string) => ['rooms', sessionId] as const,
   students: ['students'] as const,
   programs: ['programs'] as const,
   questions: (sessionId?: string) => ['questions', sessionId] as const,
-  lobby: (sessionId?: string) => ['lobby', sessionId] as const,
+  lobby: (sessionId?: string, roomId?: string) =>
+    ['lobby', sessionId, roomId ?? ''] as const,
   violations: (sessionId?: string) => ['security', 'violations', sessionId] as const,
 } as const;
 
 export const STORAGE_KEYS = {
   proctorSession: 'tcc.proctor.session',
+  proctorToken: 'tcc.proctor.token',
   studentProgress: 'tcc.student.exam.progress',
+  participationToken: 'tcc.student.participation',
+  examinationCode: 'tcc.student.exam.code',
   settings: 'tcc.settings',
 } as const;
 
@@ -47,8 +52,8 @@ export const VIOLATION_MESSAGES: Record<string, string> = {
   leave_attempt: 'Leaving the examination is prohibited.',
 };
 
-/** Mock credentials for local proctor login */
+/** Demo proctor account from Laravel UserSeeder */
 export const MOCK_PROCTOR = {
-  username: 'proctor',
-  password: 'tcc2026',
+  username: 'proctor@example.com',
+  password: 'password',
 } as const;

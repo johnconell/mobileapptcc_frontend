@@ -14,7 +14,7 @@ export default function SchedulesScreen() {
   const setProfile = useProctorStore((s) => s.setProfile);
   const setSelectedSchedule = useProctorStore((s) => s.setSelectedSchedule);
   const reset = useProctorStore((s) => s.reset);
-  const schedulesQuery = useSchedules();
+  const schedulesQuery = useSchedules(Boolean(profile));
 
   useEffect(() => {
     if (!profile) {
@@ -25,7 +25,19 @@ export default function SchedulesScreen() {
     }
   }, [profile, setProfile, router]);
 
-  if (!profile || schedulesQuery.isLoading) {
+  useEffect(() => {
+    if (schedulesQuery.isError) {
+      const err = schedulesQuery.error as { status?: number } | null;
+      if (err?.status === 401 || err?.status === 403) {
+        void AuthRepository.logout().then(() => {
+          reset();
+          router.replace('/(proctor)/login');
+        });
+      }
+    }
+  }, [schedulesQuery.isError, schedulesQuery.error, reset, router]);
+
+  if (!profile || (schedulesQuery.isLoading && !schedulesQuery.data)) {
     return <Loader fullscreen label="Loading schedules…" />;
   }
 

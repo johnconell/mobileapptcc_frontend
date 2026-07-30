@@ -25,6 +25,7 @@ interface ExamState {
   markSubmitted: (reason?: ExamTerminationReason) => void;
   answeredCount: () => number;
   unansweredCount: () => number;
+  unansweredNumbers: () => number[];
   reset: () => void;
 }
 
@@ -106,6 +107,13 @@ export const useExamStore = create<ExamState>((set, get) => ({
       questions.length -
       Object.values(answers).filter((a) => a.selectedAnswer !== null).length
     );
+  },
+
+  unansweredNumbers: () => {
+    const { questions, answers } = get();
+    return questions
+      .filter((q) => !answers[q.id]?.selectedAnswer)
+      .map((q) => q.number);
   },
 
   reset: () => set({ ...initialState, answers: {} }),
