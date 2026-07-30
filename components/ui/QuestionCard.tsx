@@ -10,16 +10,29 @@ interface QuestionCardProps {
   question: Question;
   selectedAnswer: ChoiceKey | null;
   onSelect: (choice: ChoiceKey) => void;
+  /** When true, blocks text selection / copy affordances during exam security mode */
+  secure?: boolean;
 }
 
-export function QuestionCard({ question, selectedAnswer, onSelect }: QuestionCardProps) {
+export function QuestionCard({
+  question,
+  selectedAnswer,
+  onSelect,
+  secure = false,
+}: QuestionCardProps) {
   return (
     <Animated.View entering={FadeInRight.duration(280)} key={question.id}>
       <Card>
-        <Text style={styles.meta}>
+        <Text style={styles.meta} selectable={!secure}>
           Question {question.number} · Multiple Choice
         </Text>
-        <Text style={styles.prompt}>{question.question}</Text>
+        <Text
+          style={styles.prompt}
+          selectable={!secure}
+          {...(secure ? ({ contextMenuHidden: true } as object) : null)}
+        >
+          {question.question}
+        </Text>
         <View style={styles.choices}>
           {choiceKeys().map((key) => {
             const selected = selectedAnswer === key;
@@ -27,14 +40,24 @@ export function QuestionCard({ question, selectedAnswer, onSelect }: QuestionCar
               <Pressable
                 key={key}
                 onPress={() => onSelect(key)}
+                onLongPress={secure ? () => undefined : undefined}
+                delayLongPress={secure ? 10_000 : undefined}
                 style={[styles.choice, selected && styles.choiceSelected]}
               >
                 <View style={[styles.badge, selected && styles.badgeSelected]}>
-                  <Text style={[styles.badgeText, selected && styles.badgeTextSelected]}>
+                  <Text
+                    style={[styles.badgeText, selected && styles.badgeTextSelected]}
+                    selectable={!secure}
+                    {...(secure ? ({ contextMenuHidden: true } as object) : null)}
+                  >
                     {key}
                   </Text>
                 </View>
-                <Text style={[styles.choiceText, selected && styles.choiceTextSelected]}>
+                <Text
+                  style={[styles.choiceText, selected && styles.choiceTextSelected]}
+                  selectable={!secure}
+                  {...(secure ? ({ contextMenuHidden: true } as object) : null)}
+                >
                   {question.choices[key]}
                 </Text>
               </Pressable>

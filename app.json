@@ -35,6 +35,12 @@
       "expo-router",
       "expo-secure-store",
       [
+        "expo-screen-orientation",
+        {
+          "initialOrientation": "PORTRAIT_UP"
+        }
+      ],
+      [
         "expo-camera",
         {
           "cameraPermission": "Allow TCC Entrance Exam to use the camera for scanning examination QR codes.",

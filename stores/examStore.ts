@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ChoiceKey, ExamAnswer, Question } from '@/types';
+import type { ChoiceKey, ExamAnswer, ExamTerminationReason, Question } from '@/types';
 import { EXAM_DURATION_MINUTES } from '@/constants';
 
 interface ExamState {
@@ -12,14 +12,17 @@ interface ExamState {
   startedAt: string | null;
   submittedAt: string | null;
   isSubmitting: boolean;
+  isPaused: boolean;
+  terminationReason: ExamTerminationReason | null;
   setSessionId: (sessionId: string) => void;
   setQuestions: (questions: Question[]) => void;
   setCurrentIndex: (index: number) => void;
   selectAnswer: (questionId: string, answer: ChoiceKey) => void;
   tick: () => void;
   startExam: (durationMinutes?: number) => void;
+  setPaused: (value: boolean) => void;
   markSubmitting: (value: boolean) => void;
-  markSubmitted: () => void;
+  markSubmitted: (reason?: ExamTerminationReason) => void;
   answeredCount: () => number;
   unansweredCount: () => number;
   reset: () => void;
@@ -35,6 +38,8 @@ const initialState = {
   startedAt: null as string | null,
   submittedAt: null as string | null,
   isSubmitting: false,
+  isPaused: false,
+  terminationReason: null as ExamTerminationReason | null,
 };
 
 export const useExamStore = create<ExamState>((set, get) => ({
@@ -63,10 +68,12 @@ export const useExamStore = create<ExamState>((set, get) => ({
     }));
   },
 
-  tick: () =>
+  tick: () => {
+    if (get().isPaused) return;
     set((state) => ({
       remainingSeconds: Math.max(0, state.remainingSeconds - 1),
-    })),
+    }));
+  },
 
   startExam: (durationMinutes = EXAM_DURATION_MINUTES) =>
     set({
@@ -74,17 +81,31 @@ export const useExamStore = create<ExamState>((set, get) => ({
       remainingSeconds: durationMinutes * 60,
       submittedAt: null,
       isSubmitting: false,
+      isPaused: false,
+      terminationReason: null,
     }),
 
+  setPaused: (isPaused) => set({ isPaused }),
+
   markSubmitting: (isSubmitting) => set({ isSubmitting }),
-  markSubmitted: () => set({ submittedAt: new Date().toISOString(), isSubmitting: false }),
+
+  markSubmitted: (reason = 'submitted') =>
+    set({
+      submittedAt: new Date().toISOString(),
+      isSubmitting: false,
+      isPaused: false,
+      terminationReason: reason,
+    }),
 
   answeredCount: () =>
     Object.values(get().answers).filter((a) => a.selectedAnswer !== null).length,
 
   unansweredCount: () => {
     const { questions, answers } = get();
-    return questions.length - Object.values(answers).filter((a) => a.selectedAnswer !== null).length;
+    return (
+      questions.length -
+      Object.values(answers).filter((a) => a.selectedAnswer !== null).length
+    );
   },
 
   reset: () => set({ ...initialState, answers: {} }),

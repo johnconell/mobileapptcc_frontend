@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { FlatList, Text, View, StyleSheet, Alert } from 'react-native';
+import { FlatList, Modal, Pressable, Text, View, StyleSheet, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
@@ -19,7 +19,21 @@ import { LobbyRepository } from '@/repositories';
 import { QUERY_KEYS } from '@/constants';
 import { useLobbyStore } from '@/stores';
 import { colors } from '@/theme';
-import { Copy, Users, UserCheck, UserX } from 'lucide-react-native';
+import type { LobbyStudent } from '@/types';
+import {
+  Copy,
+  Users,
+  UserCheck,
+  UserX,
+  Play,
+  CheckCircle2,
+  ShieldAlert,
+} from 'lucide-react-native';
+
+function formatTime(iso: string | null) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
 export default function ProctorLobbyScreen() {
   const router = useRouter();
@@ -30,6 +44,7 @@ export default function ProctorLobbyScreen() {
   const [startOpen, setStartOpen] = useState(false);
   const [ready, setReady] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [selected, setSelected] = useState<LobbyStudent | null>(null);
 
   const lobbyQuery = useLobby(sessionId);
 
@@ -45,8 +60,14 @@ export default function ProctorLobbyScreen() {
   }, [sessionId, setSnapshot, queryClient]);
 
   useEffect(() => {
-    if (lobbyQuery.data) setSnapshot(lobbyQuery.data);
-  }, [lobbyQuery.data, setSnapshot]);
+    if (lobbyQuery.data) {
+      setSnapshot(lobbyQuery.data);
+      if (selected) {
+        const latest = lobbyQuery.data.students.find((s) => s.id === selected.id) ?? null;
+        setSelected(latest);
+      }
+    }
+  }, [lobbyQuery.data, setSnapshot, selected]);
 
   const lobby = lobbyQuery.data;
 
@@ -141,11 +162,11 @@ export default function ProctorLobbyScreen() {
               />
             </View>
 
+            <Text style={styles.section}>Security Monitoring</Text>
             <View style={styles.statsRow}>
               <StatisticCard
                 label="Registered"
                 value={lobby.registeredCount}
-                tone="default"
                 icon={<Users size={18} color={colors.primary} />}
               />
               <StatisticCard
@@ -156,32 +177,61 @@ export default function ProctorLobbyScreen() {
                 delay={40}
               />
             </View>
-            <StatisticCard
-              label="Not Yet Connected"
-              value={lobby.notYetConnectedCount}
-              tone="warning"
-              icon={<UserX size={18} color={colors.warning} />}
-              delay={80}
-            />
+            <View style={styles.statsRow}>
+              <StatisticCard
+                label="Not Connected"
+                value={lobby.notYetConnectedCount}
+                tone="warning"
+                icon={<UserX size={18} color={colors.warning} />}
+              />
+              <StatisticCard
+                label="Taking Exam"
+                value={lobby.takingCount}
+                tone="default"
+                icon={<Play size={18} color={colors.primary} />}
+                delay={40}
+              />
+            </View>
+            <View style={styles.statsRow}>
+              <StatisticCard
+                label="Finished"
+                value={lobby.finishedCount}
+                tone="success"
+                icon={<CheckCircle2 size={18} color={colors.success} />}
+              />
+              <StatisticCard
+                label="Violations"
+                value={lobby.violationsDetected}
+                tone="warning"
+                icon={<ShieldAlert size={18} color={colors.danger} />}
+                delay={40}
+              />
+            </View>
 
             <Text style={styles.section}>Connected Students</Text>
             <Text style={styles.sectionHint}>
-              {lobby.connectedCount} of {lobby.registeredCount} registered students have joined
+              {lobby.connectedCount} of {lobby.registeredCount} registered · tap a student for details
             </Text>
           </View>
         }
         renderItem={({ item, index }) => (
-          <LobbyStudentCard student={item} delay={Math.min(index * 40, 200)} />
+          <LobbyStudentCard
+            student={item}
+            delay={Math.min(index * 40, 200)}
+            onPress={() => setSelected(item)}
+          />
         )}
         ListEmptyComponent={
-          <Text style={styles.empty}>No students have joined yet. Share the QR Code or exam code.</Text>
+          <Text style={styles.empty}>
+            No students have joined yet. Share the QR Code or exam code.
+          </Text>
         }
       />
 
       <ConfirmationModal
         visible={startOpen}
         title="Start Examination?"
-        description="Connected and waiting students will move to Taking Examination status."
+        description="Connected and waiting students will move to Taking Examination status. Exam Security Mode will activate on student devices."
         confirmLabel="Yes, start"
         cancelLabel="No"
         loading={busy}
@@ -196,6 +246,75 @@ export default function ProctorLobbyScreen() {
           setStartOpen(false);
         }}
       />
+
+      <Modal
+        visible={Boolean(selected)}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setSelected(null)}
+      >
+        <View style={styles.detailOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setSelected(null)} />
+          {selected ? (
+            <View style={styles.detailSheet}>
+              <Text style={styles.detailTitle}>{selected.fullName}</Text>
+              <StatusChip status={selected.status} />
+              <DetailRow label="Gmail" value={selected.email} />
+              <DetailRow label="Desired Program" value={selected.programName} />
+              <DetailRow label="Current Status" value={selected.status.replace('_', ' ')} />
+              <DetailRow label="Number of Violations" value={String(selected.violationCount)} />
+              <DetailRow label="Time Connected" value={formatTime(selected.joinedAt)} />
+              <DetailRow label="Time Started" value={formatTime(selected.startedAt)} />
+              <DetailRow label="Last Activity" value={formatTime(selected.lastActivityAt)} />
+              {selected.terminationReason ? (
+                <DetailRow label="Termination" value={selected.terminationReason.replace('_', ' ')} />
+              ) : null}
+
+              <View style={styles.detailActions}>
+                {selected.status === 'warning' ? (
+                  <Button
+                    title="Continue Exam"
+                    fullWidth
+                    loading={busy}
+                    onPress={async () => {
+                      setBusy(true);
+                      await LobbyRepository.resumeStudent(selected.id);
+                      await refresh();
+                      setBusy(false);
+                      setSelected(null);
+                    }}
+                  />
+                ) : null}
+                {selected.status === 'warning' || selected.status === 'taking_exam' ? (
+                  <Button
+                    title="Terminate Examination"
+                    variant="danger"
+                    fullWidth
+                    loading={busy}
+                    onPress={async () => {
+                      setBusy(true);
+                      await LobbyRepository.terminateStudent(selected.id);
+                      await refresh();
+                      setBusy(false);
+                      setSelected(null);
+                    }}
+                  />
+                ) : null}
+                <Button title="Close" variant="outline" fullWidth onPress={() => setSelected(null)} />
+              </View>
+            </View>
+          ) : null}
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.detailRow}>
+      <Text style={styles.detailLabel}>{label}</Text>
+      <Text style={styles.detailValue}>{value}</Text>
     </View>
   );
 }
@@ -245,4 +364,36 @@ const styles = StyleSheet.create({
     fontSize: 13,
     paddingVertical: 20,
   },
+  detailOverlay: {
+    flex: 1,
+    backgroundColor: colors.overlay,
+    justifyContent: 'flex-end',
+  },
+  detailSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 22,
+    gap: 10,
+    maxHeight: '85%',
+  },
+  detailTitle: { fontSize: 20, fontWeight: '800', color: colors.ink },
+  detailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  detailLabel: { fontSize: 12, fontWeight: '700', color: colors.inkMuted, flex: 1 },
+  detailValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.ink,
+    flex: 1.4,
+    textAlign: 'right',
+    textTransform: 'capitalize',
+  },
+  detailActions: { gap: 10, marginTop: 8 },
 });

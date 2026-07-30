@@ -10,6 +10,7 @@ export default function SubmittingScreen() {
   const router = useRouter();
   const answers = useExamStore((s) => s.answers);
   const sessionId = useExamStore((s) => s.sessionId);
+  const terminationReason = useExamStore((s) => s.terminationReason);
   const markSubmitting = useExamStore((s) => s.markSubmitting);
   const markSubmitted = useExamStore((s) => s.markSubmitted);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
@@ -29,12 +30,13 @@ export default function SubmittingScreen() {
         answers: payload,
       });
 
+      const reason = terminationReason ?? 'submitted';
       if (verifiedStudent?.id) {
-        await LobbyRepository.finishStudent(verifiedStudent.id);
+        await LobbyRepository.finishStudent(verifiedStudent.id, reason);
       }
 
       if (!active) return;
-      markSubmitted();
+      markSubmitted(reason);
       router.replace('/(student)/completed');
     }
 
@@ -42,11 +44,25 @@ export default function SubmittingScreen() {
     return () => {
       active = false;
     };
-  }, [answers, sessionId, verifiedStudent, markSubmitting, markSubmitted, router]);
+  }, [
+    answers,
+    sessionId,
+    verifiedStudent,
+    terminationReason,
+    markSubmitting,
+    markSubmitted,
+    router,
+  ]);
 
   return (
     <View style={styles.screen}>
-      <Loader label="Submitting your examination…" />
+      <Loader
+        label={
+          terminationReason === 'policy_violation'
+            ? 'Terminating examination…'
+            : 'Submitting your examination…'
+        }
+      />
       <Text style={styles.note}>Please keep this screen open.</Text>
     </View>
   );

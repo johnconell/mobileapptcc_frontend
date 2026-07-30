@@ -10,11 +10,28 @@ export type LobbyStudentStatus =
   | 'connected'
   | 'waiting'
   | 'taking_exam'
-  | 'finished';
+  | 'finished'
+  | 'warning'
+  | 'terminated';
 
 export type ChoiceKey = 'A' | 'B' | 'C' | 'D';
 
 export type Sex = 'Male' | 'Female';
+
+export type SecurityViolationType =
+  | 'app_background'
+  | 'app_inactive'
+  | 'app_blur'
+  | 'screen_lock'
+  | 'screenshot'
+  | 'screen_recording'
+  | 'leave_attempt';
+
+export type ExamTerminationReason =
+  | 'submitted'
+  | 'time_expired'
+  | 'policy_violation'
+  | 'proctor_terminated';
 
 export interface Program {
   id: string;
@@ -81,6 +98,10 @@ export interface LobbyStudent {
   avatarInitials: string;
   status: LobbyStudentStatus;
   joinedAt: string;
+  startedAt: string | null;
+  lastActivityAt: string;
+  violationCount: number;
+  terminationReason: ExamTerminationReason | null;
 }
 
 export interface LobbySnapshot {
@@ -88,7 +109,6 @@ export interface LobbySnapshot {
   session: ExamSession;
   status: ExamLifecycleStatus;
   examinationCode: string;
-  /** QR encodes the examination code string */
   qrValue: string;
   registeredCount: number;
   connectedCount: number;
@@ -96,7 +116,21 @@ export interface LobbySnapshot {
   waitingCount: number;
   takingCount: number;
   finishedCount: number;
+  warningCount: number;
+  terminatedCount: number;
+  violationsDetected: number;
   students: LobbyStudent[];
+}
+
+export interface SecurityViolation {
+  id: string;
+  sessionId: string;
+  studentId: string;
+  studentName: string;
+  type: SecurityViolationType;
+  message: string;
+  createdAt: string;
+  resolved: boolean;
 }
 
 export interface ExamAnswer {
@@ -131,4 +165,18 @@ export interface ExamCodeValidation {
   schedule?: ExamSchedule;
   session?: ExamSession;
   examinationCode?: string;
+}
+
+export interface ExamSecurityCapabilities {
+  keepAwake: boolean;
+  portraitLock: boolean;
+  preventScreenCapture: boolean;
+  appSwitcherProtection: boolean;
+  screenshotListener: boolean;
+  navigationLock: boolean;
+  backButtonLock: boolean;
+  /** True only when native Android Lock Task / Device Owner module is present */
+  kioskNativeLockTask: boolean;
+  immersiveSystemUi: boolean;
+  multiWindowBlock: boolean;
 }

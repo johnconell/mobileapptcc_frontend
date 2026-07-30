@@ -10,9 +10,18 @@ interface HeaderProps {
   onBack?: () => void;
   right?: React.ReactNode;
   transparent?: boolean;
+  /** Hide the left back placeholder for locked screens (kiosk). */
+  hideBackSlot?: boolean;
 }
 
-export function Header({ title, subtitle, onBack, right, transparent }: HeaderProps) {
+export function Header({
+  title,
+  subtitle,
+  onBack,
+  right,
+  transparent,
+  hideBackSlot = false,
+}: HeaderProps) {
   const insets = useSafeAreaInsets();
 
   return (
@@ -33,7 +42,7 @@ export function Header({ title, subtitle, onBack, right, transparent }: HeaderPr
           >
             <ChevronLeft size={22} color={colors.ink} />
           </Pressable>
-        ) : (
+        ) : hideBackSlot ? null : (
           <View style={styles.backPlaceholder} />
         )}
         <View style={styles.center}>

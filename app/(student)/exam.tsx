@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -7,8 +7,8 @@ import {
   View,
   StyleSheet,
 } from 'react-native';
-import { useRouter } from 'expo-router';
-import { CloudUpload } from 'lucide-react-native';
+import { useNavigation, useRouter } from 'expo-router';
+import { CloudUpload, Shield } from 'lucide-react-native';
 import {
   ConfirmationModal,
   CountdownTimer,
@@ -17,14 +17,17 @@ import {
   ProgressBar,
   QuestionCard,
 } from '@/components/ui';
-import { useExamStore, useSettingsStore } from '@/stores';
+import { ExamSecurityOverlay } from '@/features/exam/ExamSecurityOverlay';
+import { useExamStore, useStudentStore } from '@/stores';
 import { useExamTimer } from '@/hooks/useExamTimer';
-import { DeviceService } from '@/services/DeviceService';
+import { useExamSecurity } from '@/hooks/useExamSecurity';
+import { LobbyRepository } from '@/repositories';
 import { colors } from '@/theme';
 import type { ChoiceKey } from '@/types';
 
 export default function ExamScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -32,27 +35,89 @@ export default function ExamScreen() {
   const currentIndex = useExamStore((s) => s.currentIndex);
   const answers = useExamStore((s) => s.answers);
   const autoSavedAt = useExamStore((s) => s.autoSavedAt);
+  const sessionId = useExamStore((s) => s.sessionId);
   const setCurrentIndex = useExamStore((s) => s.setCurrentIndex);
   const selectAnswer = useExamStore((s) => s.selectAnswer);
   const unansweredCount = useExamStore((s) => s.unansweredCount);
   const answeredCount = useExamStore((s) => s.answeredCount);
-  const keepAwake = useSettingsStore((s) => s.keepAwakeDuringExam);
-  const remainingSeconds = useExamTimer(questions.length > 0);
+  const setPaused = useExamStore((s) => s.setPaused);
+  const markSubmitted = useExamStore((s) => s.markSubmitted);
+
+  const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
+
+  const securityEnabled = questions.length > 0;
+
+  const goSubmit = useCallback(
+    (reason: 'submitted' | 'policy_violation' | 'time_expired' = 'submitted') => {
+      markSubmitted(reason);
+      router.replace('/(student)/submitting');
+    },
+    [markSubmitted, router],
+  );
+
+  const onMaxViolations = useCallback(() => {
+    if (verifiedStudent?.id) {
+      void LobbyRepository.finishStudent(verifiedStudent.id, 'policy_violation');
+    }
+    goSubmit('policy_violation');
+  }, [verifiedStudent?.id, goSubmit]);
+
+  const openSubmitConfirm = useCallback(() => {
+    setConfirmOpen(true);
+  }, []);
+
+  const {
+    paused,
+    warningVisible,
+    warningMessage,
+    violationCount,
+    maxViolations,
+    acknowledgeWarning,
+    requestSubmitFromWarning,
+  } = useExamSecurity({
+    enabled: securityEnabled,
+    sessionId,
+    studentId: verifiedStudent?.id ?? null,
+    studentName: verifiedStudent?.fullName ?? null,
+    onMaxViolations,
+    onRequestSubmit: openSubmitConfirm,
+  });
+
+  useEffect(() => {
+    setPaused(paused);
+  }, [paused, setPaused]);
+
+  // Lock navigation while exam is active — no gesture / hardware back escape.
+  useEffect(() => {
+    navigation.setOptions({
+      gestureEnabled: false,
+      fullScreenGestureEnabled: false,
+      headerShown: false,
+    });
+
+    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
+      // Allow only programmatic replace to submitting/completed after submit.
+      const actionType = event.data.action.type;
+      if (actionType === 'REPLACE' || actionType === 'RESET') {
+        return;
+      }
+      event.preventDefault();
+    });
+
+    return unsubscribe;
+  }, [navigation]);
+
+  const remainingSeconds = useExamTimer(questions.length > 0 && !paused);
 
   useEffect(() => {
     if (!questions.length) router.replace('/');
   }, [questions.length, router]);
 
   useEffect(() => {
-    if (keepAwake) void DeviceService.enableExamKeepAwake();
-    return () => DeviceService.disableExamKeepAwake();
-  }, [keepAwake]);
-
-  useEffect(() => {
-    if (remainingSeconds === 0 && questions.length > 0) {
-      router.replace('/(student)/submitting');
+    if (remainingSeconds === 0 && questions.length > 0 && !paused) {
+      goSubmit('time_expired');
     }
-  }, [remainingSeconds, questions.length, router]);
+  }, [remainingSeconds, questions.length, paused, goSubmit]);
 
   const question = questions[currentIndex];
   const progress = questions.length ? answeredCount() / questions.length : 0;
@@ -75,8 +140,19 @@ export default function ExamScreen() {
     <View style={styles.screen}>
       <Header
         title={`Question ${question.number} of ${questions.length}`}
-        subtitle="Entrance Examination"
-        right={<CountdownTimer remainingSeconds={remainingSeconds} compact />}
+        subtitle="Secure Examination Mode"
+        hideBackSlot
+        right={
+          <View style={styles.headerRight}>
+            <View style={styles.secureBadge}>
+              <Shield size={12} color={colors.primary} />
+              <Text style={styles.secureText}>
+                {violationCount}/{maxViolations}
+              </Text>
+            </View>
+            <CountdownTimer remainingSeconds={remainingSeconds} compact />
+          </View>
+        }
       />
 
       <View style={styles.progressWrap}>
@@ -91,11 +167,22 @@ export default function ExamScreen() {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        scrollEnabled={!paused}
+      >
         <QuestionCard
           question={question}
           selectedAnswer={selected}
-          onSelect={(choice: ChoiceKey) => selectAnswer(question.id, choice)}
+          secure
+          onSelect={(choice: ChoiceKey) => {
+            if (paused) return;
+            selectAnswer(question.id, choice);
+            if (verifiedStudent?.id) {
+              void LobbyRepository.touchActivity(verifiedStudent.id);
+            }
+          }}
         />
       </ScrollView>
 
@@ -103,13 +190,18 @@ export default function ExamScreen() {
         onPrevious={() => setCurrentIndex(Math.max(0, currentIndex - 1))}
         onNext={() => setCurrentIndex(Math.min(questions.length - 1, currentIndex + 1))}
         onPalette={() => setPaletteOpen(true)}
-        onSubmit={() => setConfirmOpen(true)}
-        canPrevious={currentIndex > 0}
-        canNext={currentIndex < questions.length - 1}
+        onSubmit={openSubmitConfirm}
+        canPrevious={!paused && currentIndex > 0}
+        canNext={!paused && currentIndex < questions.length - 1}
         remainingUnanswered={unansweredCount()}
       />
 
-      <Modal visible={paletteOpen} animationType="slide" transparent onRequestClose={() => setPaletteOpen(false)}>
+      <Modal
+        visible={paletteOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setPaletteOpen(false)}
+      >
         <View style={styles.paletteOverlay}>
           <View style={styles.paletteSheet}>
             <Text style={styles.paletteTitle}>Question Palette</Text>
@@ -148,15 +240,24 @@ export default function ExamScreen() {
 
       <ConfirmationModal
         visible={confirmOpen}
-        title="Submit examination?"
-        description={`You have ${unansweredCount()} unanswered question(s). Once submitted, you cannot change your answers.`}
-        confirmLabel="Submit"
-        cancelLabel="Review"
+        title="Submit Examination?"
+        description={`You have ${unansweredCount()} unanswered question(s). Once submitted, Secure Examination Mode will end.`}
+        confirmLabel="Submit Examination"
+        cancelLabel="Continue Examination"
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => {
           setConfirmOpen(false);
-          router.replace('/(student)/submitting');
+          goSubmit('submitted');
         }}
+      />
+
+      <ExamSecurityOverlay
+        visible={warningVisible}
+        violationCount={violationCount}
+        maxViolations={maxViolations}
+        message={warningMessage}
+        onContinue={acknowledgeWarning}
+        onSubmit={requestSubmitFromWarning}
       />
     </View>
   );
@@ -164,6 +265,17 @@ export default function ExamScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  secureBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F0D9DC',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  secureText: { fontSize: 11, fontWeight: '800', color: colors.primary },
   progressWrap: { paddingHorizontal: 20, gap: 8, marginBottom: 8 },
   saveRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   saveText: { fontSize: 11, color: colors.inkMuted, fontWeight: '600' },

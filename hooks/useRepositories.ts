@@ -4,6 +4,7 @@ import {
   LobbyRepository,
   QuestionRepository,
   ScheduleRepository,
+  SecurityRepository,
   StudentRepository,
 } from '@/repositories';
 
@@ -52,6 +53,15 @@ export function useLobby(sessionId?: string) {
     queryKey: QUERY_KEYS.lobby(sessionId),
     queryFn: () => LobbyRepository.getLobby(sessionId),
     refetchInterval: 2500,
+    enabled: Boolean(sessionId),
+  });
+}
+
+export function useViolations(sessionId?: string) {
+  return useQuery({
+    queryKey: QUERY_KEYS.violations(sessionId),
+    queryFn: () => SecurityRepository.getViolations(sessionId),
+    refetchInterval: 3000,
     enabled: Boolean(sessionId),
   });
 }
