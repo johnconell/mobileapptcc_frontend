@@ -19,12 +19,14 @@ function statusLabel(status: string) {
 function statusTone(status: string): 'default' | 'success' | 'warning' | 'danger' | 'info' | 'primary' {
   if (status === 'lobby_open') return 'warning';
   if (status === 'in_progress') return 'success';
+  if (status === 'ended') return 'danger';
   return 'default';
 }
 
 function roomAccent(status: string) {
   if (status === 'lobby_open') return colors.warning;
   if (status === 'in_progress') return colors.success;
+  if (status === 'ended') return colors.danger;
   return colors.inkMuted;
 }
 
@@ -84,9 +86,26 @@ export default function RoomDetailScreen() {
 
   const accent = roomAccent(room.status);
   const isOpen = room.status === 'lobby_open' || room.status === 'in_progress';
+  const isEnded = room.status === 'ended' || room.canReopen === false;
 
   const openOrEnter = async () => {
     if (!sessionId) return;
+
+    // Ended: view-only — student list + Sync to Admin (no new lobby).
+    if (isEnded && !isOpen) {
+      router.push({
+        pathname: '/(proctor)/lobby',
+        params: {
+          sessionId,
+          roomId,
+          ...(room.examSessionId != null
+            ? { examSessionId: String(room.examSessionId) }
+            : {}),
+        },
+      });
+      return;
+    }
+
     setBusy(true);
     try {
       if (!isOpen) {
@@ -148,9 +167,11 @@ export default function RoomDetailScreen() {
                 </View>
               ) : (
                 <Text style={styles.hint}>
-                  {isOpen
-                    ? 'Lobby is open.'
-                    : 'This room is closed. Open the lobby to generate a QR code.'}
+                  {isEnded && !isOpen
+                    ? 'Examination ended. You can still view the student list and sync results to Admin.'
+                    : isOpen
+                      ? 'Lobby is open.'
+                      : 'This room is closed. Open the lobby to generate a QR code.'}
                 </Text>
               )}
 
@@ -162,12 +183,19 @@ export default function RoomDetailScreen() {
         </Card>
 
         <Text style={styles.help}>
-          Students assigned to this time slot may scan this room’s QR code. Opening the lobby
-          marks the room as open for all connected proctors.
+          {isEnded && !isOpen
+            ? 'This room cannot start a new lobby. Open results to review who took the exam and sync to Admin if you have not yet.'
+            : 'Students assigned to this time slot may scan this room’s QR code. Opening the lobby marks the room as open for all connected proctors.'}
         </Text>
 
         <Button
-          title={isOpen ? 'Enter Lobby' : 'Open Lobby'}
+          title={
+            isEnded && !isOpen
+              ? 'View results & sync'
+              : isOpen
+                ? 'Enter Lobby'
+                : 'Open Lobby'
+          }
           size="lg"
           fullWidth
           loading={busy}
@@ -176,6 +204,11 @@ export default function RoomDetailScreen() {
 
         {room.status === 'in_progress' ? (
           <Text style={styles.examLive}>Examination in progress in this room.</Text>
+        ) : null}
+        {isEnded && !isOpen ? (
+          <Text style={styles.examLive}>
+            Session closed — view students anytime and sync when you have internet.
+          </Text>
         ) : null}
       </View>
     </View>

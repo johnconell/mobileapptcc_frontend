@@ -5,7 +5,7 @@ import type { Question } from '@/types';
 
 /**
  * QuestionRepository — load selected questions + submit answers.
- * GET /api/v1/exam/questions , POST /api/v1/exam/submit
+ * GET /api/v1/exam/questions , POST /api/v1/exam/save , POST /api/v1/exam/submit
  */
 export const QuestionRepository = {
   async getQuestions(sessionId: string): Promise<Question[]> {
@@ -18,6 +18,37 @@ export const QuestionRepository = {
       { auth: false },
     );
     return json.data || [];
+  },
+
+  async saveProgress(answers: Record<string, string | null>): Promise<{ saved: boolean; savedAt: string | null }> {
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) return { saved: false, savedAt: null };
+
+    const payload = Object.entries(answers).map(([questionId, selected]) => ({
+      exam_question_id: Number(questionId),
+      selected_answer: selected,
+    }));
+
+    try {
+      const json = await apiRequest<{
+        success: boolean;
+        data?: { saved?: boolean; saved_at?: string };
+      }>('/exam/save', {
+        method: 'POST',
+        auth: false,
+        body: {
+          participation_token: token,
+          answers: payload,
+        },
+      });
+
+      return {
+        saved: Boolean(json.data?.saved ?? json.success),
+        savedAt: json.data?.saved_at ?? new Date().toISOString(),
+      };
+    } catch {
+      return { saved: false, savedAt: null };
+    }
   },
 
   async submitAnswers(payload: {

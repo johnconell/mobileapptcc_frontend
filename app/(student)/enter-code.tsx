@@ -15,7 +15,8 @@ const schema = z.object({
     .string()
     .trim()
     .min(6, 'Enter the examination code')
-    .regex(/^[A-Za-z0-9]{4}-\d{4}$/i, 'Format example: ABCD-2026'),
+    // New codes: AB35NDD · Legacy codes with year: ABCD-2026 / XNWF2N-2026
+    .regex(/^[A-Za-z0-9]{6,12}(-\d{4})?$/i, 'Format example: AB35NDD'),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -62,7 +63,7 @@ export default function EnterCodeScreen() {
           </View>
           <Text style={styles.title}>Examination Code</Text>
           <Text style={styles.body}>
-            Type the code shown under the proctor QR Code. Example: ABCD-2026
+            Type the code shown under the proctor QR Code. Example: AB35NDD
           </Text>
 
           <Controller
@@ -71,7 +72,7 @@ export default function EnterCodeScreen() {
             render={({ field: { onChange, onBlur, value } }) => (
               <Input
                 label="Examination Code"
-                placeholder="ABCD-2026"
+                placeholder="AB35NDD"
                 autoCapitalize="characters"
                 autoCorrect={false}
                 value={value}

@@ -23,6 +23,7 @@ interface ExamState {
   setPaused: (value: boolean) => void;
   markSubmitting: (value: boolean) => void;
   markSubmitted: (reason?: ExamTerminationReason) => void;
+  markAutoSaved: (at?: string) => void;
   answeredCount: () => number;
   unansweredCount: () => number;
   unansweredNumbers: () => number[];
@@ -65,9 +66,11 @@ export const useExamStore = create<ExamState>((set, get) => ({
         ...state.answers,
         [questionId]: { questionId, selectedAnswer: answer, answeredAt: now },
       },
-      autoSavedAt: now,
     }));
   },
+
+  markAutoSaved: (at?: string) =>
+    set({ autoSavedAt: at ?? new Date().toISOString() }),
 
   tick: () => {
     if (get().isPaused) return;

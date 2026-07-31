@@ -47,9 +47,10 @@ function formatRemaining(seconds: number | null | undefined) {
 export default function ProctorLobbyScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { sessionId, roomId } = useLocalSearchParams<{
+  const { sessionId, roomId, examSessionId } = useLocalSearchParams<{
     sessionId: string;
     roomId?: string;
+    examSessionId?: string;
   }>();
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
   const storeLobby = useLobbyStore((s) => s.snapshot);
@@ -61,6 +62,8 @@ export default function ProctorLobbyScreen() {
   const [openError, setOpenError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [selected, setSelected] = useState<LobbyStudent | null>(null);
+  const [syncPending, setSyncPending] = useState<number | null>(null);
+  const [syncConfigured, setSyncConfigured] = useState(false);
   const knownStudentIds = useRef<Set<string>>(new Set());
   const checkInReady = useRef(false);
 
@@ -79,11 +82,15 @@ export default function ProctorLobbyScreen() {
       knownStudentIds.current = new Set();
       checkInReady.current = false;
       try {
-        const snapshot = await LobbyRepository.fetchProctorLobby(sessionId, roomId);
+        const snapshot = await LobbyRepository.fetchProctorLobby(
+          sessionId,
+          roomId,
+          examSessionId,
+        );
         if (cancelled) return;
         if (!snapshot) {
           setOpenError(
-            'This room lobby is not open yet. Go back and tap Open Lobby.',
+            'This room lobby is not available. Go back and open the lobby, or view results if the exam already ended.',
           );
           return;
         }
@@ -106,7 +113,7 @@ export default function ProctorLobbyScreen() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, roomId, setSnapshot, queryClient]);
+  }, [sessionId, roomId, examSessionId, setSnapshot, queryClient]);
 
   useEffect(() => {
     if (lobbyQuery.data) {
@@ -133,6 +140,25 @@ export default function ProctorLobbyScreen() {
   }, [lobbyQuery.data, setSnapshot, selected]);
 
   const lobby = lobbyQuery.data ?? storeLobby;
+
+  useEffect(() => {
+    if (!lobby?.status || lobby.status !== 'ended') return;
+    const examSessionId = lobby.session?.examSessionId;
+    if (!examSessionId) return;
+    let cancelled = false;
+    void LobbyRepository.syncPendingCount(examSessionId)
+      .then((info) => {
+        if (cancelled) return;
+        setSyncPending(info.pending);
+        setSyncConfigured(info.configured);
+      })
+      .catch(() => {
+        if (!cancelled) setSyncPending(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lobby?.status, lobby?.session?.examSessionId, lobby?.finishedCount]);
 
   const goBack = () => {
     if (sessionId && roomId) {
@@ -332,6 +358,58 @@ export default function ProctorLobbyScreen() {
                     setEndOpen(true);
                   }}
                 />
+              ) : null}
+              {lobby.status === 'ended' ? (
+                <Button
+                  title={
+                    syncPending != null && syncPending > 0
+                      ? `Sync results to Admin (${syncPending})`
+                      : syncPending === 0
+                        ? 'Results synced to Admin'
+                        : 'Sync results to Admin'
+                  }
+                  size="lg"
+                  fullWidth
+                  loading={busy}
+                  disabled={busy || syncPending === 0}
+                  onPress={async () => {
+                    const examSessionId = lobby.session?.examSessionId;
+                    if (!examSessionId) {
+                      Alert.alert('Unable to sync', 'Examination session not found.');
+                      return;
+                    }
+                    setBusy(true);
+                    try {
+                      const result = await LobbyRepository.syncToAdmin(examSessionId);
+                      const info = await LobbyRepository.syncPendingCount(examSessionId);
+                      setSyncPending(info.pending);
+                      setSyncConfigured(info.configured);
+                      Alert.alert(
+                        result.failed > 0 ? 'Sync partially complete' : 'Synced',
+                        result.message,
+                      );
+                    } catch (error) {
+                      Alert.alert(
+                        'Sync failed',
+                        error instanceof Error
+                          ? error.message
+                          : 'Connect to the internet and try again.',
+                      );
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                />
+              ) : null}
+              {lobby.status === 'ended' && syncConfigured === false ? (
+                <Text style={styles.ownerHint}>
+                  Set ADMIN_SYNC_URL and ADMIN_SYNC_TOKEN on the LAN server, then restart Laravel.
+                </Text>
+              ) : null}
+              {lobby.status === 'ended' && syncConfigured ? (
+                <Text style={styles.ownerHint}>
+                  You can leave and return later via View results & sync if you forget to sync now.
+                </Text>
               ) : null}
               {lobby.can_control === false ? (
                 <Text style={styles.ownerHint}>

@@ -27,6 +27,7 @@ type BackendRoom = {
   examination_code?: string | null;
   status?: string;
   connected_count?: number;
+  can_reopen?: boolean;
 };
 
 function formatDateLabel(iso?: string | null): string {
@@ -85,6 +86,7 @@ function toMobileRoom(row: BackendRoom, scheduleId: string): ExamRoom {
     connectedCount: Number(row.connected_count ?? 0),
     proctorId: row.proctor_id ?? null,
     proctorName: row.proctor_name ?? null,
+    canReopen: row.can_reopen !== false,
   };
 }
 

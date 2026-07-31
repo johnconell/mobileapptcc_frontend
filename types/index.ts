@@ -43,6 +43,8 @@ export interface Question {
   id: string;
   number: number;
   subjectId: string;
+  category?: string;
+  categoryCode?: string;
   type: 'multiple_choice';
   question: string;
   choices: Record<ChoiceKey, string>;
@@ -90,6 +92,7 @@ export interface ExamRoom {
   connectedCount: number;
   proctorId?: number | null;
   proctorName?: string | null;
+  canReopen?: boolean;
 }
 
 export type StudentSelectionStatus = 'available' | 'ready' | 'completed';

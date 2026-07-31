@@ -73,6 +73,7 @@ export const LobbyRepository = {
   async fetchProctorLobby(
     sessionId: string,
     roomId?: string,
+    examSessionId?: string,
   ): Promise<LobbySnapshot | null> {
     const qs = roomId
       ? `?examination_room_id=${encodeURIComponent(roomId)}`
@@ -85,6 +86,18 @@ export const LobbyRepository = {
       await setStoredCode(bySchedule.data.examinationCode);
       return bySchedule.data;
     }
+
+    // Ended sessions: load by exam session id (view results / sync).
+    if (examSessionId) {
+      const byId = await apiRequest<LobbyResponse>(
+        `/proctor/sessions/${examSessionId}`,
+      ).catch(() => null);
+      if (byId?.data) {
+        await setStoredCode(byId.data.examinationCode);
+        return byId.data;
+      }
+    }
+
     return null;
   },
 
@@ -272,6 +285,41 @@ export const LobbyRepository = {
       method: 'POST',
     });
     return null;
+  },
+
+  async syncPendingCount(examSessionId?: string | number): Promise<{
+    pending: number;
+    configured: boolean;
+  }> {
+    const q = examSessionId != null ? `?exam_session_id=${examSessionId}` : '';
+    const json = await apiRequest<{
+      success: boolean;
+      data?: { pending: number; configured: boolean };
+    }>(`/proctor/sync/pending${q}`);
+    return {
+      pending: json.data?.pending ?? 0,
+      configured: Boolean(json.data?.configured),
+    };
+  },
+
+  async syncToAdmin(examSessionId?: string | number): Promise<{
+    synced: number;
+    failed: number;
+    message: string;
+  }> {
+    const json = await apiRequest<{
+      success: boolean;
+      message?: string;
+      data?: { synced: number; failed: number; message?: string };
+    }>('/proctor/sync/push', {
+      method: 'POST',
+      body: examSessionId != null ? { exam_session_id: Number(examSessionId) } : {},
+    });
+    return {
+      synced: json.data?.synced ?? 0,
+      failed: json.data?.failed ?? 0,
+      message: json.message || json.data?.message || 'Sync complete.',
+    };
   },
 
   async recordStudentViolation(

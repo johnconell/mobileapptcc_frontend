@@ -23,6 +23,7 @@ import { useExamTimer } from '@/hooks/useExamTimer';
 import { useExamSecurity } from '@/hooks/useExamSecurity';
 import { useLobby } from '@/hooks/useRepositories';
 import { LobbyRepository } from '@/repositories';
+import { QuestionRepository } from '@/repositories/QuestionRepository';
 import { colors } from '@/theme';
 import type { ChoiceKey } from '@/types';
 
@@ -38,6 +39,7 @@ export default function ExamScreen() {
   const autoSavedAt = useExamStore((s) => s.autoSavedAt);
   const sessionId = useExamStore((s) => s.sessionId);
   const selectAnswer = useExamStore((s) => s.selectAnswer);
+  const markAutoSaved = useExamStore((s) => s.markAutoSaved);
   const unansweredCount = useExamStore((s) => s.unansweredCount);
   const unansweredNumbers = useExamStore((s) => s.unansweredNumbers);
   const answeredCount = useExamStore((s) => s.answeredCount);
@@ -49,6 +51,22 @@ export default function ExamScreen() {
   const lobbyQuery = useLobby(scannedSessionId ?? undefined);
 
   const securityEnabled = questions.length > 0;
+
+  // LAN autosave: answers live on the proctor host so End Exam can grade them.
+  useEffect(() => {
+    if (questions.length === 0) return;
+    const timer = setTimeout(() => {
+      const payload = Object.fromEntries(
+        Object.values(answers).map((a) => [a.questionId, a.selectedAnswer]),
+      );
+      void QuestionRepository.saveProgress(payload).then((result) => {
+        if (result.saved && result.savedAt) {
+          markAutoSaved(result.savedAt);
+        }
+      });
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [answers, questions.length, markAutoSaved]);
 
   const goSubmit = useCallback(
     (reason: 'submitted' | 'policy_violation' | 'time_expired' = 'submitted') => {
@@ -180,22 +198,29 @@ export default function ExamScreen() {
         scrollEnabled={!paused}
         keyboardShouldPersistTaps="handled"
       >
-        {questions.map((question) => (
-          <View key={question.id} style={styles.questionBlock}>
-            <QuestionCard
-              question={question}
-              selectedAnswer={answers[question.id]?.selectedAnswer ?? null}
-              secure
-              onSelect={(choice: ChoiceKey) => {
-                if (paused) return;
-                selectAnswer(question.id, choice);
-                if (verifiedStudent?.id) {
-                  void LobbyRepository.touchActivity(verifiedStudent.id);
-                }
-              }}
-            />
-          </View>
-        ))}
+        {questions.map((question, index) => {
+          const prevCategory = index > 0 ? questions[index - 1]?.category : null;
+          const showCategory = Boolean(question.category) && question.category !== prevCategory;
+          return (
+            <View key={question.id} style={styles.questionBlock}>
+              {showCategory ? (
+                <Text style={styles.categoryHeading}>{question.category}</Text>
+              ) : null}
+              <QuestionCard
+                question={question}
+                selectedAnswer={answers[question.id]?.selectedAnswer ?? null}
+                secure
+                onSelect={(choice: ChoiceKey) => {
+                  if (paused) return;
+                  selectAnswer(question.id, choice);
+                  if (verifiedStudent?.id) {
+                    void LobbyRepository.touchActivity(verifiedStudent.id);
+                  }
+                }}
+              />
+            </View>
+          );
+        })}
 
         <View style={styles.submitBlock}>
           <Button
@@ -279,6 +304,15 @@ const styles = StyleSheet.create({
   saveText: { fontSize: 11, color: colors.inkMuted, fontWeight: '600', flex: 1 },
   content: { padding: 20, paddingBottom: 40, gap: 14 },
   questionBlock: { gap: 0 },
+  categoryHeading: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.primary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 8,
+    marginTop: 6,
+  },
   submitBlock: { marginTop: 8, gap: 10 },
   submitHint: {
     fontSize: 12,

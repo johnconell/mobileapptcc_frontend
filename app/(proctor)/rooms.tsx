@@ -19,12 +19,14 @@ function statusLabel(status: string) {
 function statusTone(status: string): 'default' | 'success' | 'warning' | 'danger' | 'info' | 'primary' {
   if (status === 'lobby_open') return 'warning';
   if (status === 'in_progress') return 'success';
+  if (status === 'ended') return 'danger';
   return 'default';
 }
 
 function roomAccent(status: string) {
   if (status === 'lobby_open') return colors.warning;
   if (status === 'in_progress') return colors.success;
+  if (status === 'ended') return colors.danger;
   return colors.inkMuted;
 }
 
