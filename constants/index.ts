@@ -27,6 +27,13 @@ export const STORAGE_KEYS = {
   participationToken: 'tcc.student.participation',
   examinationCode: 'tcc.student.exam.code',
   settings: 'tcc.settings',
+  /** Runtime override for Option B LAN exam server (http://IP:8000/api/v1) */
+  lanApiUrl: 'tcc.lan.api.url',
+  offlineMode: 'tcc.offline.mode',
+  offlinePackReady: 'tcc.offline.pack.ready',
+  offlinePackAt: 'tcc.offline.pack.at',
+  offlineScheduleId: 'tcc.offline.schedule.id',
+  offlineExamCode: 'tcc.offline.exam.code',
 } as const;
 
 export const STATUS_LABELS = {

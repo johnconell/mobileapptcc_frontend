@@ -14,9 +14,9 @@ const schema = z.object({
   code: z
     .string()
     .trim()
-    .min(6, 'Enter the examination code')
-    // New codes: AB35NDD · Legacy codes with year: ABCD-2026 / XNWF2N-2026
-    .regex(/^[A-Za-z0-9]{6,12}(-\d{4})?$/i, 'Format example: AB35NDD'),
+    .min(4, 'Enter the examination code')
+    // Online: AB35NDD · Offline cache: OFF-12 · Legacy: ABCD-2026
+    .regex(/^(OFF-\d+|[A-Za-z0-9]{6,12}(-\d{4})?)$/i, 'Format example: AB35NDD or OFF-12'),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -63,7 +63,8 @@ export default function EnterCodeScreen() {
           </View>
           <Text style={styles.title}>Examination Code</Text>
           <Text style={styles.body}>
-            Type the code shown under the proctor QR Code. Example: AB35NDD
+            Type the code from your proctor. Online lobby: AB35NDD. Offline cache mode: OFF-12
+            (schedule number).
           </Text>
 
           <Controller

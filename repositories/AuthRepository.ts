@@ -1,5 +1,6 @@
 import { STORAGE_KEYS } from '@/constants';
 import { ApiError, apiRequest } from '@/services/api';
+import { OfflineStore } from '@/services/offlineStore';
 import { appStorage } from '@/services/storage';
 import type { AuthResult, ProctorProfile } from '@/types';
 
@@ -53,6 +54,9 @@ export const AuthRepository = {
       await appStorage.deleteItem(STORAGE_KEYS.participationToken);
       await appStorage.deleteItem(STORAGE_KEYS.examinationCode);
       await appStorage.deleteItem(STORAGE_KEYS.studentProgress);
+      // LAN proctor login should use the live server roster, not sticky offline mode
+      // left over from a previous pack download.
+      await OfflineStore.setOfflineMode(false);
 
       return { success: true, profile: stored, token };
     } catch (error) {

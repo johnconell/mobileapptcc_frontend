@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AppProviders } from '@/providers/AppProviders';
+import { hydrateApiBaseUrl } from '@/services/api';
 import { useSettingsStore } from '@/stores';
 import { colors } from '@/theme';
 
@@ -16,6 +17,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     async function prepare() {
+      await hydrateApiBaseUrl();
       await hydrate();
       await SplashScreen.hideAsync();
     }
@@ -34,6 +36,7 @@ export default function RootLayout() {
           }}
         >
           <Stack.Screen name="index" />
+          <Stack.Screen name="offline-prepare" />
           <Stack.Screen name="(student)" />
           <Stack.Screen name="(proctor)" />
         </Stack>

@@ -1,5 +1,7 @@
 import { apiRequest } from '@/services/api';
 import { LobbyRepository } from '@/repositories/LobbyRepository';
+import { OfflineExamRepository } from '@/services/offlineExamRepository';
+import { OfflineStore } from '@/services/offlineStore';
 import type { ExamCodeValidation, ExamRoom, ExamSchedule, ExamSession } from '@/types';
 
 type BackendSchedule = {
@@ -122,10 +124,22 @@ function toMobileSchedules(rows: BackendSchedule[]): ExamSchedule[] {
  */
 export const ScheduleRepository = {
   async getSchedules(): Promise<ExamSchedule[]> {
-    const json = await apiRequest<{ success: boolean; data: BackendSchedule[] }>(
-      '/proctor/schedules?per_page=200',
-    );
-    return toMobileSchedules(json.data || []);
+    if (await OfflineStore.isOfflineMode()) {
+      return OfflineExamRepository.getCachedSchedules();
+    }
+    try {
+      const json = await apiRequest<{ success: boolean; data: BackendSchedule[] }>(
+        '/proctor/schedules?per_page=200',
+      );
+      return toMobileSchedules(json.data || []);
+    } catch {
+      // Fall back to phone cache when the network is unavailable.
+      if (await OfflineStore.hasPack()) {
+        await OfflineStore.setOfflineMode(true);
+        return OfflineExamRepository.getCachedSchedules();
+      }
+      throw new Error('Unable to load schedules. Download the offline pack while online first.');
+    }
   },
 
   async getScheduleById(id: string): Promise<ExamSchedule | null> {
@@ -134,6 +148,34 @@ export const ScheduleRepository = {
   },
 
   async getSessionsBySchedule(scheduleId: string): Promise<ExamSession[]> {
+    if (await OfflineStore.isOfflineMode()) {
+      const pack = await OfflineStore.getPack();
+      if (!pack) return [];
+      const date = scheduleId.startsWith('date-') ? scheduleId.slice(5) : null;
+      const rows = pack.schedules.filter((s) => {
+        if (date) return (s.exam_date || '') === date;
+        return String(s.id) === String(scheduleId).replace(/^offline-/, '');
+      });
+      return rows
+        .map((row) =>
+          toMobileSession({
+            id: row.id,
+            title: row.title,
+            exam_date: row.exam_date,
+            start_time: row.start_time,
+            end_time: row.end_time,
+            time_slot: row.time_slot,
+            venue: row.venue,
+            batch_code: row.batch_code,
+            course: row.course,
+            registrations_count: pack.registrations.filter(
+              (r) => Number(r.examination_schedule_id) === Number(row.id),
+            ).length,
+          }),
+        )
+        .sort((a, b) => a.startTime.localeCompare(b.startTime));
+    }
+
     const date = scheduleId.startsWith('date-') ? scheduleId.slice(5) : scheduleId;
     const json = await apiRequest<{ success: boolean; data: BackendSchedule[] }>(
       `/proctor/schedules?per_page=200${date ? `&date=${encodeURIComponent(date)}` : ''}`,
@@ -144,6 +186,30 @@ export const ScheduleRepository = {
   },
 
   async getRoomsBySession(sessionId: string): Promise<ExamRoom[]> {
+    if (await OfflineStore.isOfflineMode()) {
+      const pack = await OfflineStore.getPack();
+      if (!pack) return [];
+      const sid = Number(String(sessionId).replace(/^offline-/, ''));
+      const schedule = pack.schedules.find((s) => Number(s.id) === sid);
+      const rooms = schedule?.rooms?.length
+        ? schedule.rooms
+        : [{ id: sid * 1000 + 1, room_name: 'Offline Room', capacity: 40 }];
+      return rooms.map((row) =>
+        toMobileRoom(
+          {
+            id: row.id,
+            room_name: row.room_name,
+            capacity: row.capacity,
+            examination_code: OfflineExamRepository.makeOfflineCode(sid),
+            status: 'lobby_open',
+            connected_count: 0,
+            can_reopen: true,
+          },
+          String(sid),
+        ),
+      );
+    }
+
     const json = await apiRequest<{ success: boolean; data: BackendRoom[] }>(
       `/proctor/schedules/${sessionId}/rooms`,
     );

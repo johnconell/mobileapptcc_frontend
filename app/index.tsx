@@ -17,6 +17,14 @@ export default function HomeScreen() {
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
       <View style={styles.topBar}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Download offline exam pack"
+          onPress={() => router.push('/offline-prepare')}
+          style={styles.proctorBtn}
+        >
+          <Text style={styles.proctorText}>Offline pack</Text>
+        </Pressable>
         <View style={{ flex: 1 }} />
         <Pressable
           accessibilityRole="button"
@@ -41,8 +49,8 @@ export default function HomeScreen() {
           <Card>
             <Text style={styles.cardTitle}>Ready to begin?</Text>
             <Text style={styles.cardBody}>
-              Join using the QR Code or Examination Code provided by your proctor.
-              No internet is required inside the campus LAN.
+              Download the exam pack on school Wi‑Fi first (no room PC needed). Then take the
+              exam offline — no load required. Sync results when you are online again.
             </Text>
           </Card>
         </Animated.View>

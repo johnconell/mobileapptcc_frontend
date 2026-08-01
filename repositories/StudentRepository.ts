@@ -1,5 +1,7 @@
 import { STORAGE_KEYS } from '@/constants';
 import { apiRequest } from '@/services/api';
+import { OfflineExamRepository } from '@/services/offlineExamRepository';
+import { OfflineStore } from '@/services/offlineStore';
 import { appStorage } from '@/services/storage';
 import type { Program, StudentRecord } from '@/types';
 
@@ -11,6 +13,15 @@ export const StudentRepository = {
   async getAll(): Promise<StudentRecord[]> {
     const code = await appStorage.getItem(STORAGE_KEYS.examinationCode);
     if (!code) return [];
+
+    if (await OfflineStore.isOfflineMode()) {
+      const scheduleId =
+        (await appStorage.getItem(STORAGE_KEYS.offlineScheduleId)) ||
+        String(OfflineExamRepository.parseOfflineCode(code) || '');
+      if (!scheduleId) return [];
+      return OfflineExamRepository.getStudentsForSchedule(scheduleId);
+    }
+
     const json = await apiRequest<{ success: boolean; data: StudentRecord[] }>(
       `/exam/students?code=${encodeURIComponent(code)}`,
       { auth: false },
@@ -19,14 +30,15 @@ export const StudentRepository = {
   },
 
   async search(query: string): Promise<StudentRecord[]> {
-    const code = await appStorage.getItem(STORAGE_KEYS.examinationCode);
-    if (!code) return [];
-    const q = query.trim();
-    const json = await apiRequest<{ success: boolean; data: StudentRecord[] }>(
-      `/exam/students?code=${encodeURIComponent(code)}${q ? `&search=${encodeURIComponent(q)}` : ''}`,
-      { auth: false },
+    const all = await this.getAll();
+    const q = query.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter(
+      (s) =>
+        s.fullName.toLowerCase().includes(q) ||
+        s.studentId.toLowerCase().includes(q) ||
+        s.programName.toLowerCase().includes(q),
     );
-    return json.data || [];
   },
 
   async getById(id: string): Promise<StudentRecord | null> {
@@ -38,6 +50,15 @@ export const StudentRepository = {
   async claimStudent(student: StudentRecord): Promise<StudentRecord> {
     const code = await appStorage.getItem(STORAGE_KEYS.examinationCode);
     if (!code) throw new Error('Missing examination code. Scan QR again.');
+
+    if (await OfflineStore.isOfflineMode()) {
+      return {
+        ...student,
+        selectionStatus: 'ready',
+        statusLabel: 'Ready',
+        selectable: false,
+      };
+    }
 
     const json = await apiRequest<{
       success: boolean;
@@ -66,6 +87,7 @@ export const StudentRepository = {
   },
 
   async releaseClaim(studentId: string): Promise<void> {
+    if (await OfflineStore.isOfflineMode()) return;
     const code = await appStorage.getItem(STORAGE_KEYS.examinationCode);
     if (!code) return;
 

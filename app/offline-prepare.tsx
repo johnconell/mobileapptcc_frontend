@@ -1,0 +1,131 @@
+import React, { useEffect, useState } from 'react';
+import { Alert, Text, View, StyleSheet } from 'react-native';
+import { useRouter } from 'expo-router';
+import { Header, Button, Card, Loader } from '@/components/ui';
+import { OfflineExamRepository } from '@/services/offlineExamRepository';
+import { OfflineStore } from '@/services/offlineStore';
+import { getCloudApiBaseUrl, getApiBaseUrl } from '@/services/api';
+import { colors } from '@/theme';
+import { safeBack } from '@/utils';
+
+export default function OfflinePrepareScreen() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [meta, setMeta] = useState<{ ready: boolean; at: string | null }>({
+    ready: false,
+    at: null,
+  });
+  const [pending, setPending] = useState(0);
+
+  const refresh = async () => {
+    setMeta(await OfflineStore.getPackMeta());
+    setPending((await OfflineStore.pendingResults()).length);
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const download = async () => {
+    setBusy(true);
+    try {
+      await OfflineExamRepository.downloadPackFromCloud();
+      await refresh();
+      Alert.alert(
+        'Exam cached',
+        'Schedules, student names, and questions are saved on this phone. You can turn off internet and continue.',
+      );
+    } catch (error) {
+      Alert.alert(
+        'Download failed',
+        error instanceof Error
+          ? error.message
+          : 'Connect to the internet / school Wi‑Fi and try again.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sync = async () => {
+    setBusy(true);
+    try {
+      const result = await OfflineExamRepository.syncQueuedToCloud();
+      await refresh();
+      Alert.alert('Synced', result.message);
+    } catch (error) {
+      Alert.alert(
+        'Sync failed',
+        error instanceof Error
+          ? error.message
+          : 'Turn on internet, then sync again.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <View style={styles.screen}>
+      <Header
+        title="Offline exam cache"
+        subtitle="No room PC required"
+        onBack={() => safeBack(router, '/')}
+      />
+      <View style={styles.body}>
+        <Card>
+          <Text style={styles.title}>How it works</Text>
+          <Text style={styles.bodyText}>
+            1. Admin prepares schedules, names, and questions in the cloud (Chrome).{'\n'}
+            2. On school Wi‑Fi (or any internet), download the pack to this phone.{'\n'}
+            3. Take / proctor the exam with mobile data OFF — everything runs from cache.{'\n'}
+            4. When online again, sync results to the admin cloud database.
+          </Text>
+        </Card>
+
+        <Card>
+          <Text style={styles.meta}>
+            Cloud API: {getCloudApiBaseUrl() || getApiBaseUrl()}
+          </Text>
+          <Text style={styles.meta}>
+            Cache: {meta.ready ? `Ready${meta.at ? ` · ${new Date(meta.at).toLocaleString()}` : ''}` : 'Not downloaded'}
+          </Text>
+          <Text style={styles.meta}>Pending results to sync: {pending}</Text>
+        </Card>
+
+        {busy ? <Loader label="Working…" /> : null}
+
+        <Button
+          title="Download exam pack (needs internet)"
+          size="lg"
+          fullWidth
+          loading={busy}
+          onPress={() => void download()}
+        />
+        <Button
+          title={`Sync results to Admin (${pending})`}
+          variant="outline"
+          size="lg"
+          fullWidth
+          loading={busy}
+          disabled={pending === 0}
+          onPress={() => void sync()}
+        />
+        <Button
+          title="Continue to proctor login"
+          variant="ghost"
+          fullWidth
+          onPress={() => router.push('/(proctor)/login')}
+        />
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.background },
+  body: { padding: 20, gap: 14 },
+  title: { fontSize: 17, fontWeight: '700', color: colors.ink, marginBottom: 8 },
+  bodyText: { fontSize: 14, lineHeight: 22, color: colors.inkSecondary },
+  meta: { fontSize: 13, color: colors.inkMuted, marginBottom: 6, fontWeight: '600' },
+});
