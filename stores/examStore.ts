@@ -24,6 +24,11 @@ interface ExamState {
   markSubmitting: (value: boolean) => void;
   markSubmitted: (reason?: ExamTerminationReason) => void;
   markAutoSaved: (at?: string) => void;
+  restoreProgress: (payload: {
+    answers: Record<string, ExamAnswer>;
+    remainingSeconds: number;
+    startedAt: string | null;
+  }) => void;
   answeredCount: () => number;
   unansweredCount: () => number;
   unansweredNumbers: () => number[];
@@ -71,6 +76,17 @@ export const useExamStore = create<ExamState>((set, get) => ({
 
   markAutoSaved: (at?: string) =>
     set({ autoSavedAt: at ?? new Date().toISOString() }),
+
+  restoreProgress: ({ answers, remainingSeconds, startedAt }) =>
+    set({
+      answers,
+      remainingSeconds,
+      startedAt: startedAt ?? new Date().toISOString(),
+      submittedAt: null,
+      isSubmitting: false,
+      isPaused: false,
+      terminationReason: null,
+    }),
 
   tick: () => {
     if (get().isPaused) return;

@@ -34,13 +34,16 @@ export const STORAGE_KEYS = {
   offlinePackAt: 'tcc.offline.pack.at',
   offlineScheduleId: 'tcc.offline.schedule.id',
   offlineExamCode: 'tcc.offline.exam.code',
+  offlineClaims: 'tcc.offline.claims',
+  examCheckpoint: 'tcc.student.exam.checkpoint',
 } as const;
 
 export const STATUS_LABELS = {
   connected: 'Connected',
   waiting: 'Waiting',
-  taking_exam: 'Taking Examination',
-  finished: 'Finished',
+  taking_exam: 'Taking',
+  disconnected: 'Disconnected',
+  finished: 'Done',
   warning: 'Warning',
   terminated: 'Terminated',
   scheduled: 'Scheduled',

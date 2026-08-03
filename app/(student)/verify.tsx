@@ -41,6 +41,7 @@ export default function VerifyStudentScreen() {
   const [claimingId, setClaimingId] = useState<string | null>(null);
   const studentsQuery = useStudents(query);
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
+  const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const setSelectedStudent = useStudentStore((s) => s.setSelectedStudent);
 
   React.useEffect(() => {
@@ -48,6 +49,13 @@ export default function VerifyStudentScreen() {
       router.replace('/');
     }
   }, [scannedSessionId, router]);
+
+  // Already in waiting lobby — block re-registration via Back / reopening verify.
+  React.useEffect(() => {
+    if (verifiedStudent && scannedSessionId) {
+      router.replace('/(student)/lobby');
+    }
+  }, [verifiedStudent, scannedSessionId, router]);
 
   const students = useMemo(() => studentsQuery.data ?? [], [studentsQuery.data]);
 

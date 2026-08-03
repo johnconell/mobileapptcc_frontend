@@ -455,5 +455,89 @@ export const LobbyRepository = {
     void studentId;
   },
 
+  async sendHeartbeat(): Promise<{ ok: boolean; message?: string }> {
+    if (await OfflineStore.isOfflineMode()) {
+      return { ok: true };
+    }
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) return { ok: false, message: 'Missing participation token.' };
+    try {
+      await apiRequest('/exam/heartbeat', {
+        method: 'POST',
+        auth: false,
+        body: { participation_token: token },
+      });
+      return { ok: true };
+    } catch (e) {
+      return {
+        ok: false,
+        message: e instanceof Error ? e.message : 'Heartbeat failed.',
+      };
+    }
+  },
+
+  async reportWifiDisconnect(): Promise<void> {
+    if (await OfflineStore.isOfflineMode()) return;
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) return;
+    try {
+      await apiRequest('/exam/wifi-disconnect', {
+        method: 'POST',
+        auth: false,
+        body: { participation_token: token },
+      });
+    } catch {
+      // Best-effort; local lock still applies.
+    }
+  },
+
+  async reconnectWithCode(code: string): Promise<{ ok: boolean; message?: string }> {
+    if (await OfflineStore.isOfflineMode()) {
+      return { ok: false, message: 'Reconnect requires the campus exam server.' };
+    }
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) return { ok: false, message: 'Missing participation token.' };
+    try {
+      await apiRequest('/exam/reconnect', {
+        method: 'POST',
+        auth: false,
+        body: {
+          participation_token: token,
+          reconnect_code: code,
+        },
+      });
+      return { ok: true };
+    } catch (e) {
+      return {
+        ok: false,
+        message: e instanceof Error ? e.message : 'Reconnect failed.',
+      };
+    }
+  },
+
+  async allowStudentReconnect(
+    registrationId: string,
+  ): Promise<{ reconnectCode: string; expiresAt: string; studentName?: string }> {
+    const json = await apiRequest<{
+      success: boolean;
+      message?: string;
+      data?: {
+        reconnect_code: string;
+        expires_at: string;
+        student_name?: string;
+      };
+    }>(`/proctor/registrations/${registrationId}/allow-reconnect`, {
+      method: 'POST',
+    });
+    if (!json.data?.reconnect_code) {
+      throw new Error(json.message || 'Unable to issue reconnect code.');
+    }
+    return {
+      reconnectCode: json.data.reconnect_code,
+      expiresAt: json.data.expires_at,
+      studentName: json.data.student_name,
+    };
+  },
+
   lobbyKey: lobbyQueryKey,
 };

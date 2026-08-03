@@ -52,6 +52,7 @@ export const StudentRepository = {
     if (!code) throw new Error('Missing examination code. Scan QR again.');
 
     if (await OfflineStore.isOfflineMode()) {
+      await OfflineStore.setLocalClaim(student.id);
       return {
         ...student,
         selectionStatus: 'ready',
@@ -87,7 +88,10 @@ export const StudentRepository = {
   },
 
   async releaseClaim(studentId: string): Promise<void> {
-    if (await OfflineStore.isOfflineMode()) return;
+    if (await OfflineStore.isOfflineMode()) {
+      await OfflineStore.clearLocalClaim(studentId);
+      return;
+    }
     const code = await appStorage.getItem(STORAGE_KEYS.examinationCode);
     if (!code) return;
 
@@ -98,7 +102,17 @@ export const StudentRepository = {
         code,
         applicant_id: Number(studentId),
       },
-    }).catch(() => undefined);
+    });
+  },
+
+  /**
+   * Cancel waiting-lobby registration so the student can pick a different name.
+   * Clears local participation tokens after a successful server release.
+   */
+  async cancelRegistration(studentId: string): Promise<void> {
+    await this.releaseClaim(studentId);
+    await appStorage.deleteItem(STORAGE_KEYS.participationToken);
+    await appStorage.deleteItem(STORAGE_KEYS.studentProgress);
   },
 
   async getPrograms(): Promise<Program[]> {

@@ -1,5 +1,5 @@
 import { STORAGE_KEYS } from '@/constants';
-import { ApiError, apiRequest } from '@/services/api';
+import { ApiError, apiRequest, getAuthApiBaseUrl } from '@/services/api';
 import { OfflineStore } from '@/services/offlineStore';
 import { appStorage } from '@/services/storage';
 import type { AuthResult, ProctorProfile } from '@/types';
@@ -16,6 +16,7 @@ type LoginResponse = {
 
 /**
  * AuthRepository — Laravel Sanctum proctor login.
+ * Uses the cloud/internet API so login works without campus exam Wi‑Fi.
  * POST /api/v1/proctor/login
  */
 export const AuthRepository = {
@@ -24,6 +25,7 @@ export const AuthRepository = {
       const json = await apiRequest<LoginResponse>('/proctor/login', {
         method: 'POST',
         auth: false,
+        baseUrl: getAuthApiBaseUrl(),
         body: {
           email: username.trim(),
           username: username.trim(),
@@ -54,8 +56,7 @@ export const AuthRepository = {
       await appStorage.deleteItem(STORAGE_KEYS.participationToken);
       await appStorage.deleteItem(STORAGE_KEYS.examinationCode);
       await appStorage.deleteItem(STORAGE_KEYS.studentProgress);
-      // LAN proctor login should use the live server roster, not sticky offline mode
-      // left over from a previous pack download.
+      // Clear sticky offline mode left over from a previous pack download.
       await OfflineStore.setOfflineMode(false);
 
       return { success: true, profile: stored, token };
@@ -68,7 +69,7 @@ export const AuthRepository = {
         message:
           error instanceof Error
             ? error.message
-            : 'Unable to reach the server. Check EXPO_PUBLIC_API_URL.',
+            : 'Unable to reach the server. Check EXPO_PUBLIC_CLOUD_API_URL.',
       };
     }
   },
@@ -82,7 +83,7 @@ export const AuthRepository = {
       try {
         const me = await apiRequest<{ success: boolean; data?: { profile: ProctorProfile } }>(
           '/proctor/me',
-          { token },
+          { token, baseUrl: getAuthApiBaseUrl() },
         );
         if (me.data?.profile) {
           const profile = { ...me.data.profile, token };
@@ -116,7 +117,11 @@ export const AuthRepository = {
     try {
       const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
       if (token) {
-        await apiRequest('/proctor/logout', { method: 'POST', token }).catch(() => undefined);
+        await apiRequest('/proctor/logout', {
+          method: 'POST',
+          token,
+          baseUrl: getAuthApiBaseUrl(),
+        }).catch(() => undefined);
       }
     } finally {
       await appStorage.deleteItem(STORAGE_KEYS.proctorSession);

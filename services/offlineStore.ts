@@ -171,4 +171,35 @@ export const OfflineStore = {
   async isOfflineMode(): Promise<boolean> {
     return (await appStorage.getItem(STORAGE_KEYS.offlineMode)) === '1';
   },
+
+  async getLocalClaims(): Promise<string[]> {
+    try {
+      const raw = await appStorage.getItem(STORAGE_KEYS.offlineClaims);
+      const parsed = raw ? (JSON.parse(raw) as string[]) : [];
+      return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      return [];
+    }
+  },
+
+  async setLocalClaim(studentId: string): Promise<void> {
+    const ids = await this.getLocalClaims();
+    if (!ids.includes(String(studentId))) {
+      ids.push(String(studentId));
+      await appStorage.setItem(STORAGE_KEYS.offlineClaims, JSON.stringify(ids));
+    }
+  },
+
+  async clearLocalClaim(studentId?: string): Promise<void> {
+    if (!studentId) {
+      await appStorage.deleteItem(STORAGE_KEYS.offlineClaims);
+      return;
+    }
+    const ids = (await this.getLocalClaims()).filter((id) => id !== String(studentId));
+    if (!ids.length) {
+      await appStorage.deleteItem(STORAGE_KEYS.offlineClaims);
+      return;
+    }
+    await appStorage.setItem(STORAGE_KEYS.offlineClaims, JSON.stringify(ids));
+  },
 };

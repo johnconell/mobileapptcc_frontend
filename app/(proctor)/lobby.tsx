@@ -65,12 +65,35 @@ export default function ProctorLobbyScreen() {
   const [syncPending, setSyncPending] = useState<number | null>(null);
   const [syncConfigured, setSyncConfigured] = useState(false);
   const knownStudentIds = useRef<Set<string>>(new Set());
+  const knownStudentMeta = useRef<Map<string, LobbyStudent>>(new Map());
+  const knownStudentStatus = useRef<Map<string, LobbyStudent['status']>>(new Map());
   const checkInReady = useRef(false);
+  const [notifications, setNotifications] = useState<
+    Array<{ id: string; title: string; body: string; at: string; kind: 'connect' | 'disconnect' }>
+  >([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [reconnectCode, setReconnectCode] = useState<string | null>(null);
+  const [reconnectExpiresAt, setReconnectExpiresAt] = useState<string | null>(null);
 
   const lobbyQuery = useLobby(
     ready && !openError ? sessionId : undefined,
     roomId,
   );
+
+  const pushNotification = (
+    kind: 'connect' | 'disconnect',
+    title: string,
+    body: string,
+  ) => {
+    const at = new Date().toISOString();
+    setNotifications((prev) =>
+      [{ id: `${kind}-${at}-${Math.random().toString(36).slice(2, 7)}`, title, body, at, kind }, ...prev].slice(
+        0,
+        40,
+      ),
+    );
+    Alert.alert(title, body);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -95,6 +118,10 @@ export default function ProctorLobbyScreen() {
           return;
         }
         knownStudentIds.current = new Set(snapshot.students.map((s) => s.id));
+        knownStudentMeta.current = new Map(snapshot.students.map((s) => [s.id, s]));
+        knownStudentStatus.current = new Map(
+          snapshot.students.map((s) => [s.id, s.status]),
+        );
         checkInReady.current = true;
         setSnapshot(snapshot);
         await queryClient.invalidateQueries({
@@ -123,18 +150,86 @@ export default function ProctorLobbyScreen() {
         setSelected(latest);
       }
 
-      // Notify proctor when a student checks in (QR scan / name claim) before exam starts.
-      if (checkInReady.current && lobbyQuery.data.status === 'lobby_open') {
+      // Real-time connect / disconnect notifications (LAN poll — no internet required).
+      if (checkInReady.current) {
+        const currentIds = new Set(lobbyQuery.data.students.map((s) => s.id));
+
         const newcomers = lobbyQuery.data.students.filter(
           (s) => !knownStudentIds.current.has(s.id),
         );
         newcomers.forEach((student) => {
           knownStudentIds.current.add(student.id);
-          Alert.alert('Student checked in', `${student.fullName} scanned the QR code.`);
+          knownStudentMeta.current.set(student.id, student);
+          knownStudentStatus.current.set(student.id, student.status);
+          const timeLabel = formatTime(student.joinedAt || new Date().toISOString());
+          const statusLabel =
+            student.status === 'waiting'
+              ? 'Waiting'
+              : student.status === 'connected'
+                ? 'Connected'
+                : student.status === 'taking_exam'
+                  ? 'Taking'
+                  : student.status === 'disconnected'
+                    ? 'Disconnected'
+                    : student.status === 'finished'
+                      ? 'Done'
+                      : student.status.replace(/_/g, ' ');
+          pushNotification(
+            'connect',
+            'Student Connected',
+            `${student.fullName} connected to the examination system at ${timeLabel}. Status: ${statusLabel}.`,
+          );
         });
-        lobbyQuery.data.students.forEach((s) => knownStudentIds.current.add(s.id));
+
+        const leftIds = [...knownStudentIds.current].filter((id) => !currentIds.has(id));
+        leftIds.forEach((id) => {
+          const prev = knownStudentMeta.current.get(id);
+          knownStudentIds.current.delete(id);
+          knownStudentMeta.current.delete(id);
+          knownStudentStatus.current.delete(id);
+          const name = prev?.fullName || 'A student';
+          const timeLabel = formatTime(new Date().toISOString());
+          pushNotification(
+            'disconnect',
+            'Student Disconnected',
+            `${name} left the examination lobby at ${timeLabel}.`,
+          );
+        });
+
+        lobbyQuery.data.students.forEach((s) => {
+          const prevStatus = knownStudentStatus.current.get(s.id);
+          if (
+            prevStatus &&
+            prevStatus !== 'disconnected' &&
+            s.status === 'disconnected'
+          ) {
+            const timeLabel = formatTime(new Date().toISOString());
+            pushNotification(
+              'disconnect',
+              'Student Disconnected',
+              `${s.fullName} lost Wi‑Fi or stopped heartbeating at ${timeLabel}. Issue a reconnect code if the reason is valid.`,
+            );
+          }
+          if (
+            prevStatus === 'disconnected' &&
+            s.status === 'taking_exam'
+          ) {
+            pushNotification(
+              'connect',
+              'Student Reconnected',
+              `${s.fullName} reconnected and is taking the examination again.`,
+            );
+          }
+          knownStudentIds.current.add(s.id);
+          knownStudentMeta.current.set(s.id, s);
+          knownStudentStatus.current.set(s.id, s.status);
+        });
       } else if (lobbyQuery.data.students.length) {
-        lobbyQuery.data.students.forEach((s) => knownStudentIds.current.add(s.id));
+        lobbyQuery.data.students.forEach((s) => {
+          knownStudentIds.current.add(s.id);
+          knownStudentMeta.current.set(s.id, s);
+          knownStudentStatus.current.set(s.id, s.status);
+        });
       }
     }
   }, [lobbyQuery.data, setSnapshot, selected]);
@@ -428,7 +523,8 @@ export default function ProctorLobbyScreen() {
                   )}
                 </Text>
                 <Text style={styles.monitorLine}>
-                  Still taking exam: {lobby.takingCount} · Submitted: {lobby.finishedCount}
+                  Taking: {lobby.takingCount} · Disconnected:{' '}
+                  {lobby.disconnectedCount ?? 0} · Done: {lobby.finishedCount}
                 </Text>
               </Card>
             ) : null}
@@ -457,38 +553,86 @@ export default function ProctorLobbyScreen() {
             </View>
             <View style={styles.statsRow}>
               <StatisticCard
-                label="Taking Exam"
+                label="Taking"
                 value={lobby.takingCount}
                 tone="default"
                 icon={<Play size={18} color={colors.primary} />}
               />
               <StatisticCard
-                label="Finished"
+                label="Disconnected"
+                value={lobby.disconnectedCount ?? 0}
+                tone="warning"
+                icon={<UserX size={18} color={colors.danger} />}
+                delay={40}
+              />
+              <StatisticCard
+                label="Done"
                 value={lobby.finishedCount}
                 tone="success"
                 icon={<CheckCircle2 size={18} color={colors.success} />}
-                delay={40}
+                delay={80}
               />
+            </View>
+            <View style={styles.statsRow}>
               <StatisticCard
                 label="Violations"
                 value={lobby.violationsDetected}
                 tone="warning"
                 icon={<ShieldAlert size={18} color={colors.danger} />}
-                delay={80}
               />
             </View>
 
             <Text style={styles.section}>Connected Students</Text>
             <Text style={styles.sectionHint}>
-              {lobby.connectedCount} of {lobby.registeredCount} registered · tap a student for details
+              {lobby.connectedCount} of {lobby.registeredCount} registered · tap a student for
+              details
             </Text>
+            <Button
+              title={
+                showHistory
+                  ? 'Hide connection history'
+                  : `Connection history (${notifications.length})`
+              }
+              variant="ghost"
+              fullWidth
+              onPress={() => setShowHistory((v) => !v)}
+            />
+            {showHistory ? (
+              <Card>
+                <Text style={styles.historyTitle}>Live connection log</Text>
+                {notifications.length === 0 ? (
+                  <Text style={styles.historyEmpty}>No connection events yet.</Text>
+                ) : (
+                  notifications.slice(0, 12).map((n) => (
+                    <View key={n.id} style={styles.historyRow}>
+                      <Text
+                        style={[
+                          styles.historyKind,
+                          n.kind === 'disconnect' ? styles.historyDisconnect : null,
+                        ]}
+                      >
+                        {n.kind === 'connect' ? 'Connected' : 'Left'}
+                      </Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.historyBody}>{n.body}</Text>
+                        <Text style={styles.historyTime}>{formatTime(n.at)}</Text>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </Card>
+            ) : null}
           </View>
         }
         renderItem={({ item, index }) => (
           <LobbyStudentCard
             student={item}
             delay={Math.min(index * 40, 200)}
-            onPress={() => setSelected(item)}
+            onPress={() => {
+              setReconnectCode(null);
+              setReconnectExpiresAt(null);
+              setSelected(item);
+            }}
           />
         )}
         ListEmptyComponent={
@@ -560,17 +704,39 @@ export default function ProctorLobbyScreen() {
         visible={Boolean(selected)}
         animationType="slide"
         transparent
-        onRequestClose={() => setSelected(null)}
+        onRequestClose={() => {
+          setSelected(null);
+          setReconnectCode(null);
+          setReconnectExpiresAt(null);
+        }}
       >
         <View style={styles.detailOverlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setSelected(null)} />
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => {
+              setSelected(null);
+              setReconnectCode(null);
+              setReconnectExpiresAt(null);
+            }}
+          />
           {selected ? (
             <View style={styles.detailSheet}>
               <Text style={styles.detailTitle}>{selected.fullName}</Text>
               <StatusChip status={selected.status} />
               <DetailRow label="Gmail" value={selected.email} />
               <DetailRow label="Desired Program" value={selected.programName} />
-              <DetailRow label="Current Status" value={selected.status.replace('_', ' ')} />
+              <DetailRow
+                label="Current Status"
+                value={
+                  selected.status === 'taking_exam'
+                    ? 'Taking'
+                    : selected.status === 'disconnected'
+                      ? 'Disconnected'
+                      : selected.status === 'finished'
+                        ? 'Done'
+                        : selected.status.replace('_', ' ')
+                }
+              />
               <DetailRow label="Number of Violations" value={String(selected.violationCount)} />
               <DetailRow label="Time Connected" value={formatTime(selected.joinedAt)} />
               <DetailRow label="Time Started" value={formatTime(selected.startedAt)} />
@@ -579,7 +745,44 @@ export default function ProctorLobbyScreen() {
                 <DetailRow label="Termination" value={selected.terminationReason.replace('_', ' ')} />
               ) : null}
 
+              {reconnectCode && selected.status === 'disconnected' ? (
+                <View style={styles.reconnectBox}>
+                  <Text style={styles.reconnectLabel}>Reconnect code for student</Text>
+                  <Text style={styles.reconnectCode}>{reconnectCode}</Text>
+                  {reconnectExpiresAt ? (
+                    <Text style={styles.reconnectHint}>
+                      Expires {formatTime(reconnectExpiresAt)} · tell the student this code
+                    </Text>
+                  ) : (
+                    <Text style={styles.reconnectHint}>Tell the student this code</Text>
+                  )}
+                </View>
+              ) : null}
+
               <View style={styles.detailActions}>
+                {selected.status === 'disconnected' ? (
+                  <Button
+                    title={reconnectCode ? 'Issue new reconnect code' : 'Allow reconnect'}
+                    fullWidth
+                    loading={busy}
+                    onPress={async () => {
+                      setBusy(true);
+                      try {
+                        const result = await LobbyRepository.allowStudentReconnect(selected.id);
+                        setReconnectCode(result.reconnectCode);
+                        setReconnectExpiresAt(result.expiresAt);
+                        await refresh();
+                      } catch (error) {
+                        Alert.alert(
+                          'Reconnect failed',
+                          error instanceof Error ? error.message : 'Unable to issue code.',
+                        );
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  />
+                ) : null}
                 {selected.status === 'warning' ? (
                   <Button
                     title="Continue Exam"
@@ -591,10 +794,13 @@ export default function ProctorLobbyScreen() {
                       await refresh();
                       setBusy(false);
                       setSelected(null);
+                      setReconnectCode(null);
                     }}
                   />
                 ) : null}
-                {selected.status === 'warning' || selected.status === 'taking_exam' ? (
+                {selected.status === 'warning' ||
+                selected.status === 'taking_exam' ||
+                selected.status === 'disconnected' ? (
                   <Button
                     title="Terminate Examination"
                     variant="danger"
@@ -606,10 +812,20 @@ export default function ProctorLobbyScreen() {
                       await refresh();
                       setBusy(false);
                       setSelected(null);
+                      setReconnectCode(null);
                     }}
                   />
                 ) : null}
-                <Button title="Close" variant="outline" fullWidth onPress={() => setSelected(null)} />
+                <Button
+                  title="Close"
+                  variant="outline"
+                  fullWidth
+                  onPress={() => {
+                    setSelected(null);
+                    setReconnectCode(null);
+                    setReconnectExpiresAt(null);
+                  }}
+                />
               </View>
             </View>
           ) : null}
@@ -686,6 +902,30 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   sectionHint: { fontSize: 13, color: colors.inkSecondary, fontWeight: '500', marginTop: -6 },
+  historyTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: colors.ink,
+    marginBottom: 8,
+  },
+  historyEmpty: { fontSize: 13, color: colors.inkMuted, fontWeight: '500' },
+  historyRow: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  historyKind: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.success,
+    width: 72,
+    marginTop: 2,
+  },
+  historyDisconnect: { color: colors.danger },
+  historyBody: { fontSize: 13, color: colors.ink, fontWeight: '600', lineHeight: 18 },
+  historyTime: { fontSize: 11, color: colors.inkMuted, marginTop: 2, fontWeight: '500' },
   empty: {
     textAlign: 'center',
     color: colors.inkMuted,
@@ -739,6 +979,33 @@ const styles = StyleSheet.create({
     flex: 1.4,
     textAlign: 'right',
     textTransform: 'capitalize',
+  },
+  reconnectBox: {
+    marginTop: 8,
+    padding: 16,
+    borderRadius: 14,
+    backgroundColor: '#F0D9DC',
+    alignItems: 'center',
+    gap: 6,
+  },
+  reconnectLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.inkMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  reconnectCode: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: colors.primary,
+    letterSpacing: 4,
+  },
+  reconnectHint: {
+    fontSize: 12,
+    color: colors.inkSecondary,
+    fontWeight: '500',
+    textAlign: 'center',
   },
   detailActions: { gap: 10, marginTop: 8 },
 });

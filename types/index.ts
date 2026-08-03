@@ -10,6 +10,7 @@ export type LobbyStudentStatus =
   | 'connected'
   | 'waiting'
   | 'taking_exam'
+  | 'disconnected'
   | 'finished'
   | 'warning'
   | 'terminated';
@@ -132,6 +133,7 @@ export interface LobbyStudent {
   lastActivityAt: string;
   violationCount: number;
   terminationReason: ExamTerminationReason | null;
+  reconnectAllowed?: boolean;
 }
 
 export interface LobbySnapshot {
@@ -145,6 +147,7 @@ export interface LobbySnapshot {
   notYetConnectedCount: number;
   waitingCount: number;
   takingCount: number;
+  disconnectedCount?: number;
   finishedCount: number;
   warningCount: number;
   terminatedCount: number;

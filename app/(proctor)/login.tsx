@@ -22,7 +22,15 @@ import {
 import { AuthRepository } from '@/repositories';
 import { useProctorStore } from '@/stores';
 import { MOCK_PROCTOR } from '@/constants';
-import { clearLanApiUrl, getApiBaseUrl, hydrateApiBaseUrl, setLanApiUrl } from '@/services/api';
+import {
+  clearLanApiUrl,
+  getApiBaseUrl,
+  getAuthApiBaseUrl,
+  getCloudApiBaseUrl,
+  hasLanApiOverride,
+  hydrateApiBaseUrl,
+  setLanApiUrl,
+} from '@/services/api';
 import {
   discoverLanExamServers,
   getWifiHint,
@@ -40,6 +48,7 @@ export default function ProctorLoginScreen() {
   const [scanProgress, setScanProgress] = useState('');
   const [wifiHint, setWifiHint] = useState('');
   const [servers, setServers] = useState<DiscoveredServer[]>([]);
+  const [examServerActive, setExamServerActive] = useState(false);
 
   const {
     control,
@@ -51,14 +60,22 @@ export default function ProctorLoginScreen() {
   });
 
   useEffect(() => {
-    void hydrateApiBaseUrl().then((url) => setLanUrl(url));
-    void getWifiHint().then(setWifiHint);
-    void AuthRepository.getSession().then((session) => {
+    void (async () => {
+      await hydrateApiBaseUrl();
+      // Stale campus LAN IP (from a previous exam day) blocks login off Wi‑Fi.
+      // Clear it when cloud is configured; set again via Find servers on exam day.
+      if (hasLanApiOverride() && getCloudApiBaseUrl()) {
+        await clearLanApiUrl();
+      }
+      setLanUrl(getApiBaseUrl());
+      setExamServerActive(hasLanApiOverride());
+      setWifiHint(await getWifiHint());
+      const session = await AuthRepository.getSession();
       if (session) {
         setProfile(session);
         router.replace('/(proctor)/schedules');
       }
-    });
+    })();
   }, [setProfile, router]);
 
   const saveLanServer = async (url = lanUrl) => {
@@ -67,12 +84,24 @@ export default function ProctorLoginScreen() {
     try {
       const saved = await setLanApiUrl(url);
       setLanUrl(saved);
-      Alert.alert('Exam server saved', `Phones will use:\n${saved}`);
+      setExamServerActive(true);
+      Alert.alert(
+        'Exam server saved',
+        `Campus exam traffic will use:\n${saved}\n\nSign in still uses the cloud/internet API.`,
+      );
     } catch (error) {
       setFormError(error instanceof Error ? error.message : 'Invalid LAN URL');
     } finally {
       setSavingUrl(false);
     }
+  };
+
+  const resetExamServer = async () => {
+    await clearLanApiUrl();
+    const url = getApiBaseUrl();
+    setLanUrl(url);
+    setExamServerActive(false);
+    setServers([]);
   };
 
   const findServers = async () => {
@@ -89,7 +118,7 @@ export default function ProctorLoginScreen() {
       if (!found.length) {
         Alert.alert(
           'No exam server found',
-          'Make sure the room PC is on the same Wi‑Fi and running:\nphp artisan serve --host=0.0.0.0 --port=8000\n\nOr use Offline pack (no room PC) from the home screen.',
+          'Connect to campus Wi‑Fi first, and make sure the exam PC is running:\nphp artisan serve --host=0.0.0.0 --port=8000\n\nYou can still Sign in without this — Find servers is only for exam day.',
         );
       }
     } catch (error) {
@@ -102,14 +131,7 @@ export default function ProctorLoginScreen() {
 
   const onSubmit = handleSubmit(async (values) => {
     setFormError(null);
-    try {
-      if (lanUrl.trim()) {
-        await setLanApiUrl(lanUrl);
-      }
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : 'Invalid LAN URL');
-      return;
-    }
+    // Do NOT force LAN URL on login — Wi‑Fi/exam server is optional until exam day.
     const result = await AuthRepository.login(values.username, values.password);
     if (!result.success || !result.profile) {
       setFormError(result.message ?? 'Login failed');
@@ -126,7 +148,7 @@ export default function ProctorLoginScreen() {
     >
       <Header
         title="Proctor Login"
-        subtitle="Find exam server on Wi‑Fi"
+        subtitle="Sign in with internet — Wi‑Fi only for exam day"
         onBack={() => router.replace('/')}
       />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -136,11 +158,75 @@ export default function ProctorLoginScreen() {
           </View>
           <Text style={styles.title}>Sign in</Text>
           <Text style={styles.sub}>
-            You do not pick Wi‑Fi names here — join the exam Wi‑Fi in phone Settings,
-            then tap Find servers to list PCs running the exam API.
+            Login uses the cloud/internet API. You do not need campus Wi‑Fi to sign
+            in. Use Find servers below only on exam day for the local exam host.
+          </Text>
+
+          <Controller
+            control={control}
+            name="username"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <Input
+                label="Email"
+                placeholder="proctor@example.com"
+                autoCapitalize="none"
+                keyboardType="email-address"
+                value={value}
+                onChangeText={onChange}
+                onBlur={onBlur}
+                error={errors.username?.message}
+              />
+            )}
+          />
+          <View style={{ height: 12 }} />
+          <Controller
+            control={control}
+            name="password"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <Input
+                label="Password"
+                placeholder="••••••••"
+                secureTextEntry
+                value={value}
+                onChangeText={onChange}
+                onBlur={onBlur}
+                error={errors.password?.message}
+                onSubmitEditing={onSubmit}
+              />
+            )}
+          />
+
+          {formError ? <Text style={styles.error}>{formError}</Text> : null}
+
+          <Button
+            title="Login"
+            size="lg"
+            fullWidth
+            loading={isSubmitting}
+            onPress={onSubmit}
+            style={{ marginTop: 16 }}
+          />
+
+          <Text style={styles.hint}>
+            Demo: {MOCK_PROCTOR.username} / {MOCK_PROCTOR.password}
+            {'\n'}
+            Login server: {getAuthApiBaseUrl()}
+          </Text>
+        </Card>
+
+        <Card style={{ marginTop: 14 }}>
+          <Text style={styles.sectionTitle}>Exam server (optional · exam day)</Text>
+          <Text style={styles.sub}>
+            On campus, join the exam Wi‑Fi in phone Settings, then find the PC
+            running the exam API. Not required to log in.
           </Text>
 
           <Text style={styles.wifiHint}>{wifiHint || 'Checking Wi‑Fi…'}</Text>
+          {examServerActive ? (
+            <Text style={styles.examActive}>
+              Campus exam server override is ON. Tap Reset to use cloud only.
+            </Text>
+          ) : null}
 
           <Button
             title={scanning ? 'Scanning this Wi‑Fi…' : 'Find servers on this Wi‑Fi'}
@@ -198,11 +284,7 @@ export default function ProctorLoginScreen() {
             <Button
               title="Reset"
               variant="ghost"
-              onPress={async () => {
-                await clearLanApiUrl();
-                const url = getApiBaseUrl();
-                setLanUrl(url);
-              }}
+              onPress={() => void resetExamServer()}
             />
           </View>
 
@@ -213,56 +295,7 @@ export default function ProctorLoginScreen() {
             onPress={() => router.push('/offline-prepare')}
           />
 
-          <Controller
-            control={control}
-            name="username"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <Input
-                label="Email"
-                placeholder="proctor@example.com"
-                autoCapitalize="none"
-                keyboardType="email-address"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.username?.message}
-              />
-            )}
-          />
-          <View style={{ height: 12 }} />
-          <Controller
-            control={control}
-            name="password"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <Input
-                label="Password"
-                placeholder="••••••••"
-                secureTextEntry
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.password?.message}
-                onSubmitEditing={onSubmit}
-              />
-            )}
-          />
-
-          {formError ? <Text style={styles.error}>{formError}</Text> : null}
-
-          <Button
-            title="Login"
-            size="lg"
-            fullWidth
-            loading={isSubmitting}
-            onPress={onSubmit}
-            style={{ marginTop: 16 }}
-          />
-
-          <Text style={styles.hint}>
-            Demo: {MOCK_PROCTOR.username} / {MOCK_PROCTOR.password}
-            {'\n'}
-            Current: {getApiBaseUrl()}
-          </Text>
+          <Text style={styles.hint}>Exam traffic: {getApiBaseUrl()}</Text>
         </Card>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -282,12 +315,25 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   title: { fontSize: 22, fontWeight: '700', color: colors.ink, marginBottom: 6 },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: colors.ink,
+    marginBottom: 6,
+  },
   sub: { fontSize: 14, lineHeight: 21, color: colors.inkSecondary, marginBottom: 12 },
   wifiHint: {
     fontSize: 12,
     color: colors.inkMuted,
     marginBottom: 10,
     fontWeight: '600',
+    lineHeight: 18,
+  },
+  examActive: {
+    fontSize: 12,
+    color: colors.warning,
+    fontWeight: '700',
+    marginBottom: 10,
     lineHeight: 18,
   },
   scanRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },

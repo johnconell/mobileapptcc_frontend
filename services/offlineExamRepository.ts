@@ -183,6 +183,7 @@ export const OfflineExamRepository = {
     if (!pack) return [];
     const sid = Number(String(scheduleId).replace(/^offline-/, ''));
     if (!sid) return [];
+    const claims = new Set(await OfflineStore.getLocalClaims());
     const regs = pack.registrations.filter(
       (r) => Number(r.examination_schedule_id) === sid,
     );
@@ -190,8 +191,10 @@ export const OfflineExamRepository = {
       const a = pack.applicants.find((x) => Number(x.id) === Number(r.applicant_id));
       const name = (a?.name || '').trim() || 'Student';
       const parts = name.trim().split(/\s+/);
+      const id = String(a?.id ?? r.applicant_id);
+      const claimed = claims.has(id);
       return {
-        id: String(a?.id ?? r.applicant_id),
+        id,
         studentId: a?.applicant_code || String(r.applicant_id),
         firstName: parts[0] || name,
         middleName: '',
@@ -209,8 +212,9 @@ export const OfflineExamRepository = {
           .join('')
           .toUpperCase(),
         registration_id: r.id,
-        selectable: true,
-        selectionStatus: 'available' as const,
+        selectable: !claimed,
+        selectionStatus: claimed ? ('ready' as const) : ('available' as const),
+        statusLabel: claimed ? 'Ready' : 'Not scanned',
       };
     });
   },

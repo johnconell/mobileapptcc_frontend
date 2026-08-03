@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
-  Pressable,
   ScrollView,
   Text,
   View,
@@ -18,12 +17,16 @@ import {
   QuestionCard,
 } from '@/components/ui';
 import { ExamSecurityOverlay } from '@/features/exam/ExamSecurityOverlay';
+import { ExamWifiDisconnectOverlay } from '@/features/exam/ExamWifiDisconnectOverlay';
 import { useExamStore, useStudentStore } from '@/stores';
 import { useExamTimer } from '@/hooks/useExamTimer';
 import { useExamSecurity } from '@/hooks/useExamSecurity';
+import { useWifiExamGate } from '@/hooks/useWifiExamGate';
 import { useLobby } from '@/hooks/useRepositories';
 import { LobbyRepository } from '@/repositories';
 import { QuestionRepository } from '@/repositories/QuestionRepository';
+import { ExamProgressStore } from '@/services/examProgressStore';
+import { OfflineStore } from '@/services/offlineStore';
 import { colors } from '@/theme';
 import type { ChoiceKey } from '@/types';
 
@@ -33,11 +36,17 @@ export default function ExamScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const [incompleteOpen, setIncompleteOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [reconnectLoading, setReconnectLoading] = useState(false);
+  const [reconnectError, setReconnectError] = useState<string | null>(null);
+  const [offlineMode, setOfflineMode] = useState(false);
+  const restoredRef = useRef(false);
 
   const questions = useExamStore((s) => s.questions);
   const answers = useExamStore((s) => s.answers);
   const autoSavedAt = useExamStore((s) => s.autoSavedAt);
   const sessionId = useExamStore((s) => s.sessionId);
+  const remainingSecondsStore = useExamStore((s) => s.remainingSeconds);
+  const startedAt = useExamStore((s) => s.startedAt);
   const selectAnswer = useExamStore((s) => s.selectAnswer);
   const markAutoSaved = useExamStore((s) => s.markAutoSaved);
   const unansweredCount = useExamStore((s) => s.unansweredCount);
@@ -45,6 +54,7 @@ export default function ExamScreen() {
   const answeredCount = useExamStore((s) => s.answeredCount);
   const setPaused = useExamStore((s) => s.setPaused);
   const markSubmitted = useExamStore((s) => s.markSubmitted);
+  const restoreProgress = useExamStore((s) => s.restoreProgress);
 
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
@@ -52,9 +62,22 @@ export default function ExamScreen() {
 
   const securityEnabled = questions.length > 0;
 
+  useEffect(() => {
+    void OfflineStore.isOfflineMode().then(setOfflineMode);
+  }, []);
+
+  const onWifiDisconnect = useCallback(() => {
+    void LobbyRepository.reportWifiDisconnect();
+  }, []);
+
+  const { wifiLocked, unlockAfterReconnect } = useWifiExamGate({
+    enabled: securityEnabled && !offlineMode,
+    onDisconnect: onWifiDisconnect,
+  });
+
   // LAN autosave: answers live on the proctor host so End Exam can grade them.
   useEffect(() => {
-    if (questions.length === 0) return;
+    if (questions.length === 0 || wifiLocked) return;
     const timer = setTimeout(() => {
       const payload = Object.fromEntries(
         Object.values(answers).map((a) => [a.questionId, a.selectedAnswer]),
@@ -66,11 +89,72 @@ export default function ExamScreen() {
       });
     }, 1200);
     return () => clearTimeout(timer);
-  }, [answers, questions.length, markAutoSaved]);
+  }, [answers, questions.length, markAutoSaved, wifiLocked]);
+
+  // Persist local checkpoint for power-off / restart recovery.
+  useEffect(() => {
+    if (!questions.length || !sessionId || !verifiedStudent?.id) return;
+    void ExamProgressStore.save({
+      sessionId,
+      studentId: verifiedStudent.id,
+      answers,
+      remainingSeconds: remainingSecondsStore,
+      startedAt,
+    });
+  }, [
+    answers,
+    remainingSecondsStore,
+    sessionId,
+    verifiedStudent?.id,
+    startedAt,
+    questions.length,
+  ]);
+
+  // Restore checkpoint once after questions load.
+  useEffect(() => {
+    if (
+      restoredRef.current ||
+      !questions.length ||
+      !sessionId ||
+      !verifiedStudent?.id
+    ) {
+      return;
+    }
+    restoredRef.current = true;
+    void ExamProgressStore.load().then((checkpoint) => {
+      if (!checkpoint) return;
+      if (checkpoint.sessionId !== sessionId) return;
+      if (checkpoint.studentId !== verifiedStudent.id) return;
+      restoreProgress({
+        answers: checkpoint.answers,
+        remainingSeconds: checkpoint.remainingSeconds,
+        startedAt: checkpoint.startedAt,
+      });
+      markAutoSaved(checkpoint.savedAt);
+    });
+  }, [
+    questions.length,
+    sessionId,
+    verifiedStudent?.id,
+    restoreProgress,
+    markAutoSaved,
+  ]);
+
+  // Heartbeat while unlocked on campus Wi‑Fi.
+  useEffect(() => {
+    if (!securityEnabled || offlineMode || wifiLocked) return;
+    const beat = () => {
+      void LobbyRepository.sendHeartbeat();
+    };
+    beat();
+    const id = setInterval(beat, 5000);
+    return () => clearInterval(id);
+  }, [securityEnabled, offlineMode, wifiLocked]);
 
   const goSubmit = useCallback(
     (reason: 'submitted' | 'policy_violation' | 'time_expired' = 'submitted') => {
       markSubmitted(reason);
+      void ExamProgressStore.clear();
       router.replace('/(student)/submitting');
     },
     [markSubmitted, router],
@@ -84,16 +168,17 @@ export default function ExamScreen() {
   }, [verifiedStudent?.id, goSubmit]);
 
   const requestSubmit = useCallback(() => {
+    if (wifiLocked) return;
     const missing = unansweredNumbers();
     if (missing.length > 0) {
       setIncompleteOpen(true);
       return;
     }
     setConfirmOpen(true);
-  }, [unansweredNumbers]);
+  }, [unansweredNumbers, wifiLocked]);
 
   const {
-    paused,
+    paused: securityPaused,
     warningVisible,
     warningMessage,
     violationCount,
@@ -101,7 +186,7 @@ export default function ExamScreen() {
     acknowledgeWarning,
     requestSubmitFromWarning,
   } = useExamSecurity({
-    enabled: securityEnabled,
+    enabled: securityEnabled && !wifiLocked,
     sessionId,
     studentId: verifiedStudent?.id ?? null,
     studentName: verifiedStudent?.fullName ?? null,
@@ -109,9 +194,33 @@ export default function ExamScreen() {
     onRequestSubmit: requestSubmit,
   });
 
+  const paused = securityPaused || wifiLocked;
+
   useEffect(() => {
     setPaused(paused);
   }, [paused, setPaused]);
+
+  const handleReconnect = useCallback(
+    async (code: string) => {
+      setReconnectLoading(true);
+      setReconnectError(null);
+      const result = await LobbyRepository.reconnectWithCode(code);
+      if (!result.ok) {
+        setReconnectError(result.message || 'Invalid reconnect code.');
+        setReconnectLoading(false);
+        return;
+      }
+      const unlocked = await unlockAfterReconnect();
+      if (!unlocked) {
+        setReconnectError('Turn Wi‑Fi back on, then enter the reconnect code.');
+        setReconnectLoading(false);
+        return;
+      }
+      void LobbyRepository.sendHeartbeat();
+      setReconnectLoading(false);
+    },
+    [unlockAfterReconnect],
+  );
 
   useEffect(() => {
     navigation.setOptions({
@@ -200,7 +309,8 @@ export default function ExamScreen() {
       >
         {questions.map((question, index) => {
           const prevCategory = index > 0 ? questions[index - 1]?.category : null;
-          const showCategory = Boolean(question.category) && question.category !== prevCategory;
+          const showCategory =
+            Boolean(question.category) && question.category !== prevCategory;
           return (
             <View key={question.id} style={styles.questionBlock}>
               {showCategory ? (
@@ -275,12 +385,19 @@ export default function ExamScreen() {
       />
 
       <ExamSecurityOverlay
-        visible={warningVisible}
+        visible={warningVisible && !wifiLocked}
         violationCount={violationCount}
         maxViolations={maxViolations}
         message={warningMessage}
         onContinue={acknowledgeWarning}
         onSubmit={requestSubmitFromWarning}
+      />
+
+      <ExamWifiDisconnectOverlay
+        visible={wifiLocked}
+        loading={reconnectLoading}
+        error={reconnectError}
+        onSubmitCode={handleReconnect}
       />
     </View>
   );
@@ -333,5 +450,10 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   modalTitle: { fontSize: 18, fontWeight: '800', color: colors.ink },
-  modalBody: { fontSize: 14, lineHeight: 21, color: colors.inkSecondary, fontWeight: '500' },
+  modalBody: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.inkSecondary,
+    fontWeight: '500',
+  },
 });

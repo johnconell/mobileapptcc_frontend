@@ -34,6 +34,7 @@ export default function StudentConfirmationScreen() {
   const router = useRouter();
   const selectedStudent = useStudentStore((s) => s.selectedStudent);
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
+  const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const setVerifiedStudent = useStudentStore((s) => s.setVerifiedStudent);
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
   const [joinError, setJoinError] = React.useState<string | null>(null);
@@ -48,14 +49,18 @@ export default function StudentConfirmationScreen() {
   });
 
   React.useEffect(() => {
+    if (verifiedStudent && scannedSessionId) {
+      router.replace('/(student)/lobby');
+      return;
+    }
     if (!selectedStudent || !scannedSessionId) {
       router.replace('/(student)/verify');
     }
-  }, [selectedStudent, scannedSessionId, router]);
+  }, [selectedStudent, scannedSessionId, verifiedStudent, router]);
 
   const goBack = React.useCallback(() => {
     if (selectedStudent?.id) {
-      void StudentRepository.releaseClaim(selectedStudent.id);
+      void StudentRepository.releaseClaim(selectedStudent.id).catch(() => undefined);
     }
     router.back();
   }, [selectedStudent?.id, router]);

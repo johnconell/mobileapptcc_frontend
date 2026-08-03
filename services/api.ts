@@ -3,7 +3,7 @@ import { appStorage } from '@/services/storage';
 
 const DEFAULT_API_URL = 'http://127.0.0.1:8000/api/v1';
 
-/** In-memory cache of LAN API override (Option B). */
+/** In-memory cache of LAN API override (exam-day campus server). */
 let lanApiOverride: string | null | undefined;
 
 function normalizeBase(url: string): string {
@@ -11,11 +11,9 @@ function normalizeBase(url: string): string {
 }
 
 /**
- * Option B:
- * - EXPO_PUBLIC_API_URL = default LAN exam server
- * - Optional runtime override via setLanApiUrl (proctor sets room PC IP)
- * - EXPO_PUBLIC_CLOUD_API_URL is documentation-only on the phone; cloud sync
- *   is performed by the LAN Laravel host (ADMIN_SYNC_*), not by the app.
+ * Exam / lobby traffic:
+ * - EXPO_PUBLIC_API_URL = default API (prefer cloud so login works without campus Wi‑Fi)
+ * - Optional runtime LAN override via setLanApiUrl (proctor Find servers on exam day)
  */
 export function getApiBaseUrl(): string {
   if (lanApiOverride) {
@@ -25,9 +23,22 @@ export function getApiBaseUrl(): string {
   return normalizeBase(fromEnv || DEFAULT_API_URL);
 }
 
+/** Cloud / internet API for auth + pack download (does not require campus exam Wi‑Fi). */
 export function getCloudApiBaseUrl(): string | null {
   const cloud = process.env.EXPO_PUBLIC_CLOUD_API_URL?.trim();
   return cloud ? normalizeBase(cloud) : null;
+}
+
+/**
+ * Prefer cloud for sign-in so proctors can log in on mobile data / home Wi‑Fi.
+ * If a campus LAN exam server override is active, auth uses that host instead
+ * (same Sanctum token as lobby/exam traffic).
+ */
+export function getAuthApiBaseUrl(): string {
+  if (lanApiOverride) {
+    return getApiBaseUrl();
+  }
+  return getCloudApiBaseUrl() || getApiBaseUrl();
 }
 
 /** Call once on app start so SecureStore override is applied. */
@@ -52,6 +63,10 @@ export async function clearLanApiUrl(): Promise<void> {
   lanApiOverride = null;
 }
 
+export function hasLanApiOverride(): boolean {
+  return Boolean(lanApiOverride);
+}
+
 export class ApiError extends Error {
   status: number;
   payload: unknown;
@@ -70,6 +85,8 @@ type RequestOptions = {
   token?: string | null;
   auth?: boolean;
   headers?: Record<string, string>;
+  /** Override base URL (e.g. cloud for login). */
+  baseUrl?: string;
 };
 
 async function readToken(): Promise<string | null> {
@@ -80,7 +97,8 @@ export async function apiRequest<T = unknown>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const url = `${getApiBaseUrl()}${path.startsWith('/') ? path : `/${path}`}`;
+  const base = normalizeBase(options.baseUrl || getApiBaseUrl());
+  const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...(options.headers ?? {}),
@@ -108,7 +126,9 @@ export async function apiRequest<T = unknown>(
     });
   } catch {
     throw new ApiError(
-      `Network error. Cannot reach exam server at ${getApiBaseUrl()}. Check Wi‑Fi and LAN IP.`,
+      `Network error. Cannot reach server at ${base}. Check your connection${
+        options.baseUrl || !lanApiOverride ? '' : ' / campus Wi‑Fi and LAN IP'
+      }.`,
       0,
     );
   }

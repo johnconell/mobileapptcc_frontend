@@ -15,6 +15,7 @@ const statusToneMap: Record<string, ChipTone> = {
   connected: 'info',
   waiting: 'warning',
   taking_exam: 'primary',
+  disconnected: 'danger',
   finished: 'success',
   warning: 'danger',
   terminated: 'danger',
