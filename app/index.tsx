@@ -1,30 +1,78 @@
 import React, { useState } from 'react';
-import { Modal, Pressable, Text, View, StyleSheet } from 'react-native';
+import { Alert, Modal, Pressable, Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { Keyboard, QrCode, Shield } from 'lucide-react-native';
 import { APP_NAME, SCHOOL_NAME } from '@/constants';
 import { colors, shadows } from '@/theme';
-import { Card, FloatingButton } from '@/components/ui';
+import { Card, FloatingButton, Loader } from '@/components/ui';
 import { SchoolLogo } from '@/features/student/SchoolLogo';
+import { ensureExamPackCached } from '@/services/ensureExamPack';
+import { getCloudApiBaseUrl, getApiBaseUrl } from '@/services/api';
+import { studentPackDownloadFailureMessage } from '@/services/apiReachability';
+import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [joinOpen, setJoinOpen] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+
+  const startTakeExam = async () => {
+    setPreparing(true);
+    const wifi = await assertCampusWifiForJoin({ requireServer: false });
+    if (!wifi.ok) {
+      setPreparing(false);
+      Alert.alert(
+        wifi.wifiConnected === false ? 'Campus Wi‑Fi required' : 'Cannot reach exam computer',
+        wifi.message ??
+          'Connect to the campus exam Wi‑Fi before joining. Mobile data alone is not allowed.',
+      );
+      return;
+    }
+
+    // Live QR/code join also needs the exam Hub on this Wi‑Fi.
+    const hub = await assertCampusWifiForJoin({ requireServer: true });
+    if (!hub.ok) {
+      setPreparing(false);
+      Alert.alert(
+        hub.wifiConnected && hub.serverReachable === false
+          ? 'Wi‑Fi / LAN does not match'
+          : 'Campus Wi‑Fi required',
+        hub.message ??
+          'Phone and proctor must share the same Wi‑Fi so this phone can reach the exam server.',
+      );
+      return;
+    }
+
+    const result = await ensureExamPackCached({ force: false });
+    setPreparing(false);
+    if (!result.ok) {
+      setPreparing(true);
+      const forced = await ensureExamPackCached({ force: true });
+      setPreparing(false);
+      if (!forced.ok) {
+        const apiBase = getCloudApiBaseUrl() || getApiBaseUrl();
+        Alert.alert(
+          'Exam data needed',
+          studentPackDownloadFailureMessage(apiBase, forced.message),
+        );
+        return;
+      }
+    }
+    setJoinOpen(true);
+  };
+
+  if (preparing) {
+    return (
+      <Loader fullscreen label="Please wait — preparing exam content on this phone…" />
+    );
+  }
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
       <View style={styles.topBar}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Download offline exam pack"
-          onPress={() => router.push('/offline-prepare')}
-          style={styles.proctorBtn}
-        >
-          <Text style={styles.proctorText}>Offline pack</Text>
-        </Pressable>
         <View style={{ flex: 1 }} />
         <Pressable
           accessibilityRole="button"
@@ -49,8 +97,9 @@ export default function HomeScreen() {
           <Card>
             <Text style={styles.cardTitle}>Ready to begin?</Text>
             <Text style={styles.cardBody}>
-              Download the exam pack on school Wi‑Fi first (no room PC needed). Then take the
-              exam offline — no load required. Sync results when you are online again.
+              Connect to the campus exam Wi‑Fi first. Then tap Take Examination to
+              update this phone’s exam cache and join by QR or code. Mobile data
+              alone is not allowed.
             </Text>
           </Card>
         </Animated.View>
@@ -60,7 +109,7 @@ export default function HomeScreen() {
         <FloatingButton
           label="Take Examination"
           icon={<QrCode size={20} color={colors.white} />}
-          onPress={() => setJoinOpen(true)}
+          onPress={() => void startTakeExam()}
           style={styles.fab}
         />
       </View>

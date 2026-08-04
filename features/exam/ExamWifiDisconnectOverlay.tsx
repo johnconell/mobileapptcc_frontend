@@ -29,17 +29,17 @@ export function ExamWifiDisconnectOverlay({
           </View>
           <Text style={styles.title}>Disconnected from Wi‑Fi</Text>
           <Text style={styles.message}>
-            Your examination is locked because Wi‑Fi was turned off or lost. Ask
-            your proctor for a reconnect code. Do not use mobile data to search
-            for answers.
+            Your examination is locked. Turn campus Wi‑Fi back on, then ask your
+            proctor for the 6-digit reconnect code shown on their lobby screen.
+            Do not enter the examination / QR code.
           </Text>
           <Input
-            label="Reconnect code"
+            label="6-digit reconnect code"
             value={code}
-            onChangeText={setCode}
+            onChangeText={(text) => setCode(text.replace(/\D/g, '').slice(0, 6))}
             keyboardType="number-pad"
             maxLength={6}
-            placeholder="Enter 6-digit code"
+            placeholder="e.g. 482917"
             editable={!loading}
             autoFocus
           />
@@ -49,7 +49,7 @@ export function ExamWifiDisconnectOverlay({
             size="lg"
             fullWidth
             loading={loading}
-            disabled={code.trim().length < 4 || loading}
+            disabled={code.trim().length !== 6 || loading}
             onPress={() => void onSubmitCode(code.trim())}
           />
           <Text style={styles.hint}>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import * as Network from 'expo-network';
+import { isWifiConnected } from '@/services/campusWifiGate';
 
 type WifiGateOptions = {
   enabled: boolean;
@@ -18,17 +18,9 @@ export function useWifiExamGate({ enabled, onDisconnect }: WifiGateOptions) {
   onDisconnectRef.current = onDisconnect;
 
   const checkWifi = useCallback(async (): Promise<boolean> => {
-    try {
-      const state = await Network.getNetworkStateAsync();
-      const ok =
-        Boolean(state.isConnected) &&
-        state.type === Network.NetworkStateType.WIFI;
-      setWifiConnected(ok);
-      return ok;
-    } catch {
-      setWifiConnected(false);
-      return false;
-    }
+    const ok = await isWifiConnected();
+    setWifiConnected(ok);
+    return ok;
   }, []);
 
   const unlockAfterReconnect = useCallback(async () => {

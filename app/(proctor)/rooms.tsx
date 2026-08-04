@@ -1,7 +1,7 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { FlatList, Pressable, Text, View, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ChevronRight, DoorOpen, Users, UserRound } from 'lucide-react-native';
+import { CheckCircle2, ChevronRight, DoorOpen, Users, UserRound } from 'lucide-react-native';
 import { Card, EmptyState, Header, Loader, StatusChip } from '@/components/ui';
 import { useRooms, useSessions } from '@/hooks/useRepositories';
 import { AuthRepository } from '@/repositories';
@@ -54,6 +54,13 @@ export default function RoomsScreen() {
     sessionsQuery.data?.find((item) => item.id === sessionId) ??
     null;
 
+  const rooms = roomsQuery.data ?? [];
+  const batchDone = useMemo(
+    () => rooms.length > 0 && rooms.every((r) => r.status === 'ended'),
+    [rooms],
+  );
+  const endedCount = rooms.filter((r) => r.status === 'ended').length;
+
   if (roomsQuery.isLoading) {
     return <Loader fullscreen label="Loading examination rooms…" />;
   }
@@ -71,14 +78,28 @@ export default function RoomsScreen() {
         }
       />
       <FlatList
-        data={roomsQuery.data ?? []}
+        data={rooms}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
-          <Text style={styles.intro}>
-            Select a room to view details. Opening a lobby is a separate step and is synced for
-            all proctors.
-          </Text>
+          <View style={styles.headerBlock}>
+            {batchDone ? (
+              <View style={styles.batchDoneBanner}>
+                <CheckCircle2 size={22} color={colors.success} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.batchDoneTitle}>Batch complete</Text>
+                  <Text style={styles.batchDoneBody}>
+                    All rooms in this session have finished the examination.
+                  </Text>
+                </View>
+              </View>
+            ) : (
+              <Text style={styles.intro}>
+                Each room has its own random letter+number code and QR. Progress:{' '}
+                {endedCount}/{rooms.length} rooms done.
+              </Text>
+            )}
+          </View>
         }
         ListEmptyComponent={<EmptyState title="No rooms found" />}
         renderItem={({ item, index }) => (
@@ -127,14 +148,19 @@ function RoomCard({
                 {room.connectedCount > 0 ? ` · ${room.connectedCount} connected` : ''}
               </Text>
             </View>
+            {room.examinationCode ? (
+              <Text style={styles.codeLine}>Code: {room.examinationCode}</Text>
+            ) : room.status === 'ended' ? (
+              <Text style={styles.hint}>Examination finished</Text>
+            ) : (
+              <Text style={styles.hint}>No code yet — open this room’s lobby</Text>
+            )}
             {room.proctorName ? (
               <View style={styles.line}>
                 <UserRound size={14} color={colors.primary} />
                 <Text style={styles.lineText}>Proctored by: {room.proctorName}</Text>
               </View>
-            ) : (
-              <Text style={styles.hint}>Tap for room details</Text>
-            )}
+            ) : null}
           </View>
           <ChevronRight size={22} color={colors.inkMuted} />
         </View>
@@ -146,7 +172,20 @@ function RoomCard({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   list: { padding: 20, gap: 12, paddingBottom: 40 },
-  intro: { fontSize: 14, color: colors.inkSecondary, marginBottom: 8, lineHeight: 21 },
+  headerBlock: { marginBottom: 4, gap: 10 },
+  intro: { fontSize: 14, color: colors.inkSecondary, lineHeight: 21 },
+  batchDoneBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: '#DCFCE7',
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+  },
+  batchDoneTitle: { fontSize: 15, fontWeight: '800', color: colors.success },
+  batchDoneBody: { fontSize: 13, color: colors.inkSecondary, fontWeight: '500', marginTop: 2 },
   card: { padding: 0, overflow: 'hidden', borderWidth: 1.5 },
   accent: { height: 5, width: '100%' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16 },
@@ -155,5 +194,11 @@ const styles = StyleSheet.create({
   roomName: { fontSize: 17, fontWeight: '700', color: colors.ink },
   line: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   lineText: { fontSize: 13, color: colors.inkSecondary, fontWeight: '500', flex: 1 },
+  codeLine: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: colors.primary,
+    letterSpacing: 1,
+  },
   hint: { fontSize: 12, color: colors.inkMuted, fontWeight: '500' },
 });

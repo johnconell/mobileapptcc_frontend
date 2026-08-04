@@ -59,6 +59,14 @@ export type OfflinePack = {
     shuffle_questions?: boolean;
     shuffle_categories?: boolean;
   };
+  /** Present only when pack downloaded with include_auth=1; stripped before disk save. */
+  proctors?: Array<{
+    id: number;
+    name: string;
+    email: string;
+    password_hash?: string | null;
+    status?: string | null;
+  }>;
 };
 
 export type OfflineQueuedResult = {

@@ -6,6 +6,9 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { KeyRound } from 'lucide-react-native';
 import { Button, Card, Header, Input } from '@/components/ui';
+import { CampusWifiBlockedCard } from '@/features/student/CampusWifiBlockedCard';
+import { useCampusWifiJoinGate } from '@/hooks/useCampusWifiJoinGate';
+import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 import { LobbyRepository } from '@/repositories';
 import { useStudentStore } from '@/stores';
 import { colors } from '@/theme';
@@ -16,7 +19,10 @@ const schema = z.object({
     .trim()
     .min(4, 'Enter the examination code')
     // Online: AB35NDD · Offline cache: OFF-12 · Legacy: ABCD-2026
-    .regex(/^(OFF-\d+|[A-Za-z0-9]{6,12}(-\d{4})?)$/i, 'Format example: AB35NDD or OFF-12'),
+    .regex(
+      /^(OFF-\d+(?:-R\d+)?|[A-Za-z0-9]{6,12}(-\d{4})?)$/i,
+      'Format example: K7M2P9QX or OFF-12-R3',
+    ),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -25,6 +31,7 @@ export default function EnterCodeScreen() {
   const router = useRouter();
   const setScannedSession = useStudentStore((s) => s.setScannedSession);
   const [error, setError] = useState<string | null>(null);
+  const wifiGate = useCampusWifiJoinGate({ requireServer: false });
 
   const {
     control,
@@ -37,6 +44,15 @@ export default function EnterCodeScreen() {
 
   const onVerify = handleSubmit(async (values) => {
     setError(null);
+    const gate = await assertCampusWifiForJoin({
+      examinationCode: values.code,
+      requireServer: true,
+    });
+    if (!gate.ok) {
+      setError(gate.message ?? 'Campus Wi‑Fi required.');
+      return;
+    }
+
     const result = await LobbyRepository.verifyExaminationCode(values.code);
     if (!result.valid || !result.session || !result.schedule) {
       setError(result.message ?? 'Invalid examination code.');
@@ -53,49 +69,65 @@ export default function EnterCodeScreen() {
     >
       <Header
         title="Enter Examination Code"
-        subtitle="Provided by your proctor"
+        subtitle="Campus exam Wi‑Fi required"
         onBack={() => router.back()}
       />
       <View style={styles.content}>
-        <Card>
-          <View style={styles.iconWrap}>
-            <KeyRound size={26} color={colors.primary} />
-          </View>
-          <Text style={styles.title}>Examination Code</Text>
-          <Text style={styles.body}>
-            Type the code from your proctor. Online lobby: AB35NDD. Offline cache mode: OFF-12
-            (schedule number).
-          </Text>
-
-          <Controller
-            control={control}
-            name="code"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <Input
-                label="Examination Code"
-                placeholder="AB35NDD"
-                autoCapitalize="characters"
-                autoCorrect={false}
-                value={value}
-                onChangeText={(text) => onChange(text.toUpperCase())}
-                onBlur={onBlur}
-                error={errors.code?.message}
-                onSubmitEditing={onVerify}
-              />
-            )}
+        {!wifiGate.ok ? (
+          <CampusWifiBlockedCard
+            title={
+              wifiGate.wifiConnected && wifiGate.serverReachable === false
+                ? 'Wi‑Fi / LAN does not match'
+                : 'Campus Wi‑Fi required'
+            }
+            message={
+              wifiGate.message ??
+              'Connect to the same Wi‑Fi as the proctor before entering the code.'
+            }
+            checking={wifiGate.checking}
+            onRetry={() => void wifiGate.refresh()}
           />
+        ) : (
+          <Card>
+            <View style={styles.iconWrap}>
+              <KeyRound size={26} color={colors.primary} />
+            </View>
+            <Text style={styles.title}>Examination Code</Text>
+            <Text style={styles.body}>
+              You must stay on the campus exam Wi‑Fi. Type this room’s code from your proctor
+              (not the reconnect PIN). Live example: K7M2P9QX. Offline: OFF-12-R3.
+            </Text>
 
-          {error ? <Text style={styles.error}>{error}</Text> : null}
+            <Controller
+              control={control}
+              name="code"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <Input
+                  label="Examination Code"
+                  placeholder="K7M2P9QX"
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  value={value}
+                  onChangeText={(text) => onChange(text.toUpperCase())}
+                  onBlur={onBlur}
+                  error={errors.code?.message}
+                  onSubmitEditing={onVerify}
+                />
+              )}
+            />
 
-          <Button
-            title="Verify Code"
-            size="lg"
-            fullWidth
-            loading={isSubmitting}
-            onPress={onVerify}
-            style={{ marginTop: 16 }}
-          />
-        </Card>
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+
+            <Button
+              title="Verify Code"
+              size="lg"
+              fullWidth
+              loading={isSubmitting}
+              onPress={onVerify}
+              style={{ marginTop: 16 }}
+            />
+          </Card>
+        )}
       </View>
     </KeyboardAvoidingView>
   );

@@ -1,10 +1,30 @@
 import { getCloudApiBaseUrl, getApiBaseUrl } from '@/services/api';
 import {
+  describeApiReachabilityProblem,
+  studentPackDownloadFailureMessage,
+} from '@/services/apiReachability';
+import {
   OfflinePack,
   OfflineQueuedResult,
   OfflineStore,
 } from '@/services/offlineStore';
 import type { ChoiceKey, Question } from '@/types';
+
+/** Pull typed exam code from plain text or METCC QR JSON. */
+export function extractExaminationCode(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      const code =
+        parsed.examinationCode ?? parsed.exam_code ?? parsed.code ?? trimmed;
+      return String(code).trim().toUpperCase();
+    } catch {
+      return trimmed.toUpperCase();
+    }
+  }
+  return trimmed.toUpperCase();
+}
 
 function cloudBase(): string {
   return (getCloudApiBaseUrl() || getApiBaseUrl()).replace(/\/$/, '');
@@ -14,19 +34,39 @@ async function cloudFetch<T>(
   path: string,
   options: { method?: string; body?: unknown; token?: string | null } = {},
 ): Promise<T> {
+  const base = cloudBase();
+  const loopbackIssue = describeApiReachabilityProblem(base);
+  if (loopbackIssue) {
+    throw new Error(loopbackIssue);
+  }
+
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
 
-  const res = await fetch(`${cloudBase()}${path.startsWith('/') ? path : `/${path}`}`, {
-    method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
-    headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
+  const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
+      headers,
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    });
+  } catch {
+    throw new Error(
+      studentPackDownloadFailureMessage(
+        base,
+        `Cannot reach ${base}. Ensure Laravel listens on 0.0.0.0:8000 and the firewall allows port 8000.`,
+      ),
+    );
+  }
 
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(json?.message || `Cloud request failed (${res.status})`);
+    throw new Error(
+      (json as { message?: string })?.message ||
+        `Request failed (${res.status}).`,
+    );
   }
   return json as T;
 }
@@ -118,7 +158,10 @@ function grade(
  * 3) Online again: sync queued results to cloud
  */
 export const OfflineExamRepository = {
-  async downloadPackFromCloud(examDate?: string): Promise<OfflinePack> {
+  async downloadPackFromCloud(
+    examDate?: string,
+    options?: { includeAuth?: boolean },
+  ): Promise<OfflinePack> {
     // Pack export requires ADMIN_SYNC_TOKEN (or admin Sanctum). A proctor
     // login token must NOT be preferred — it causes 401 Unauthorized.
     const syncToken = process.env.EXPO_PUBLIC_SYNC_TOKEN?.trim() || null;
@@ -127,17 +170,28 @@ export const OfflineExamRepository = {
         'Missing EXPO_PUBLIC_SYNC_TOKEN in the app .env (must match ADMIN_SYNC_TOKEN on the server). Restart Expo after changing it.',
       );
     }
-    const q = examDate ? `?exam_date=${encodeURIComponent(examDate)}` : '';
+    const params = new URLSearchParams();
+    if (examDate) params.set('exam_date', examDate);
+    if (options?.includeAuth) params.set('include_auth', '1');
+    const q = params.toString() ? `?${params.toString()}` : '';
 
-    const json = await cloudFetch<{ success: boolean; data: OfflinePack }>(
-      `/sync/exam-day-pack${q}`,
-      { token: syncToken },
-    );
+    const json = await cloudFetch<{
+      success: boolean;
+      data: OfflinePack & { proctors?: unknown };
+    }>(`/sync/exam-day-pack${q}`, { token: syncToken });
     if (!json.data) throw new Error('Cloud returned an empty exam pack.');
-    await OfflineStore.savePack(json.data);
+
+    if (options?.includeAuth && json.data.proctors) {
+      const { ProctorAuthCache } = await import('@/services/proctorAuthCache');
+      await ProctorAuthCache.saveFromPackProctors(json.data.proctors);
+    }
+
+    // Never leave password hashes in the on-disk exam pack (student devices).
+    const { proctors: _proctors, ...safePack } = json.data;
+    await OfflineStore.savePack(safePack as OfflinePack);
     // Keep LAN / online mode. Offline mode turns on only when a student/proctor
     // uses an OFF-{scheduleId} exam code.
-    return json.data;
+    return safePack as OfflinePack;
   },
 
   async getCachedSchedules() {
@@ -259,23 +313,58 @@ export const OfflineExamRepository = {
     }));
   },
 
-  /** Offline exam codes look like OFF-12 (schedule id 12). */
-  parseOfflineCode(code: string): number | null {
-    const m = code.trim().toUpperCase().match(/^OFF-(\d+)$/);
-    return m ? Number(m[1]) : null;
+  /** Offline codes: OFF-12-R3 (schedule 12, room 3). Legacy OFF-12 still accepted. */
+  parseOfflineCode(code: string): { scheduleId: number; roomId: number | null } | null {
+    const m = code
+      .trim()
+      .toUpperCase()
+      .match(/^OFF-(\d+)(?:-R(\d+))?$/);
+    if (!m) return null;
+    return {
+      scheduleId: Number(m[1]),
+      roomId: m[2] ? Number(m[2]) : null,
+    };
   },
 
-  makeOfflineCode(scheduleId: string | number): string {
-    return `OFF-${scheduleId}`;
+  makeOfflineCode(scheduleId: string | number, roomId?: string | number | null): string {
+    const sid = String(scheduleId).replace(/^offline-/, '');
+    if (roomId != null && String(roomId).trim() !== '') {
+      return `OFF-${sid}-R${roomId}`;
+    }
+    return `OFF-${sid}`;
+  },
+
+  offlineQrPayload(code: string, scheduleId: string | number, roomId?: string | number | null): string {
+    return JSON.stringify({
+      v: 1,
+      type: 'metcc_offline',
+      code,
+      examinationCode: code,
+      schedule_id: Number(String(scheduleId).replace(/^offline-/, '')),
+      room_id: roomId != null ? Number(roomId) : null,
+    });
   },
 
   async resolveOfflineCode(code: string) {
-    const scheduleId = this.parseOfflineCode(code);
-    if (!scheduleId) return null;
+    const extracted = extractExaminationCode(code);
+    const parsed = this.parseOfflineCode(extracted);
+    if (!parsed) return null;
     const pack = await OfflineStore.getPack();
     if (!pack) return null;
-    const schedule = pack.schedules.find((s) => s.id === scheduleId);
+    const schedule = pack.schedules.find((s) => s.id === parsed.scheduleId);
     if (!schedule) return null;
+
+    const rooms = schedule.rooms ?? [];
+    const room =
+      (parsed.roomId != null
+        ? rooms.find((r) => Number(r.id) === parsed.roomId)
+        : null) ?? rooms[0] ?? null;
+
+    const examCode = this.makeOfflineCode(
+      schedule.id,
+      room?.id ?? parsed.roomId,
+    );
+
     return {
       valid: true as const,
       schedule: {
@@ -287,20 +376,26 @@ export const OfflineExamRepository = {
         batchCount: 1,
       },
       session: {
-        id: `offline-${schedule.id}`,
+        id: `offline-${schedule.id}${room ? `-r${room.id}` : ''}`,
         scheduleId: String(schedule.id),
+        roomId: room ? String(room.id) : null,
+        roomName: room?.room_name,
         timeLabel: schedule.time_slot || 'Offline exam',
         startTime: schedule.start_time || '',
         endTime: schedule.end_time || '',
-        venue: schedule.venue || 'Offline',
+        venue: room?.room_name || schedule.venue || 'Offline',
         batchNumber: schedule.batch_code || '',
         registeredStudents: pack.registrations.filter(
           (r) => r.examination_schedule_id === schedule.id,
         ).length,
         durationMinutes: pack.examination_settings?.duration_minutes ?? 90,
         totalQuestions: selectedQuestions(pack).length,
+        examinationCode: examCode,
       },
-      message: 'Offline examination ready on this device.',
+      examinationCode: examCode,
+      message: room
+        ? `Offline examination ready for ${room.room_name}.`
+        : 'Offline examination ready on this device.',
     };
   },
 

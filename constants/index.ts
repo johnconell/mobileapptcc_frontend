@@ -36,11 +36,14 @@ export const STORAGE_KEYS = {
   offlineExamCode: 'tcc.offline.exam.code',
   offlineClaims: 'tcc.offline.claims',
   examCheckpoint: 'tcc.student.exam.checkpoint',
+  /** SecureStore: proctor email + bcrypt hashes for offline login */
+  proctorAuthCache: 'tcc.proctor.auth.cache',
+  proctorAuthCacheAt: 'tcc.proctor.auth.cache.at',
 } as const;
 
 export const STATUS_LABELS = {
   connected: 'Connected',
-  waiting: 'Waiting',
+  waiting: 'Waiting to start',
   taking_exam: 'Taking',
   disconnected: 'Disconnected',
   finished: 'Done',

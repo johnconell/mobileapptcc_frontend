@@ -1,6 +1,9 @@
 import { STORAGE_KEYS } from '@/constants';
 import { apiRequest } from '@/services/api';
-import { OfflineExamRepository } from '@/services/offlineExamRepository';
+import {
+  extractExaminationCode,
+  OfflineExamRepository,
+} from '@/services/offlineExamRepository';
 import { OfflineStore } from '@/services/offlineStore';
 import { appStorage } from '@/services/storage';
 import type {
@@ -42,14 +45,21 @@ export const LobbyRepository = {
     roomId?: string,
   ): Promise<LobbySnapshot> {
     if (await OfflineStore.isOfflineMode()) {
+      if (!roomId) {
+        throw new Error('Select a room first. Each room has its own offline exam code and QR.');
+      }
       const sid = String(sessionId).replace(/^offline-/, '');
-      const examCode = OfflineExamRepository.makeOfflineCode(sid);
+      const examCode = OfflineExamRepository.makeOfflineCode(sid, roomId);
       await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, sid);
       await appStorage.setItem(STORAGE_KEYS.offlineExamCode, examCode);
       await setStoredCode(examCode);
       const lobby = await this.getLobby(sid, roomId);
       if (!lobby) throw new Error('Offline pack missing this schedule. Download again.');
       return lobby;
+    }
+
+    if (!roomId) {
+      throw new Error('Select a room first. Each room has its own examination code and QR.');
     }
 
     const body: Record<string, unknown> = {
@@ -119,19 +129,27 @@ export const LobbyRepository = {
 
   async getLobby(sessionId?: string, roomId?: string): Promise<LobbySnapshot | null> {
     if (await OfflineStore.isOfflineMode()) {
-      const code =
-        (await appStorage.getItem(STORAGE_KEYS.offlineExamCode)) ||
-        (await getStoredCode()) ||
-        '';
       const scheduleId =
         (await appStorage.getItem(STORAGE_KEYS.offlineScheduleId)) ||
         String(sessionId || '').replace(/^offline-/, '');
-      const examCode = code || OfflineExamRepository.makeOfflineCode(scheduleId);
+      const examCode =
+        (roomId
+          ? OfflineExamRepository.makeOfflineCode(scheduleId, roomId)
+          : null) ||
+        (await appStorage.getItem(STORAGE_KEYS.offlineExamCode)) ||
+        (await getStoredCode()) ||
+        OfflineExamRepository.makeOfflineCode(scheduleId, roomId);
       const resolved = await OfflineExamRepository.resolveOfflineCode(examCode);
       if (!resolved) return null;
+      const canonical =
+        resolved.examinationCode ||
+        OfflineExamRepository.makeOfflineCode(
+          resolved.schedule.id,
+          resolved.session.roomId,
+        );
       await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, resolved.schedule.id);
-      await appStorage.setItem(STORAGE_KEYS.offlineExamCode, examCode);
-      await setStoredCode(examCode);
+      await appStorage.setItem(STORAGE_KEYS.offlineExamCode, canonical);
+      await setStoredCode(canonical);
       const students = await OfflineExamRepository.getLobbyStudentsForSchedule(
         resolved.schedule.id,
       );
@@ -140,8 +158,10 @@ export const LobbyRepository = {
         schedule: resolved.schedule,
         session: resolved.session,
         status: 'lobby_open',
-        examinationCode: examCode,
-        qrValue: examCode,
+        examinationCode: canonical,
+        qrValue: canonical,
+        roomName: resolved.session.roomName,
+        roomId: resolved.session.roomId ? Number(resolved.session.roomId) : undefined,
         registeredCount: students.length,
         connectedCount: 0,
         notYetConnectedCount: waiting,
@@ -214,20 +234,22 @@ export const LobbyRepository = {
   },
 
   async verifyExaminationCode(rawCode: string): Promise<ExamCodeValidation> {
-    const code = rawCode.trim().toUpperCase();
+    const code = extractExaminationCode(rawCode);
 
     // Offline-first: cached pack on this phone (no room PC / no internet).
     const offline = await OfflineExamRepository.resolveOfflineCode(code);
     if (offline) {
-      await setStoredCode(code);
+      const canonical = offline.examinationCode || code;
+      await setStoredCode(canonical);
       await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, offline.schedule.id);
-      await appStorage.setItem(STORAGE_KEYS.offlineExamCode, code);
+      await appStorage.setItem(STORAGE_KEYS.offlineExamCode, canonical);
       await OfflineStore.setOfflineMode(true);
       return {
         valid: true,
         message: offline.message,
         schedule: offline.schedule as ExamCodeValidation['schedule'],
         session: offline.session as ExamCodeValidation['session'],
+        examinationCode: canonical,
       };
     }
 
@@ -235,6 +257,7 @@ export const LobbyRepository = {
       success: boolean;
       valid?: boolean;
       message?: string;
+      examinationCode?: string;
       data?: {
         schedule?: ExamCodeValidation['schedule'];
         session?: ExamCodeValidation['session'];
@@ -251,7 +274,7 @@ export const LobbyRepository = {
     const session = json.data?.session ?? json.session;
     const valid = Boolean(json.valid ?? json.success) && Boolean(schedule && session);
     if (valid && schedule && session) {
-      await setStoredCode(code);
+      await setStoredCode(json.examinationCode || code);
       await OfflineStore.setOfflineMode(false);
     }
     return {
@@ -259,6 +282,7 @@ export const LobbyRepository = {
       message: json.message,
       schedule: schedule ?? undefined,
       session: session ?? undefined,
+      examinationCode: json.examinationCode || code,
     };
   },
 

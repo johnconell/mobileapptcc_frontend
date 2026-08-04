@@ -5,10 +5,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Header, Loader, EmptyState, Button } from '@/components/ui';
 import { ScheduleCard } from '@/features/proctor/ScheduleCard';
 import { useSchedules } from '@/hooks/useRepositories';
-import { AuthRepository, LobbyRepository } from '@/repositories';
+import { AuthRepository } from '@/repositories';
 import { QUERY_KEYS } from '@/constants';
 import { useProctorStore } from '@/stores';
-import { getApiBaseUrl } from '@/services/api';
+import { ensureExamPackCached } from '@/services/ensureExamPack';
+import { OfflineStore } from '@/services/offlineStore';
 import { colors } from '@/theme';
 
 export default function SchedulesScreen() {
@@ -19,7 +20,8 @@ export default function SchedulesScreen() {
   const setSelectedSchedule = useProctorStore((s) => s.setSelectedSchedule);
   const reset = useProctorStore((s) => s.reset);
   const schedulesQuery = useSchedules(Boolean(profile));
-  const [pulling, setPulling] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [packAt, setPackAt] = useState<string | null>(null);
 
   useEffect(() => {
     if (!profile) {
@@ -29,6 +31,10 @@ export default function SchedulesScreen() {
       });
     }
   }, [profile, setProfile, router]);
+
+  useEffect(() => {
+    void OfflineStore.getPackMeta().then((m) => setPackAt(m.at));
+  }, []);
 
   useEffect(() => {
     if (schedulesQuery.isError) {
@@ -42,33 +48,32 @@ export default function SchedulesScreen() {
     }
   }, [schedulesQuery.isError, schedulesQuery.error, reset, router]);
 
-  const pullFromAdmin = async () => {
-    setPulling(true);
+  const refreshCache = async () => {
+    setRefreshing(true);
     try {
-      const result = await LobbyRepository.pullFromAdmin();
+      const result = await ensureExamPackCached({ force: true });
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.schedules });
-      Alert.alert('Exam data updated', result.message);
-    } catch (error) {
-      Alert.alert(
-        'Pull failed',
-        error instanceof Error
-          ? error.message
-          : 'Connect the LAN exam PC to the internet, set ADMIN_SYNC_* , then try again.',
-      );
+      const meta = await OfflineStore.getPackMeta();
+      setPackAt(meta.at);
+      Alert.alert(result.ok ? 'Cache updated' : 'Update failed', result.message);
     } finally {
-      setPulling(false);
+      setRefreshing(false);
     }
   };
 
   if (!profile || (schedulesQuery.isLoading && !schedulesQuery.data)) {
-    return <Loader fullscreen label="Loading schedules…" />;
+    return <Loader fullscreen label="Please wait — loading schedules…" />;
   }
 
   return (
     <View style={styles.screen}>
       <Header
         title="Examination Schedules"
-        subtitle={profile.displayName}
+        subtitle={
+          profile.offlineSession
+            ? `${profile.displayName} · Offline mode`
+            : profile.displayName
+        }
         onBack={async () => {
           await AuthRepository.logout();
           reset();
@@ -82,27 +87,30 @@ export default function SchedulesScreen() {
         ListHeaderComponent={
           <View style={styles.headerBlock}>
             <Text style={styles.intro}>
-              Select a schedule. For offline exams, students enter code OFF-12 (use the
-              schedule number shown on the card).
+              Select a schedule, then a room. Each room gets a random letter+number code and
+              its own QR (example K7M2P9QX · offline OFF-12-R3). When every room has ended,
+              the batch shows as complete.
             </Text>
-            <Text style={styles.serverLine}>Exam server: {getApiBaseUrl()}</Text>
+            {packAt ? (
+              <Text style={styles.cacheLine}>
+                Exam cache updated: {new Date(packAt).toLocaleString()}
+              </Text>
+            ) : (
+              <Text style={styles.cacheLine}>Exam cache not ready yet.</Text>
+            )}
             <Button
-              title="Download / sync offline pack"
+              title="Refresh exam cache"
               variant="outline"
+              fullWidth
+              loading={refreshing}
+              onPress={() => void refreshCache()}
+            />
+            <Button
+              title="Sync offline results to Admin"
+              variant="ghost"
               fullWidth
               onPress={() => router.push('/offline-prepare')}
             />
-            <Button
-              title="Pull exam data from Admin (LAN PC)"
-              variant="outline"
-              fullWidth
-              loading={pulling}
-              onPress={() => void pullFromAdmin()}
-            />
-            <Text style={styles.pullHint}>
-              Preferred (no room PC): use Offline pack — cache on the phone, exam without
-              internet, then Sync results to Admin.
-            </Text>
           </View>
         }
         ListEmptyComponent={<EmptyState title="No schedules available" />}
@@ -119,18 +127,6 @@ export default function SchedulesScreen() {
             }}
           />
         )}
-        ListFooterComponent={
-          <Button
-            title="Sign out"
-            variant="ghost"
-            onPress={async () => {
-              await AuthRepository.logout();
-              reset();
-              router.replace('/');
-            }}
-            style={{ marginTop: 8 }}
-          />
-        }
       />
     </View>
   );
@@ -140,19 +136,6 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   list: { padding: 20, gap: 12, paddingBottom: 40 },
   headerBlock: { gap: 10, marginBottom: 8 },
-  intro: {
-    fontSize: 14,
-    color: colors.inkSecondary,
-    lineHeight: 21,
-  },
-  serverLine: {
-    fontSize: 12,
-    color: colors.inkMuted,
-    fontWeight: '600',
-  },
-  pullHint: {
-    fontSize: 12,
-    color: colors.inkMuted,
-    lineHeight: 18,
-  },
+  intro: { fontSize: 14, lineHeight: 21, color: colors.inkSecondary, fontWeight: '500' },
+  cacheLine: { fontSize: 12, color: colors.inkMuted, fontWeight: '600' },
 });

@@ -7,6 +7,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AppProviders } from '@/providers/AppProviders';
 import { hydrateApiBaseUrl } from '@/services/api';
+import { ensureExamPackCached } from '@/services/ensureExamPack';
 import { useSettingsStore } from '@/stores';
 import { colors } from '@/theme';
 
@@ -19,6 +20,8 @@ export default function RootLayout() {
     async function prepare() {
       await hydrateApiBaseUrl();
       await hydrate();
+      // Best-effort: cache schedules/questions while online (no proctor password hashes).
+      void ensureExamPackCached({ force: false, includeAuth: false });
       await SplashScreen.hideAsync();
     }
     void prepare();

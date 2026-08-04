@@ -200,7 +200,7 @@ export const ScheduleRepository = {
             id: row.id,
             room_name: row.room_name,
             capacity: row.capacity,
-            examination_code: OfflineExamRepository.makeOfflineCode(sid),
+            examination_code: OfflineExamRepository.makeOfflineCode(sid, row.id),
             status: 'lobby_open',
             connected_count: 0,
             can_reopen: true,

@@ -26,7 +26,11 @@
       },
       "package": "edu.tcc.entranceexam",
       "predictiveBackGestureEnabled": false,
-      "usesCleartextTraffic": true
+      "usesCleartextTraffic": true,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -59,6 +63,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "320263a4-6c8f-42ad-aed0-a4bc96c1fc18"
+      }
     }
   }
 }

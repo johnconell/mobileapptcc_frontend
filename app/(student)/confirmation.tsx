@@ -13,6 +13,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Button, Card, Header, Input, Loader } from '@/components/ui';
 import { LobbyRepository, StudentRepository } from '@/repositories';
+import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 import { useLobbyStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
 
@@ -72,6 +73,13 @@ export default function StudentConfirmationScreen() {
   const onConfirm = handleSubmit(async (values) => {
     setJoinError(null);
     try {
+      const gate = await assertCampusWifiForJoin({
+        requireServer: !String(scannedSessionId).startsWith('offline-'),
+      });
+      if (!gate.ok) {
+        setJoinError(gate.message ?? 'Campus Wi‑Fi required to join.');
+        return;
+      }
       const verified = {
         ...selectedStudent,
         email: values.email.trim().toLowerCase(),

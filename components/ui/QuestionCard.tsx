@@ -1,6 +1,5 @@
 import React from 'react';
 import { Pressable, Text, View, StyleSheet } from 'react-native';
-import Animated, { FadeInRight } from 'react-native-reanimated';
 import type { ChoiceKey, Question } from '@/types';
 import { choiceKeys } from '@/utils';
 import { colors, radii } from '@/theme';
@@ -21,51 +20,49 @@ export function QuestionCard({
   secure = false,
 }: QuestionCardProps) {
   return (
-    <Animated.View entering={FadeInRight.duration(280)} key={question.id}>
-      <Card>
-        <Text style={styles.meta} selectable={!secure}>
-          Question {question.number} · Multiple Choice
-        </Text>
-        <Text
-          style={styles.prompt}
-          selectable={!secure}
-          {...(secure ? ({ contextMenuHidden: true } as object) : null)}
-        >
-          {question.question}
-        </Text>
-        <View style={styles.choices}>
-          {choiceKeys().map((key) => {
-            const selected = selectedAnswer === key;
-            return (
-              <Pressable
-                key={key}
-                onPress={() => onSelect(key)}
-                onLongPress={secure ? () => undefined : undefined}
-                delayLongPress={secure ? 10_000 : undefined}
-                style={[styles.choice, selected && styles.choiceSelected]}
-              >
-                <View style={[styles.badge, selected && styles.badgeSelected]}>
-                  <Text
-                    style={[styles.badgeText, selected && styles.badgeTextSelected]}
-                    selectable={!secure}
-                    {...(secure ? ({ contextMenuHidden: true } as object) : null)}
-                  >
-                    {key}
-                  </Text>
-                </View>
+    <Card>
+      <Text style={styles.meta} selectable={!secure}>
+        {`Question ${question.number} · Multiple Choice`}
+      </Text>
+      <Text
+        style={styles.prompt}
+        selectable={!secure}
+        {...(secure ? ({ contextMenuHidden: true } as object) : null)}
+      >
+        {String(question.question ?? '')}
+      </Text>
+      <View style={styles.choices}>
+        {choiceKeys().map((key) => {
+          const selected = selectedAnswer === key;
+          return (
+            <Pressable
+              key={key}
+              onPress={() => onSelect(key)}
+              onLongPress={secure ? () => undefined : undefined}
+              delayLongPress={secure ? 10_000 : undefined}
+              style={[styles.choice, selected && styles.choiceSelected]}
+            >
+              <View style={[styles.badge, selected && styles.badgeSelected]}>
                 <Text
-                  style={[styles.choiceText, selected && styles.choiceTextSelected]}
+                  style={[styles.badgeText, selected && styles.badgeTextSelected]}
                   selectable={!secure}
                   {...(secure ? ({ contextMenuHidden: true } as object) : null)}
                 >
-                  {question.choices[key]}
+                  {key}
                 </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </Card>
-    </Animated.View>
+              </View>
+              <Text
+                style={[styles.choiceText, selected && styles.choiceTextSelected]}
+                selectable={!secure}
+                {...(secure ? ({ contextMenuHidden: true } as object) : null)}
+              >
+                {String(question.choices[key] ?? '')}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </Card>
   );
 }
 

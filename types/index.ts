@@ -134,14 +134,19 @@ export interface LobbyStudent {
   violationCount: number;
   terminationReason: ExamTerminationReason | null;
   reconnectAllowed?: boolean;
+  /** Proctor-only: 6-digit PIN shown after disconnect. */
+  reconnectCode?: string | null;
+  reconnectCodeExpiresAt?: string | null;
 }
 
 export interface LobbySnapshot {
   schedule: ExamSchedule;
   session: ExamSession;
   status: ExamLifecycleStatus;
-  examinationCode: string;
+  examinationCode?: string;
   qrValue: string;
+  roomName?: string | null;
+  roomId?: number | null;
   registeredCount: number;
   connectedCount: number;
   notYetConnectedCount: number;
@@ -191,6 +196,8 @@ export interface ProctorProfile {
   displayName: string;
   roleLabel: string;
   token?: string;
+  /** True when signed in from local auth cache (no Sanctum / no internet). */
+  offlineSession?: boolean;
 }
 
 export interface AuthResult {

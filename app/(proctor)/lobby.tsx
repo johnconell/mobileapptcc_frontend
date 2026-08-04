@@ -148,6 +148,13 @@ export default function ProctorLobbyScreen() {
       if (selected) {
         const latest = lobbyQuery.data.students.find((s) => s.id === selected.id) ?? null;
         setSelected(latest);
+        if (latest?.status === 'disconnected') {
+          setReconnectCode(latest.reconnectCode ?? null);
+          setReconnectExpiresAt(latest.reconnectCodeExpiresAt ?? null);
+        } else {
+          setReconnectCode(null);
+          setReconnectExpiresAt(null);
+        }
       }
 
       // Real-time connect / disconnect notifications (LAN poll — no internet required).
@@ -365,12 +372,17 @@ export default function ProctorLobbyScreen() {
                 note={
                   lobby.status === 'in_progress'
                     ? 'Examination in progress. New QR scans are blocked.'
-                    : 'Students must scan this QR Code to join the examination.'
+                    : `Room-specific QR for ${lobby.roomName || lobby.session.roomName || lobby.session.venue}. Other rooms have different codes.`
                 }
               />
               <View style={styles.codeBlock}>
-                <Text style={styles.codeLabel}>Examination Code</Text>
+                <Text style={styles.codeLabel}>
+                  Examination Code · {lobby.roomName || lobby.session.roomName || 'This room'}
+                </Text>
                 <Text style={styles.codeValue}>{lobby.examinationCode}</Text>
+                <Text style={styles.codeHint}>
+                  Unique to this room. Students in another room need that room’s code/QR.
+                </Text>
               </View>
             </Card>
 
@@ -530,38 +542,45 @@ export default function ProctorLobbyScreen() {
             ) : null}
 
             <Text style={styles.section}>Security Monitoring</Text>
-            <View style={styles.statsRow}>
+            <Text style={styles.sectionHint}>
+              Waiting = scanned QR, selected name, waiting for you to start. Taking = exam in
+              progress.
+            </Text>
+            <View style={styles.statsGrid}>
               <StatisticCard
                 label="Registered"
                 value={lobby.registeredCount}
+                hint="On this schedule"
                 icon={<Users size={18} color={colors.primary} />}
               />
               <StatisticCard
-                label="Connected"
-                value={lobby.connectedCount}
-                tone="info"
-                icon={<UserCheck size={18} color={colors.info} />}
+                label="Waiting"
+                value={lobby.waitingCount}
+                tone="warning"
+                hint="Scanned · wait to start"
+                icon={<UserCheck size={18} color={colors.warning} />}
                 delay={40}
               />
               <StatisticCard
-                label="Not Connected"
+                label="Not joined"
                 value={lobby.notYetConnectedCount}
-                tone="warning"
-                icon={<UserX size={18} color={colors.warning} />}
+                tone="info"
+                hint="Have not scanned yet"
+                icon={<UserX size={18} color={colors.info} />}
                 delay={80}
               />
-            </View>
-            <View style={styles.statsRow}>
               <StatisticCard
                 label="Taking"
                 value={lobby.takingCount}
                 tone="default"
+                hint="Exam started"
                 icon={<Play size={18} color={colors.primary} />}
               />
               <StatisticCard
                 label="Disconnected"
                 value={lobby.disconnectedCount ?? 0}
                 tone="warning"
+                hint="Need reconnect code"
                 icon={<UserX size={18} color={colors.danger} />}
                 delay={40}
               />
@@ -569,23 +588,24 @@ export default function ProctorLobbyScreen() {
                 label="Done"
                 value={lobby.finishedCount}
                 tone="success"
+                hint="Submitted"
                 icon={<CheckCircle2 size={18} color={colors.success} />}
                 delay={80}
               />
-            </View>
-            <View style={styles.statsRow}>
               <StatisticCard
                 label="Violations"
                 value={lobby.violationsDetected}
                 tone="warning"
+                hint="Security flags"
                 icon={<ShieldAlert size={18} color={colors.danger} />}
               />
             </View>
 
-            <Text style={styles.section}>Connected Students</Text>
+            <Text style={styles.section}>Students in this room</Text>
             <Text style={styles.sectionHint}>
-              {lobby.connectedCount} of {lobby.registeredCount} registered · tap a student for
-              details
+              {lobby.waitingCount} waiting to start · {lobby.takingCount} taking ·{' '}
+              {lobby.connectedCount} joined of {lobby.registeredCount} registered. Tap a student
+              for details. Disconnected students show a 6-digit reconnect code.
             </Text>
             <Button
               title={
@@ -629,9 +649,9 @@ export default function ProctorLobbyScreen() {
             student={item}
             delay={Math.min(index * 40, 200)}
             onPress={() => {
-              setReconnectCode(null);
-              setReconnectExpiresAt(null);
               setSelected(item);
+              setReconnectCode(item.reconnectCode ?? null);
+              setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
             }}
           />
         )}
@@ -645,7 +665,7 @@ export default function ProctorLobbyScreen() {
       <ConfirmationModal
         visible={startOpen}
         title="Start Examination?"
-        description="Connected and waiting students will move to Taking Examination status. Exam Security Mode will activate on student devices. New QR scans will be blocked."
+        description="Students who already scanned the QR and selected their name (Waiting) will move to Taking. Exam Security Mode activates on student devices. New QR scans will be blocked."
         confirmLabel="Yes, start"
         cancelLabel="No"
         loading={busy}
@@ -745,24 +765,25 @@ export default function ProctorLobbyScreen() {
                 <DetailRow label="Termination" value={selected.terminationReason.replace('_', ' ')} />
               ) : null}
 
-              {reconnectCode && selected.status === 'disconnected' ? (
+              {selected.status === 'disconnected' ? (
                 <View style={styles.reconnectBox}>
-                  <Text style={styles.reconnectLabel}>Reconnect code for student</Text>
-                  <Text style={styles.reconnectCode}>{reconnectCode}</Text>
-                  {reconnectExpiresAt ? (
-                    <Text style={styles.reconnectHint}>
-                      Expires {formatTime(reconnectExpiresAt)} · tell the student this code
-                    </Text>
-                  ) : (
-                    <Text style={styles.reconnectHint}>Tell the student this code</Text>
-                  )}
+                  <Text style={styles.reconnectLabel}>Reconnect code (tell the student)</Text>
+                  <Text style={styles.reconnectCode}>
+                    {reconnectCode || selected.reconnectCode || '————'}
+                  </Text>
+                  <Text style={styles.reconnectHint}>
+                    6-digit number only — not the examination / QR code.
+                    {(reconnectExpiresAt || selected.reconnectCodeExpiresAt)
+                      ? ` Expires ${formatTime(reconnectExpiresAt || selected.reconnectCodeExpiresAt)}.`
+                      : ''}
+                  </Text>
                 </View>
               ) : null}
 
               <View style={styles.detailActions}>
                 {selected.status === 'disconnected' ? (
                   <Button
-                    title={reconnectCode ? 'Issue new reconnect code' : 'Allow reconnect'}
+                    title="Issue new reconnect code"
                     fullWidth
                     loading={busy}
                     onPress={async () => {
@@ -872,6 +893,13 @@ const styles = StyleSheet.create({
     color: colors.primary,
     letterSpacing: 2,
   },
+  codeHint: {
+    fontSize: 12,
+    color: colors.inkSecondary,
+    fontWeight: '500',
+    textAlign: 'center',
+    paddingHorizontal: 8,
+  },
   monitorTitle: {
     fontSize: 15,
     fontWeight: '800',
@@ -892,7 +920,13 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   actions: { gap: 10 },
-  statsRow: { flexDirection: 'row', gap: 8, flexWrap: 'nowrap' },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'stretch',
+  },
+  statsRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   section: {
     fontSize: 12,
     fontWeight: '800',

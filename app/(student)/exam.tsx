@@ -91,16 +91,19 @@ export default function ExamScreen() {
     return () => clearTimeout(timer);
   }, [answers, questions.length, markAutoSaved, wifiLocked]);
 
-  // Persist local checkpoint for power-off / restart recovery.
+  // Persist local checkpoint for power-off / restart recovery (debounced).
   useEffect(() => {
     if (!questions.length || !sessionId || !verifiedStudent?.id) return;
-    void ExamProgressStore.save({
-      sessionId,
-      studentId: verifiedStudent.id,
-      answers,
-      remainingSeconds: remainingSecondsStore,
-      startedAt,
-    });
+    const timer = setTimeout(() => {
+      void ExamProgressStore.save({
+        sessionId,
+        studentId: verifiedStudent.id,
+        answers,
+        remainingSeconds: remainingSecondsStore,
+        startedAt,
+      });
+    }, 2000);
+    return () => clearTimeout(timer);
   }, [
     answers,
     remainingSecondsStore,
@@ -279,7 +282,7 @@ export default function ExamScreen() {
             <View style={styles.secureBadge}>
               <Shield size={12} color={colors.primary} />
               <Text style={styles.secureText}>
-                {violationCount}/{maxViolations}
+                {`${violationCount}/${maxViolations}`}
               </Text>
             </View>
             <CountdownTimer remainingSeconds={remainingSeconds} compact />
@@ -292,10 +295,11 @@ export default function ExamScreen() {
         <View style={styles.saveRow}>
           <CloudUpload size={14} color={colors.success} />
           <Text style={styles.saveText}>
-            {answeredCount()} of {questions.length} answered
-            {autoSavedAt
-              ? ` · Auto-saved ${new Date(autoSavedAt).toLocaleTimeString()}`
-              : ''}
+            {`${answeredCount()} of ${questions.length} answered${
+              autoSavedAt
+                ? ` · Auto-saved ${new Date(autoSavedAt).toLocaleTimeString()}`
+                : ''
+            }`}
           </Text>
         </View>
       </View>
@@ -356,8 +360,9 @@ export default function ExamScreen() {
           <View style={styles.modalSheet}>
             <Text style={styles.modalTitle}>Unanswered questions</Text>
             <Text style={styles.modalBody}>
-              Please answer all questions before submitting. Still unanswered:{' '}
-              {missingLabel || unansweredCount()}.
+              {`Please answer all questions before submitting. Still unanswered: ${
+                missingLabel || unansweredCount()
+              }.`}
             </Text>
             <Button
               title="Review answers"

@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Header, Button, Card, Loader } from '@/components/ui';
+import { CampusWifiBlockedCard } from '@/features/student/CampusWifiBlockedCard';
+import { useCampusWifiJoinGate } from '@/hooks/useCampusWifiJoinGate';
 import { LobbyRepository, ScheduleRepository } from '@/repositories';
 import { useStudentStore } from '@/stores';
 import { colors } from '@/theme';
@@ -14,12 +16,26 @@ export default function ScanScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const setScannedSession = useStudentStore((s) => s.setScannedSession);
+  const wifiGate = useCampusWifiJoinGate({ requireServer: true });
+  const lastScanAt = useRef(0);
 
   const handlePayload = async (raw: string) => {
     if (busy) return;
+    const now = Date.now();
+    if (now - lastScanAt.current < 1500) return;
+    lastScanAt.current = now;
+
     setBusy(true);
     setScanning(false);
     setError(null);
+
+    const gate = await wifiGate.refresh();
+    if (!gate.ok) {
+      setError(gate.message ?? 'Wi‑Fi / LAN does not match the proctor network.');
+      setBusy(false);
+      setScanning(true);
+      return;
+    }
 
     const resolved = await ScheduleRepository.resolveSessionFromQr(raw);
     if (!resolved.valid || !resolved.session || !resolved.schedule) {
@@ -38,6 +54,13 @@ export default function ScanScreen() {
     setBusy(true);
     setError(null);
     try {
+      const gate = await wifiGate.refresh();
+      if (!gate.ok) {
+        setError(gate.message ?? 'Wi‑Fi / LAN does not match the proctor network.');
+        setBusy(false);
+        setScanning(true);
+        return;
+      }
       const stored = await LobbyRepository.getLobby();
       if (stored?.examinationCode) {
         await handlePayload(stored.examinationCode);
@@ -56,6 +79,41 @@ export default function ScanScreen() {
     return <Loader fullscreen label="Checking camera permission…" />;
   }
 
+  // Show Wi‑Fi block with enter-code escape — but don't hide the only path forever.
+  if (!wifiGate.ok && !wifiGate.checking) {
+    return (
+      <View style={styles.screen}>
+        <Header title="Scan QR Code" onBack={() => router.back()} />
+        <View style={styles.permission}>
+          <CampusWifiBlockedCard
+            title={
+              wifiGate.wifiConnected && wifiGate.serverReachable === false
+                ? 'Wi‑Fi / LAN does not match'
+                : 'Campus Wi‑Fi required'
+            }
+            message={
+              wifiGate.message ??
+              'Connect to the same Wi‑Fi as the proctor before scanning.'
+            }
+            checking={wifiGate.checking}
+            onRetry={() => void wifiGate.refresh()}
+          />
+          <Button
+            title="Enter Examination Code"
+            variant="outline"
+            fullWidth
+            onPress={() => router.replace('/(student)/enter-code')}
+            style={{ marginTop: 12 }}
+          />
+        </View>
+      </View>
+    );
+  }
+
+  if (wifiGate.checking && !wifiGate.ok) {
+    return <Loader fullscreen label="Checking exam Wi‑Fi…" />;
+  }
+
   if (!permission.granted) {
     return (
       <View style={styles.screen}>
@@ -68,18 +126,11 @@ export default function ScanScreen() {
             </Text>
             <Button title="Allow Camera" fullWidth onPress={requestPermission} />
             <Button
-              title="Simulate Successful Scan"
-              variant="outline"
-              fullWidth
-              onPress={simulateScan}
-              style={{ marginTop: 10 }}
-            />
-            <Button
               title="Enter Examination Code"
               variant="ghost"
               fullWidth
               onPress={() => router.replace('/(student)/enter-code')}
-              style={{ marginTop: 4 }}
+              style={{ marginTop: 8 }}
             />
           </Card>
         </View>
@@ -103,7 +154,7 @@ export default function ScanScreen() {
               : undefined
           }
         />
-        <View style={styles.overlay}>
+        <View style={styles.overlay} pointerEvents="none">
           <View style={styles.frame} />
           <Text style={styles.hint}>Align the QR Code inside the frame</Text>
         </View>
@@ -116,14 +167,16 @@ export default function ScanScreen() {
           fullWidth
           onPress={() => router.replace('/(student)/enter-code')}
         />
-        <Button
-          title="Simulate Successful Scan"
-          variant="ghost"
-          fullWidth
-          loading={busy}
-          onPress={simulateScan}
-          style={{ marginTop: 8 }}
-        />
+        {__DEV__ ? (
+          <Button
+            title="Simulate Successful Scan"
+            variant="ghost"
+            fullWidth
+            loading={busy}
+            onPress={simulateScan}
+            style={{ marginTop: 8 }}
+          />
+        ) : null}
       </View>
     </View>
   );

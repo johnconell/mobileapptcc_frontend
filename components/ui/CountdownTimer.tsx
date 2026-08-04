@@ -21,7 +21,7 @@ export function CountdownTimer({
     <View style={[styles.wrap, compact && styles.compact, isWarning && styles.warning]}>
       <Clock size={compact ? 14 : 16} color={isWarning ? colors.danger : colors.primary} />
       <Text style={[styles.text, isWarning && styles.warningText]}>
-        {formatTime(remainingSeconds)}
+        {formatTime(remainingSeconds) || '0:00'}
       </Text>
     </View>
   );

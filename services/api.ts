@@ -1,4 +1,5 @@
 import { STORAGE_KEYS } from '@/constants';
+import { isLoopbackApiHost, requiresLanApiHost } from '@/services/apiReachability';
 import { appStorage } from '@/services/storage';
 
 const DEFAULT_API_URL = 'http://127.0.0.1:8000/api/v1';
@@ -7,7 +8,12 @@ const DEFAULT_API_URL = 'http://127.0.0.1:8000/api/v1';
 let lanApiOverride: string | null | undefined;
 
 function normalizeBase(url: string): string {
-  return url.trim().replace(/\/$/, '');
+  let value = url.trim().replace(/\/$/, '');
+  // Guard against .env typos like "10.x.x.x:8000/api/v1" (missing scheme).
+  if (value && !/^https?:\/\//i.test(value)) {
+    value = `http://${value}`;
+  }
+  return value;
 }
 
 /**
@@ -125,10 +131,13 @@ export async function apiRequest<T = unknown>(
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     });
   } catch {
+    const hint = lanApiOverride
+      ? ' / campus Wi‑Fi and LAN IP'
+      : isLoopbackApiHost(base) && requiresLanApiHost()
+        ? ' — on a phone use your PC Wi‑Fi IP, not 127.0.0.1'
+        : '';
     throw new ApiError(
-      `Network error. Cannot reach server at ${base}. Check your connection${
-        options.baseUrl || !lanApiOverride ? '' : ' / campus Wi‑Fi and LAN IP'
-      }.`,
+      `Network error. Cannot reach server at ${base}. Check your connection${hint}.`,
       0,
     );
   }
