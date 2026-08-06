@@ -1,10 +1,13 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Loader } from '@/components/ui';
+import { Button, Loader } from '@/components/ui';
 import { LobbyRepository, QuestionRepository } from '@/repositories';
+import { ExamProgressStore } from '@/services/examProgressStore';
 import { useExamStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
+
+const MAX_ATTEMPTS = 3;
 
 export default function SubmittingScreen() {
   const router = useRouter();
@@ -13,72 +16,122 @@ export default function SubmittingScreen() {
   const terminationReason = useExamStore((s) => s.terminationReason);
   const markSubmitting = useExamStore((s) => s.markSubmitting);
   const markSubmitted = useExamStore((s) => s.markSubmitted);
+  const resetExam = useExamStore((s) => s.reset);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
-  const [error, setError] = React.useState<string | null>(null);
+  const resetStudent = useStudentStore((s) => s.reset);
 
-  useEffect(() => {
-    let active = true;
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  // The exam must be sent once; store objects change identity and would re-fire.
+  const submittingRef = useRef(false);
 
-    async function submit() {
+  /** Time-expired and terminated exams are involuntary: never trap the student. */
+  const isForcedEnd =
+    terminationReason === 'time_expired' ||
+    terminationReason === 'policy_violation' ||
+    terminationReason === 'proctor_terminated';
+
+  const goHome = useCallback(() => {
+    resetExam();
+    resetStudent();
+    router.replace('/');
+  }, [resetExam, resetStudent, router]);
+
+  const submit = useCallback(async () => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+
+    const reason = terminationReason ?? 'submitted';
+    const payload = Object.fromEntries(
+      Object.values(answers).map((answer) => [answer.questionId, answer.selectedAnswer]),
+    );
+
+    markSubmitting(true);
+    setError(null);
+
+    let lastError: unknown = null;
+    for (let tries = 1; tries <= MAX_ATTEMPTS; tries++) {
       try {
-        markSubmitting(true);
-        setError(null);
-        const payload = Object.fromEntries(
-          Object.values(answers).map((answer) => [answer.questionId, answer.selectedAnswer]),
-        );
-
         await QuestionRepository.submitAnswers({
           sessionId: sessionId ?? 'unknown',
           studentId: verifiedStudent?.id ?? 'unknown',
           answers: payload,
         });
 
-        const reason = terminationReason ?? 'submitted';
         if (verifiedStudent?.id) {
           await LobbyRepository.finishStudent(verifiedStudent.id, reason);
         }
 
-        if (!active) return;
+        await ExamProgressStore.clear();
         markSubmitted(reason);
+        submittingRef.current = false;
         router.replace('/(student)/completed');
+        return;
       } catch (err) {
-        if (!active) return;
-        markSubmitting(false);
-        setError(err instanceof Error ? err.message : 'Submission failed. Please try again.');
+        lastError = err;
+        if (tries < MAX_ATTEMPTS) {
+          await new Promise((resolve) => setTimeout(resolve, 1200 * tries));
+        }
       }
     }
 
-    void submit();
-    return () => {
-      active = false;
-    };
+    submittingRef.current = false;
+    markSubmitting(false);
+
+    // Answers were autosaved throughout the exam, so a failed final send must not
+    // hold a forced-end student on this screen — close it out and let sync finish it.
+    if (isForcedEnd) {
+      markSubmitted(reason);
+      router.replace('/(student)/completed');
+      return;
+    }
+
+    setError(
+      lastError instanceof Error
+        ? lastError.message
+        : 'Submission failed. Please try again.',
+    );
   }, [
     answers,
     sessionId,
-    verifiedStudent,
+    verifiedStudent?.id,
     terminationReason,
+    isForcedEnd,
     markSubmitting,
     markSubmitted,
     router,
   ]);
+
+  useEffect(() => {
+    void submit();
+    // `attempt` re-runs this on an explicit retry press.
+  }, [submit, attempt]);
 
   if (error) {
     return (
       <View style={styles.screen}>
         <Text style={styles.errorTitle}>Could not submit</Text>
         <Text style={styles.errorBody}>{error}</Text>
-        <Text
-          style={styles.retry}
-          onPress={() => {
-            setError(null);
-            markSubmitting(true);
-            // Re-trigger by remounting flow: navigate back to exam then user resubmits,
-            // or simply retry current effect via state flip.
-            router.replace('/(student)/exam');
-          }}
-        >
-          Go back and try again
+        <Text style={styles.errorBody}>
+          Your answers are saved on this phone. Stay on the exam Wi‑Fi and try again.
         </Text>
+        <Button
+          title="Try Again"
+          fullWidth
+          onPress={() => {
+            submittingRef.current = false;
+            setError(null);
+            setAttempt((n) => n + 1);
+          }}
+          style={styles.btn}
+        />
+        <Button
+          title="Return Home"
+          variant="outline"
+          fullWidth
+          onPress={goHome}
+          style={styles.btn}
+        />
       </View>
     );
   }
@@ -89,7 +142,9 @@ export default function SubmittingScreen() {
         label={
           terminationReason === 'policy_violation'
             ? 'Terminating examination…'
-            : 'Submitting your examination…'
+            : terminationReason === 'time_expired'
+              ? 'Time is up — submitting your examination…'
+              : 'Submitting your examination…'
         }
       />
       <Text style={styles.note}>Please keep this screen open.</Text>
@@ -115,10 +170,5 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     maxWidth: 320,
   },
-  retry: {
-    marginTop: 12,
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.primary,
-  },
+  btn: { maxWidth: 360, marginTop: 8 },
 });

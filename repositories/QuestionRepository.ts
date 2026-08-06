@@ -2,6 +2,7 @@ import { STORAGE_KEYS } from '@/constants';
 import { apiRequest } from '@/services/api';
 import { OfflineExamRepository } from '@/services/offlineExamRepository';
 import { OfflineStore } from '@/services/offlineStore';
+import { PeerExamClient } from '@/services/peerExamClient';
 import { appStorage } from '@/services/storage';
 import type { Question } from '@/types';
 
@@ -13,6 +14,15 @@ import type { Question } from '@/types';
 export const QuestionRepository = {
   async getQuestions(sessionId: string): Promise<Question[]> {
     void sessionId;
+    // Peer mode: the questionnaire comes from the proctor phone's pack.
+    if (await PeerExamClient.isActive()) {
+      const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      const json = await PeerExamClient.request<{ questions: Question[] }>('/questions', {
+        query: { participation_token: token ?? undefined },
+      });
+      return json.questions || [];
+    }
+
     if (await OfflineStore.isOfflineMode()) {
       return OfflineExamRepository.getQuestions();
     }
@@ -28,6 +38,20 @@ export const QuestionRepository = {
   },
 
   async saveProgress(answers: Record<string, string | null>): Promise<{ saved: boolean; savedAt: string | null }> {
+    if (await PeerExamClient.isActive()) {
+      const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      if (!token) return { saved: false, savedAt: null };
+      try {
+        await PeerExamClient.request('/answers', {
+          method: 'POST',
+          body: { participation_token: token, answers },
+        });
+        return { saved: true, savedAt: new Date().toISOString() };
+      } catch {
+        return { saved: false, savedAt: null };
+      }
+    }
+
     if (await OfflineStore.isOfflineMode()) {
       return { saved: true, savedAt: new Date().toISOString() };
     }
@@ -67,6 +91,18 @@ export const QuestionRepository = {
     studentId: string;
     answers: Record<string, string | null>;
   }): Promise<{ success: true; submittedAt: string }> {
+    // Peer mode: the proctor phone grades and holds the result for later sync.
+    if (await PeerExamClient.isActive()) {
+      const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      if (!token) throw new Error('Missing participation token.');
+      await PeerExamClient.request('/submit', {
+        method: 'POST',
+        body: { participation_token: token, answers: payload.answers },
+        timeoutMs: 15000,
+      });
+      return { success: true, submittedAt: new Date().toISOString() };
+    }
+
     if (await OfflineStore.isOfflineMode()) {
       const progressRaw = await appStorage.getItem(STORAGE_KEYS.studentProgress);
       const progress = progressRaw ? JSON.parse(progressRaw) : {};

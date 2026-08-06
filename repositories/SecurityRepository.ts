@@ -14,8 +14,7 @@ function createId() {
 }
 
 /**
- * SecurityRepository — mock violation log.
- * Future Laravel: POST /api/security/violations, GET /api/sessions/:id/violations
+ * SecurityRepository — local violation log + Laravel POST /exam/violation.
  */
 export const SecurityRepository = {
   getMaxViolations(): number {
@@ -51,12 +50,17 @@ export const SecurityRepository = {
     const result = await LobbyRepository.recordStudentViolation(
       input.studentId,
       input.type,
+      input.message,
     );
+
+    const localCount = violations.filter((v) => v.studentId === input.studentId).length;
+    const violationCount = Math.max(result.violationCount || 0, localCount);
+    const terminated = result.terminated || violationCount >= MAX_EXAM_VIOLATIONS;
 
     return {
       violation,
-      violationCount: result.violationCount,
-      terminated: result.terminated,
+      violationCount,
+      terminated,
     };
   },
 

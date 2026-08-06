@@ -3,7 +3,7 @@ import { Text, View, StyleSheet, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { DoorOpen, Users, UserRound } from 'lucide-react-native';
-import { Button, Card, Header, Loader, StatusChip } from '@/components/ui';
+import { Button, Card, Header, SkeletonDetail, StatusChip } from '@/components/ui';
 import { useRooms, useSessions } from '@/hooks/useRepositories';
 import { LobbyRepository } from '@/repositories';
 import { QUERY_KEYS, STATUS_LABELS } from '@/constants';
@@ -53,7 +53,21 @@ export default function RoomDetailScreen() {
   );
 
   if (roomsQuery.isLoading && !room) {
-    return <Loader fullscreen label="Loading room…" />;
+    return (
+      <View style={styles.screen}>
+        <Header
+          title="Room"
+          subtitle={session?.timeLabel ?? 'Loading…'}
+          onBack={() =>
+            safeBack(router, {
+              pathname: '/(proctor)/rooms',
+              params: { sessionId: sessionId ?? '' },
+            })
+          }
+        />
+        <SkeletonDetail />
+      </View>
+    );
   }
 
   if (!room) {

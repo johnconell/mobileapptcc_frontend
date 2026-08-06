@@ -1,6 +1,8 @@
 import * as Network from 'expo-network';
 import { getApiBaseUrl } from '@/services/api';
 import { isLoopbackApiHost, requiresLanApiHost } from '@/services/apiReachability';
+import { PeerExamClient } from '@/services/peerExamClient';
+import { parsePeerQr } from '@/services/peerExamServer';
 
 export type CampusWifiGateResult = {
   ok: boolean;
@@ -69,6 +71,8 @@ export async function assertCampusWifiForJoin(options?: {
   examinationCode?: string;
   /** Scan screen always probes Hub (QR is live lobby). */
   requireServer?: boolean;
+  /** Raw scanned QR, so a peer QR is probed against the proctor phone. */
+  scannedPayload?: string;
 }): Promise<CampusWifiGateResult> {
   const wifiConnected = await isWifiConnected();
   if (!wifiConnected) {
@@ -81,6 +85,25 @@ export async function assertCampusWifiForJoin(options?: {
         'Connect this phone to the SAME Wi‑Fi as the proctor / exam computer, then scan again. ' +
         'Mobile data or a different hotspot will not work.',
     };
+  }
+
+  // Peer mode: "matching the proctor" means reaching the proctor's phone, not Laravel.
+  const peerTarget =
+    (options?.scannedPayload ? parsePeerQr(options.scannedPayload) : null) ??
+    (await PeerExamClient.getTarget());
+  if (peerTarget) {
+    const reachable = await PeerExamClient.ping(peerTarget);
+    return reachable
+      ? { ok: true, wifiConnected: true, serverReachable: true, message: null }
+      : {
+          ok: false,
+          wifiConnected: true,
+          serverReachable: false,
+          message:
+            'Wi‑Fi does not match the proctor.\n\n' +
+            `This phone cannot reach the proctor phone (${peerTarget.host}). ` +
+            'Join the SAME Wi‑Fi as the proctor (or the proctor hotspot), then scan again.',
+        };
   }
 
   const code = options?.examinationCode?.trim() ?? '';

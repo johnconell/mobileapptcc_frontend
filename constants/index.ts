@@ -35,6 +35,8 @@ export const STORAGE_KEYS = {
   offlineScheduleId: 'tcc.offline.schedule.id',
   offlineExamCode: 'tcc.offline.exam.code',
   offlineClaims: 'tcc.offline.claims',
+  /** Student side: proctor phone acting as the exam server (http://IP:PORT) */
+  peerTarget: 'tcc.peer.target',
   examCheckpoint: 'tcc.student.exam.checkpoint',
   /** SecureStore: proctor email + bcrypt hashes for offline login */
   proctorAuthCache: 'tcc.proctor.auth.cache',

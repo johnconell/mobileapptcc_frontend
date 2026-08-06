@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Header, Button, Card, Loader } from '@/components/ui';
+import { Header, Button, Card, Skeleton, SkeletonCard, SkeletonText } from '@/components/ui';
 import { OfflineExamRepository } from '@/services/offlineExamRepository';
 import { OfflineStore } from '@/services/offlineStore';
 import { getCloudApiBaseUrl, getApiBaseUrl } from '@/services/api';
@@ -76,8 +76,9 @@ export default function OfflinePrepareScreen() {
         <Card>
           <Text style={styles.title}>How it works</Text>
           <Text style={styles.bodyText}>
-            1. Admin prepares schedules, names, and questions in the cloud (Chrome).{'\n'}
-            2. On school Wi‑Fi (or any internet), download the pack to this phone.{'\n'}
+            1. Admin imports students and sends examination keys by exam date.{'\n'}
+            2. On school Wi‑Fi, download (or re-download) the pack so this phone gets the latest
+            schedules, names, passkeys, and questions.{'\n'}
             3. Take / proctor the exam with mobile data OFF — everything runs from cache.{'\n'}
             4. When online again, sync results to the admin cloud database.
           </Text>
@@ -93,7 +94,12 @@ export default function OfflinePrepareScreen() {
           <Text style={styles.meta}>Pending results to sync: {pending}</Text>
         </Card>
 
-        {busy ? <Loader label="Working…" /> : null}
+        {busy ? (
+          <SkeletonCard>
+            <Skeleton height={13} width="50%" />
+            <SkeletonText lines={2} />
+          </SkeletonCard>
+        ) : null}
 
         <Button
           title="Download exam pack (needs internet)"

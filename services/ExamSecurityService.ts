@@ -1,7 +1,8 @@
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import Constants from 'expo-constants';
 import * as ScreenCapture from 'expo-screen-capture';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import { BackHandler, Platform } from 'react-native';
+import { BackHandler, Dimensions, Platform } from 'react-native';
 import type { ExamSecurityCapabilities } from '@/types';
 
 const EXAM_MODE_KEY = 'tcc-exam-kiosk';
@@ -20,24 +21,32 @@ type NativeKioskBridge = {
 
 /**
  * Optional native module bridge for Android Device Owner / Lock Task Mode.
- * Replace `getNativeBridge()` later with a real native module without changing UI.
+ * Split-screen is already blocked by plugins/withExamSecurity.js
+ * (resizeableActivity=false) in development/production builds.
  */
 function getNativeBridge(): NativeKioskBridge | null {
-  // Future: return NativeModules.TccExamKiosk or expo-modules native package.
   return null;
 }
 
 /**
  * ExamSecurityService — Secure Examination / Kiosk Mode.
  *
- * Expo SDK 54 provides maximum available app-level protections.
- * System-level kiosk (Recent Apps, Status Bar, Nav Bar, Split Screen hard-block)
- * requires Android Device Owner Lock Task Mode — prepared via native bridge stubs.
+ * Build-time (plugins/withExamSecurity.js):
+ *   - Android: resizeableActivity=false, supportsPictureInPicture=false
+ * Runtime (this service + expo-screen-capture):
+ *   - FLAG_SECURE (blocks screenshots and screen recordings on Android)
+ *   - AppState monitoring (tab switch / home button → violation)
+ *   - Hardware back lock
+ * System-level kiosk (Recent Apps / status bar) still needs Device Owner.
  */
 export const ExamSecurityService = {
   async getCapabilities(): Promise<ExamSecurityCapabilities> {
     const captureAvailable = await ScreenCapture.isAvailableAsync().catch(() => false);
     const native = getNativeBridge();
+    // The withExamSecurity config plugin sets resizeableActivity=false on Android
+    // builds. Expo Go cannot honour that, so report false there.
+    const buildBlocksSplitScreen =
+      Platform.OS === 'android' && Constants.appOwnership !== 'expo';
 
     return {
       keepAwake: true,
@@ -49,7 +58,7 @@ export const ExamSecurityService = {
       backButtonLock: true,
       kioskNativeLockTask: Boolean(native?.startLockTask),
       immersiveSystemUi: Boolean(native?.setImmersiveMode),
-      multiWindowBlock: Boolean(native?.blockMultiWindow),
+      multiWindowBlock: buildBlocksSplitScreen || Boolean(native?.blockMultiWindow),
     };
   },
 
@@ -85,6 +94,8 @@ export const ExamSecurityService = {
       }
     }
 
+    // FLAG_SECURE on Android: black screen for screenshots AND screen recordings.
+    // Must run in a development/production build — Expo Go ignores this flag.
     if (capabilities.preventScreenCapture) {
       try {
         await ScreenCapture.preventScreenCaptureAsync(EXAM_MODE_KEY);
@@ -195,10 +206,30 @@ export const ExamSecurityService = {
   },
 
   /**
-   * Placeholder for native multi-window / PiP detection callbacks.
-   * Wired when Lock Task / Device Owner module is integrated.
+   * Soft multi-window detector: when the window shrinks well below the screen
+   * (typical of split-screen), fire a violation. Hard-block is the config plugin.
    */
-  addMultiWindowListener(_onDetected: () => void): ExamSecurityListener {
-    return { remove: () => undefined };
+  addMultiWindowListener(onDetected: () => void): ExamSecurityListener {
+    const screen = Dimensions.get('screen');
+    let fired = false;
+
+    const onChange = ({ window }: { window: { width: number; height: number } }) => {
+      const ratio =
+        (window.width * window.height) / Math.max(1, screen.width * screen.height);
+      // Below ~70% of the physical screen usually means split-screen / freeform.
+      if (ratio < 0.7 && !fired) {
+        fired = true;
+        onDetected();
+        // Allow another detection if the student returns to full screen then splits again.
+        setTimeout(() => {
+          fired = false;
+        }, 4000);
+      }
+    };
+
+    const subscription = Dimensions.addEventListener('change', onChange);
+    return {
+      remove: () => subscription.remove(),
+    };
   },
 };

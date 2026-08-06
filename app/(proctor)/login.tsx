@@ -11,7 +11,7 @@ import { useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Shield } from 'lucide-react-native';
-import { Button, Header, Input, Card, Loader } from '@/components/ui';
+import { Button, Header, Input, Card, SkeletonForm } from '@/components/ui';
 import {
   proctorLoginSchema,
   type ProctorLoginValues,
@@ -122,7 +122,12 @@ export default function ProctorLoginScreen() {
   });
 
   if (booting || preparing) {
-    return <Loader fullscreen label={prepareLabel} />;
+    return (
+      <View style={styles.screen}>
+        <Header title="Proctor Login" subtitle={prepareLabel} />
+        <SkeletonForm fields={2} />
+      </View>
+    );
   }
 
   return (

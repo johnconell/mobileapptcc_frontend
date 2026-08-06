@@ -2,7 +2,7 @@ import React, { useEffect, useMemo } from 'react';
 import { FlatList, Pressable, Text, View, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { CheckCircle2, ChevronRight, DoorOpen, Users, UserRound } from 'lucide-react-native';
-import { Card, EmptyState, Header, Loader, StatusChip } from '@/components/ui';
+import { Card, EmptyState, Header, SkeletonList, StatusChip } from '@/components/ui';
 import { useRooms, useSessions } from '@/hooks/useRepositories';
 import { AuthRepository } from '@/repositories';
 import { useProctorStore } from '@/stores';
@@ -62,7 +62,23 @@ export default function RoomsScreen() {
   const endedCount = rooms.filter((r) => r.status === 'ended').length;
 
   if (roomsQuery.isLoading) {
-    return <Loader fullscreen label="Loading examination rooms…" />;
+    return (
+      <View style={styles.screen}>
+        <Header
+          title="Examination Rooms"
+          subtitle={session?.timeLabel ?? 'Loading…'}
+          onBack={() =>
+            safeBack(router, {
+              pathname: '/(proctor)/sessions',
+              params: { scheduleId: session?.scheduleId ?? '' },
+            })
+          }
+        />
+        <View style={styles.list}>
+          <SkeletonList rows={5} showAvatar={false} />
+        </View>
+      </View>
+    );
   }
 
   return (

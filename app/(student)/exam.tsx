@@ -40,6 +40,7 @@ export default function ExamScreen() {
   const [reconnectError, setReconnectError] = useState<string | null>(null);
   const [offlineMode, setOfflineMode] = useState(false);
   const restoredRef = useRef(false);
+  const autoSubmittedRef = useRef(false);
 
   const questions = useExamStore((s) => s.questions);
   const answers = useExamStore((s) => s.answers);
@@ -249,17 +250,16 @@ export default function ExamScreen() {
     if (!questions.length) router.replace('/');
   }, [questions.length, router]);
 
+  // Time up / proctor ended: submit even while a security overlay is showing,
+  // otherwise a paused student would sit on an expired exam forever.
   useEffect(() => {
-    if (remainingSeconds === 0 && questions.length > 0 && !paused) {
+    if (autoSubmittedRef.current) return;
+    const ended = lobbyQuery.data?.status === 'ended';
+    if (questions.length > 0 && (remainingSeconds <= 0 || ended)) {
+      autoSubmittedRef.current = true;
       goSubmit('time_expired');
     }
-  }, [remainingSeconds, questions.length, paused, goSubmit]);
-
-  useEffect(() => {
-    if (lobbyQuery.data?.status === 'ended' && questions.length > 0) {
-      goSubmit('time_expired');
-    }
-  }, [lobbyQuery.data?.status, questions.length, goSubmit]);
+  }, [remainingSeconds, questions.length, lobbyQuery.data?.status, goSubmit]);
 
   const progress = questions.length ? answeredCount() / questions.length : 0;
   const missingLabel = useMemo(() => {

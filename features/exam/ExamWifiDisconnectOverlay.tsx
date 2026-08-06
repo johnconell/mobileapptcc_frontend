@@ -27,14 +27,15 @@ export function ExamWifiDisconnectOverlay({
           <View style={styles.iconWrap}>
             <WifiOff size={36} color={colors.danger} />
           </View>
-          <Text style={styles.title}>Disconnected from Wi‑Fi</Text>
+          <Text style={styles.title}>Examination locked</Text>
           <Text style={styles.message}>
-            Your examination is locked. Turn campus Wi‑Fi back on, then ask your
-            proctor for the 6-digit reconnect code shown on their lobby screen.
-            Do not enter the examination / QR code.
+            Wi‑Fi dropped or the exam server lost your heartbeat. Turn campus Wi‑Fi back on,
+            then ask your proctor for the 6-digit reconnect PIN on their lobby (shown next to
+            your name). Do not enter the room examination / QR code — that will not unlock this
+            screen.
           </Text>
           <Input
-            label="6-digit reconnect code"
+            label="6-digit reconnect PIN"
             value={code}
             onChangeText={(text) => setCode(text.replace(/\D/g, '').slice(0, 6))}
             keyboardType="number-pad"

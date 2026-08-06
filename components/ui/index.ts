@@ -8,6 +8,16 @@ export { StatusChip } from './StatusChip';
 export { ProgressBar } from './ProgressBar';
 export { Dialog, ConfirmationModal } from './Dialog';
 export { Loader } from './Loader';
+export {
+  Skeleton,
+  SkeletonCircle,
+  SkeletonText,
+  SkeletonCard,
+  SkeletonList,
+  SkeletonForm,
+  SkeletonDetail,
+  SkeletonScreen,
+} from './Skeleton';
 export { EmptyState } from './EmptyState';
 export { CountdownTimer } from './CountdownTimer';
 export { SearchBar } from './SearchBar';

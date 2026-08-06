@@ -6,7 +6,14 @@ import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { Keyboard, QrCode, Shield } from 'lucide-react-native';
 import { APP_NAME, SCHOOL_NAME } from '@/constants';
 import { colors, shadows } from '@/theme';
-import { Card, FloatingButton, Loader } from '@/components/ui';
+import {
+  Card,
+  FloatingButton,
+  Skeleton,
+  SkeletonCard,
+  SkeletonCircle,
+  SkeletonText,
+} from '@/components/ui';
 import { SchoolLogo } from '@/features/student/SchoolLogo';
 import { ensureExamPackCached } from '@/services/ensureExamPack';
 import { getCloudApiBaseUrl, getApiBaseUrl } from '@/services/api';
@@ -66,7 +73,21 @@ export default function HomeScreen() {
 
   if (preparing) {
     return (
-      <Loader fullscreen label="Please wait — preparing exam content on this phone…" />
+      <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
+        <View style={styles.prepareSkeleton}>
+          <SkeletonCircle size={96} />
+          <Skeleton height={26} width="70%" />
+          <Skeleton height={12} width="85%" />
+          <SkeletonCard>
+            <Skeleton height={16} width="55%" />
+            <SkeletonText lines={2} />
+            <Skeleton height={52} radius={14} />
+          </SkeletonCard>
+          <Text style={styles.prepareNote}>
+            Preparing exam content on this phone…
+          </Text>
+        </View>
+      </View>
     );
   }
 
@@ -193,6 +214,19 @@ const styles = StyleSheet.create({
   },
   proctorText: { fontSize: 12, fontWeight: '700', color: colors.primary },
   content: { flex: 1, paddingHorizontal: 20, gap: 20, justifyContent: 'center' },
+  prepareSkeleton: {
+    flex: 1,
+    paddingHorizontal: 20,
+    gap: 16,
+    justifyContent: 'center',
+    alignItems: 'stretch',
+  },
+  prepareNote: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.inkMuted,
+    textAlign: 'center',
+  },
   hero: { alignItems: 'center', gap: 8, paddingBottom: 8 },
   school: {
     marginTop: 4,

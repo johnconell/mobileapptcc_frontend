@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Header, Button, Card, Loader } from '@/components/ui';
+import { Header, Button, Card, Skeleton, SkeletonText } from '@/components/ui';
 import { CampusWifiBlockedCard } from '@/features/student/CampusWifiBlockedCard';
 import { useCampusWifiJoinGate } from '@/hooks/useCampusWifiJoinGate';
 import { LobbyRepository, ScheduleRepository } from '@/repositories';
@@ -15,6 +15,7 @@ export default function ScanScreen() {
   const [scanning, setScanning] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [wifiBlocked, setWifiBlocked] = useState(false);
   const setScannedSession = useStudentStore((s) => s.setScannedSession);
   const wifiGate = useCampusWifiJoinGate({ requireServer: true });
   const lastScanAt = useRef(0);
@@ -29,11 +30,12 @@ export default function ScanScreen() {
     setScanning(false);
     setError(null);
 
-    const gate = await wifiGate.refresh();
+    // Verdict comes right after the scan: does this phone's Wi‑Fi reach the proctor?
+    const gate = await wifiGate.refresh(raw);
     if (!gate.ok) {
       setError(gate.message ?? 'Wi‑Fi / LAN does not match the proctor network.');
+      setWifiBlocked(true);
       setBusy(false);
-      setScanning(true);
       return;
     }
 
@@ -46,7 +48,7 @@ export default function ScanScreen() {
     }
 
     setScannedSession(resolved.schedule.id, resolved.session.id);
-    router.replace('/(student)/verify');
+    router.replace('/(student)/passkey');
   };
 
   /** Dev helper: reuse a stored exam code, otherwise send user to manual entry. */
@@ -57,8 +59,8 @@ export default function ScanScreen() {
       const gate = await wifiGate.refresh();
       if (!gate.ok) {
         setError(gate.message ?? 'Wi‑Fi / LAN does not match the proctor network.');
+        setWifiBlocked(true);
         setBusy(false);
-        setScanning(true);
         return;
       }
       const stored = await LobbyRepository.getLobby();
@@ -76,11 +78,21 @@ export default function ScanScreen() {
   };
 
   if (!permission) {
-    return <Loader fullscreen label="Checking camera permission…" />;
+    return (
+      <View style={styles.screen}>
+        <Header title="Scan QR Code" subtitle="Checking camera permission…" />
+        <View style={styles.permission}>
+          <Skeleton height={280} radius={20} />
+          <SkeletonText lines={2} />
+          <Skeleton height={52} radius={14} />
+        </View>
+      </View>
+    );
   }
 
-  // Show Wi‑Fi block with enter-code escape — but don't hide the only path forever.
-  if (!wifiGate.ok && !wifiGate.checking) {
+  // The Wi‑Fi verdict is delivered when the QR is scanned (handlePayload re-checks),
+  // so the camera stays available instead of being blocked before the applicant scans.
+  if (wifiBlocked) {
     return (
       <View style={styles.screen}>
         <Header title="Scan QR Code" onBack={() => router.back()} />
@@ -88,30 +100,42 @@ export default function ScanScreen() {
           <CampusWifiBlockedCard
             title={
               wifiGate.wifiConnected && wifiGate.serverReachable === false
-                ? 'Wi‑Fi / LAN does not match'
+                ? 'Wi‑Fi / LAN does not match the proctor'
                 : 'Campus Wi‑Fi required'
             }
             message={
+              error ??
               wifiGate.message ??
-              'Connect to the same Wi‑Fi as the proctor before scanning.'
+              'Connect to the same Wi‑Fi as the proctor, then scan again.'
             }
             checking={wifiGate.checking}
-            onRetry={() => void wifiGate.refresh()}
+            onRetry={() => {
+              setWifiBlocked(false);
+              setError(null);
+              setScanning(true);
+              void wifiGate.refresh();
+            }}
+          />
+          <Button
+            title="Scan Again"
+            fullWidth
+            onPress={() => {
+              setWifiBlocked(false);
+              setError(null);
+              setScanning(true);
+            }}
+            style={{ marginTop: 12 }}
           />
           <Button
             title="Enter Examination Code"
             variant="outline"
             fullWidth
             onPress={() => router.replace('/(student)/enter-code')}
-            style={{ marginTop: 12 }}
+            style={{ marginTop: 8 }}
           />
         </View>
       </View>
     );
-  }
-
-  if (wifiGate.checking && !wifiGate.ok) {
-    return <Loader fullscreen label="Checking exam Wi‑Fi…" />;
   }
 
   if (!permission.granted) {
@@ -184,7 +208,7 @@ export default function ScanScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
-  permission: { flex: 1, justifyContent: 'center', padding: 20 },
+  permission: { flex: 1, justifyContent: 'center', padding: 20, gap: 16 },
   title: { fontSize: 18, fontWeight: '700', color: colors.ink, marginBottom: 8 },
   body: { fontSize: 14, lineHeight: 21, color: colors.inkSecondary, marginBottom: 16 },
   cameraWrap: {

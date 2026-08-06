@@ -2,12 +2,21 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, BackHandler, ScrollView, Text, View, StyleSheet } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
 import Animated, { FadeInDown } from 'react-native-reanimated';
-import { Header, Card, Loader, StatusChip, Button } from '@/components/ui';
+import { Check } from 'lucide-react-native';
+import { Header, Card, SkeletonDetail, StatusChip, Button } from '@/components/ui';
 import { LobbyWaitingAnimation } from '@/features/lobby/LobbyWaitingAnimation';
 import { useLobby } from '@/hooks/useRepositories';
 import { QuestionRepository, StudentRepository } from '@/repositories';
 import { useExamStore, useLobbyStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
+
+const LOBBY_RULES = [
+  'Do not take screenshots or record the screen.',
+  'Do not switch apps or leave the examination screen.',
+  'Do not copy or share questions with anyone.',
+  'Do not use AI tools, notes, or other devices.',
+  'Stay on campus exam Wi‑Fi for the entire exam.',
+];
 
 export default function StudentLobbyScreen() {
   const router = useRouter();
@@ -30,7 +39,6 @@ export default function StudentLobbyScreen() {
     }
   }, [scannedSessionId, verifiedStudent, router]);
 
-  // Keep student in waiting lobby — block hardware / gesture back to registration.
   useEffect(() => {
     navigation.setOptions({
       gestureEnabled: false,
@@ -85,7 +93,7 @@ export default function StudentLobbyScreen() {
     if (!verifiedStudent || cancelling) return;
     Alert.alert(
       'Cancel registration?',
-      'This clears your selected name and Gmail so you can choose again. The proctor will see you leave the lobby.',
+      'This clears your check-in so you can enter your examination key again. The proctor will see you leave the lobby.',
       [
         { text: 'Stay', style: 'cancel' },
         {
@@ -99,7 +107,7 @@ export default function StudentLobbyScreen() {
                 setVerifiedStudent(null);
                 setSelectedStudent(null);
                 setSnapshot(null);
-                router.replace('/(student)/verify');
+                router.replace('/(student)/passkey');
               } catch (error) {
                 Alert.alert(
                   'Unable to cancel',
@@ -125,7 +133,12 @@ export default function StudentLobbyScreen() {
   ]);
 
   if (!lobbyQuery.data || !verifiedStudent) {
-    return <Loader fullscreen label="Joining waiting lobby…" />;
+    return (
+      <View style={styles.screen}>
+        <Header title="Waiting Lobby" subtitle="Joining…" onBack={undefined} />
+        <SkeletonDetail />
+      </View>
+    );
   }
 
   const { schedule, session } = lobbyQuery.data;
@@ -135,7 +148,6 @@ export default function StudentLobbyScreen() {
       <Header
         title="Waiting Lobby"
         subtitle="Waiting for Proctor..."
-        // Stay on lobby — do not return to name/Gmail registration via Back.
         onBack={undefined}
       />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -145,7 +157,7 @@ export default function StudentLobbyScreen() {
           <Text style={styles.title}>Waiting for Proctor...</Text>
           <Text style={styles.sub}>
             Stay on this screen. You will enter the examination automatically when the proctor
-            starts. Use Cancel Registration only if you picked the wrong name or Gmail.
+            starts.
           </Text>
         </Animated.View>
 
@@ -153,11 +165,25 @@ export default function StudentLobbyScreen() {
           <Text style={styles.label}>Student</Text>
           <Text style={styles.value}>{verifiedStudent.fullName}</Text>
           <Text style={styles.line}>Gmail: {verifiedStudent.email || '—'}</Text>
+          <Text style={styles.line}>Program: {verifiedStudent.programName || '—'}</Text>
           <Text style={styles.line}>Examination: {schedule.name}</Text>
           <Text style={styles.line}>Date: {schedule.examinationDate}</Text>
           <Text style={styles.line}>Time: {session.timeLabel}</Text>
           <Text style={styles.line}>Batch: {session.batchNumber}</Text>
           <Text style={styles.line}>Venue: {session.venue}</Text>
+        </Card>
+
+        <Card delay={140}>
+          <Text style={styles.label}>Examination rules</Text>
+          <Text style={styles.rulesIntro}>
+            By waiting here you acknowledge these rules. Violations are reported to the proctor.
+          </Text>
+          {LOBBY_RULES.map((rule) => (
+            <View key={rule} style={styles.ruleRow}>
+              <Check size={16} color={colors.success} />
+              <Text style={styles.ruleText}>{rule}</Text>
+            </View>
+          ))}
         </Card>
 
         <Button
@@ -168,7 +194,7 @@ export default function StudentLobbyScreen() {
           onPress={cancelRegistration}
         />
         <Text style={styles.cancelHint}>
-          Wrong name or Gmail? Cancel to return to the student list and select again.
+          Wrong key or identity? Cancel to return and enter your examination key again.
         </Text>
       </ScrollView>
     </View>
@@ -196,6 +222,25 @@ const styles = StyleSheet.create({
   },
   value: { fontSize: 18, fontWeight: '700', color: colors.ink, marginBottom: 10 },
   line: { fontSize: 14, color: colors.inkSecondary, marginBottom: 6, fontWeight: '500' },
+  rulesIntro: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.inkSecondary,
+    marginBottom: 12,
+  },
+  ruleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 10,
+  },
+  ruleText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.ink,
+    fontWeight: '500',
+  },
   cancelHint: {
     fontSize: 12,
     lineHeight: 18,

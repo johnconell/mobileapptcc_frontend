@@ -92,6 +92,10 @@ export function useExamSecurity(options: UseExamSecurityOptions) {
     onScreenshot: () => {
       void handleSecurityEvent('screenshot');
     },
+    onMultiWindow: () => {
+      // Split-screen / freeform — counted as leaving the examination.
+      void handleSecurityEvent('app_inactive');
+    },
   });
 
   useAppState({

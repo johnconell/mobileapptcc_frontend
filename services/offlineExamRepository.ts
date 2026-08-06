@@ -32,7 +32,12 @@ function cloudBase(): string {
 
 async function cloudFetch<T>(
   path: string,
-  options: { method?: string; body?: unknown; token?: string | null } = {},
+  options: {
+    method?: string;
+    body?: unknown;
+    token?: string | null;
+    timeoutMs?: number;
+  } = {},
 ): Promise<T> {
   const base = cloudBase();
   const loopbackIssue = describeApiReachabilityProblem(base);
@@ -45,12 +50,18 @@ async function cloudFetch<T>(
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
 
   const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+  // Without this the request sits on the OS TCP timeout (~30–60s) when the phone
+  // is on a different Wi‑Fi, so the student sees a frozen screen instead of a reason.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 8000);
+
   let res: Response;
   try {
     res = await fetch(url, {
       method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
       headers,
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
     });
   } catch {
     throw new Error(
@@ -59,6 +70,8 @@ async function cloudFetch<T>(
         `Cannot reach ${base}. Ensure Laravel listens on 0.0.0.0:8000 and the firewall allows port 8000.`,
       ),
     );
+  } finally {
+    clearTimeout(timer);
   }
 
   const json = await res.json().catch(() => ({}));
@@ -71,7 +84,7 @@ async function cloudFetch<T>(
   return json as T;
 }
 
-function toChoiceRecord(
+export function toChoiceRecord(
   options: Record<string, string> | string[] | null | undefined,
 ): Record<ChoiceKey, string> {
   const blank: Record<ChoiceKey, string> = { A: '', B: '', C: '', D: '' };
@@ -88,7 +101,7 @@ function toChoiceRecord(
   return blank;
 }
 
-function selectedQuestions(pack: OfflinePack): Array<{
+export function selectedQuestions(pack: OfflinePack): Array<{
   id: number;
   stem: string;
   options: Record<string, string> | string[] | null;
@@ -121,7 +134,74 @@ function selectedQuestions(pack: OfflinePack): Array<{
   return rows;
 }
 
-function grade(
+function shuffled<T>(items: T[]): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+/**
+ * Mirror the server ordering (ExamSessionService::questionsForSession): questions
+ * stay grouped by category, shuffled only within their own category. Category
+ * order follows the pack unless shuffle_categories is on.
+ */
+function orderQuestionsByCategory<T extends { category?: string }>(
+  rows: T[],
+  options: { shuffleQuestions: boolean; shuffleCategories: boolean },
+): T[] {
+  const groups = new Map<string, T[]>();
+  for (const row of rows) {
+    const key = row.category || 'general';
+    const group = groups.get(key);
+    if (group) {
+      group.push(row);
+    } else {
+      groups.set(key, [row]);
+    }
+  }
+
+  const categoryOrder = options.shuffleCategories
+    ? shuffled([...groups.keys()])
+    : [...groups.keys()];
+
+  const ordered: T[] = [];
+  for (const category of categoryOrder) {
+    const group = groups.get(category) ?? [];
+    ordered.push(...(options.shuffleQuestions ? shuffled(group) : group));
+  }
+  return ordered;
+}
+
+/**
+ * Build the student-facing question list from a pack. Shared by the offline
+ * path and the proctor peer server so both phones see the same shape.
+ */
+export function buildExamQuestions(pack: OfflinePack): Question[] {
+  const settings = pack.examination_settings;
+  const shuffleBoth = settings?.shuffle_both === true;
+  const ordered = orderQuestionsByCategory(selectedQuestions(pack), {
+    shuffleQuestions: shuffleBoth || settings?.shuffle_questions !== false,
+    shuffleCategories: shuffleBoth || settings?.shuffle_categories === true,
+  });
+
+  return ordered.map((q, index) => ({
+    id: String(q.id),
+    number: index + 1,
+    subjectId: q.category || 'general',
+    category: q.category,
+    type: 'multiple_choice' as const,
+    question: q.stem,
+    choices: toChoiceRecord(q.options),
+    correctAnswer: (String(q.correct_answer || 'A').toUpperCase().charAt(0) ||
+      'A') as ChoiceKey,
+    explanation: '',
+  }));
+}
+
+export function grade(
   pack: OfflinePack,
   answers: Record<string, string | null>,
 ): Pick<
@@ -273,6 +353,57 @@ export const OfflineExamRepository = {
     });
   },
 
+  async validatePasskey(examinationCode: string, passkey: string) {
+    const pack = await OfflineStore.getPack();
+    if (!pack) return null;
+    const parsed = this.parseOfflineCode(examinationCode);
+    if (!parsed) return null;
+    const normalized = passkey.trim().toUpperCase();
+    const reg = pack.registrations.find(
+      (r) =>
+        Number(r.examination_schedule_id) === parsed.scheduleId &&
+        String(r.exam_passkey || '').toUpperCase() === normalized,
+    );
+    if (!reg) return null;
+    const a = pack.applicants.find((x) => Number(x.id) === Number(reg.applicant_id));
+    if (!a) return null;
+    const name = (a.name || '').trim() || 'Student';
+    const parts = name.trim().split(/\s+/);
+    const schedule = pack.schedules.find((s) => s.id === parsed.scheduleId);
+    return {
+      student: {
+        id: String(a.id),
+        studentId: a.applicant_code || String(a.id),
+        firstName: parts[0] || name,
+        middleName: '',
+        lastName: parts.slice(1).join(' ') || '',
+        fullName: name,
+        email: a.gmail || a.email || '',
+        programId: a.course_applied || '',
+        programCode: a.course_applied || '',
+        programName: a.course_applied || '',
+        sex: 'Male' as const,
+        avatarInitials: name
+          .split(/\s+/)
+          .slice(0, 2)
+          .map((p) => p[0] || '')
+          .join('')
+          .toUpperCase(),
+        registration_id: reg.id,
+        selectionStatus: 'ready' as const,
+        selectable: true,
+      },
+      schedule: schedule
+        ? {
+            id: schedule.id,
+            title: schedule.title,
+            exam_date: schedule.exam_date,
+            time_slot: schedule.time_slot,
+          }
+        : undefined,
+    };
+  },
+
   async getLobbyStudentsForSchedule(scheduleId: string) {
     const roster = await this.getStudentsForSchedule(scheduleId);
     const now = new Date().toISOString();
@@ -296,21 +427,7 @@ export const OfflineExamRepository = {
   async getQuestions(): Promise<Question[]> {
     const pack = await OfflineStore.getPack();
     if (!pack) throw new Error('No offline exam pack. Download while online first.');
-    const rows = selectedQuestions(pack);
-    const shuffle = pack.examination_settings?.shuffle_questions !== false;
-    const ordered = shuffle ? [...rows].sort(() => Math.random() - 0.5) : rows;
-    return ordered.map((q, index) => ({
-      id: String(q.id),
-      number: index + 1,
-      subjectId: q.category || 'general',
-      category: q.category,
-      type: 'multiple_choice' as const,
-      question: q.stem,
-      choices: toChoiceRecord(q.options),
-      correctAnswer: (String(q.correct_answer || 'A').toUpperCase().charAt(0) ||
-        'A') as ChoiceKey,
-      explanation: '',
-    }));
+    return buildExamQuestions(pack);
   },
 
   /** Offline codes: OFF-12-R3 (schedule 12, room 3). Legacy OFF-12 still accepted. */

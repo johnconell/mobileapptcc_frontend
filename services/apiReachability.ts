@@ -52,11 +52,20 @@ export function studentPackDownloadFailureMessage(
     );
   }
 
+  const host = (() => {
+    try {
+      return new URL(apiBaseUrl).host;
+    } catch {
+      return apiBaseUrl;
+    }
+  })();
+
   return (
-    'Cannot download exam data right now.\n\n' +
-    '1. Connect to the same Wi‑Fi as the exam computer (or internet if using cloud).\n' +
+    'Wi‑Fi / LAN does not match the proctor exam network.\n\n' +
+    `This phone cannot reach the exam server (${host}).\n\n` +
+    '1. Connect to the SAME Wi‑Fi as the proctor / exam computer.\n' +
     '2. Ask the proctor to confirm the exam server is running.\n' +
     '3. Try again.\n\n' +
-    (technical ? `Details: ${technical}` : `Server: ${apiBaseUrl}`)
+    (technical ? `Details: ${technical}` : '')
   );
 }

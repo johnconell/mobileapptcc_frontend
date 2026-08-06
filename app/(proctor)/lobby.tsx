@@ -8,8 +8,11 @@ import {
   Card,
   ConfirmationModal,
   Header,
-  Loader,
   QrCodePanel,
+  Skeleton,
+  SkeletonCard,
+  SkeletonList,
+  SkeletonText,
   StatusChip,
   StatisticCard,
 } from '@/components/ui';
@@ -17,11 +20,13 @@ import { LobbyStudentCard } from '@/features/proctor/LobbyStudentCard';
 import { useLobby } from '@/hooks/useRepositories';
 import { LobbyRepository } from '@/repositories';
 import { QUERY_KEYS } from '@/constants';
+import { PeerExamServer } from '@/services/peerExamServer';
 import { useLobbyStore, useProctorStore } from '@/stores';
 import { colors } from '@/theme';
 import type { LobbyStudent } from '@/types';
 import { safeBack } from '@/utils';
 import {
+  // keep existing imports below — do not break the rest of this file
   Copy,
   Users,
   UserCheck,
@@ -31,7 +36,7 @@ import {
   ShieldAlert,
 } from 'lucide-react-native';
 
-function formatTime(iso: string | null) {
+function formatTime(iso: string | null | undefined) {
   if (!iso) return '—';
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
@@ -74,6 +79,8 @@ export default function ProctorLobbyScreen() {
   const [showHistory, setShowHistory] = useState(false);
   const [reconnectCode, setReconnectCode] = useState<string | null>(null);
   const [reconnectExpiresAt, setReconnectExpiresAt] = useState<string | null>(null);
+  const [peerHost, setPeerHost] = useState<string | null>(null);
+  const [hosting, setHosting] = useState(PeerExamServer.info());
 
   const lobbyQuery = useLobby(
     ready && !openError ? sessionId : undefined,
@@ -105,6 +112,8 @@ export default function ProctorLobbyScreen() {
       knownStudentIds.current = new Set();
       checkInReady.current = false;
       try {
+        // Resume a peer session that survived an app kill, then load the lobby.
+        await PeerExamServer.restore();
         const snapshot = await LobbyRepository.fetchProctorLobby(
           sessionId,
           roomId,
@@ -124,6 +133,7 @@ export default function ProctorLobbyScreen() {
         );
         checkInReady.current = true;
         setSnapshot(snapshot);
+        setPeerHost(PeerExamServer.info().host);
         await queryClient.invalidateQueries({
           queryKey: QUERY_KEYS.lobby(sessionId, roomId),
         });
@@ -141,6 +151,16 @@ export default function ProctorLobbyScreen() {
       cancelled = true;
     };
   }, [sessionId, roomId, examSessionId, setSnapshot, queryClient]);
+
+  // Peer mode: push updates instantly when a student joins / answers / violates.
+  useEffect(() => {
+    return PeerExamServer.subscribe(() => {
+      setPeerHost(PeerExamServer.info().host);
+      void queryClient.invalidateQueries({
+        queryKey: QUERY_KEYS.lobby(sessionId, roomId),
+      });
+    });
+  }, [queryClient, sessionId, roomId]);
 
   useEffect(() => {
     if (lobbyQuery.data) {
@@ -288,7 +308,19 @@ export default function ProctorLobbyScreen() {
   };
 
   if (!ready) {
-    return <Loader fullscreen label="Loading examination lobby…" />;
+    return (
+      <View style={styles.screen}>
+        <Header title="Examination Lobby" subtitle="Loading…" onBack={goBack} />
+        <View style={styles.lobbySkeleton}>
+          <SkeletonCard>
+            <Skeleton height={16} width="50%" />
+            <SkeletonText lines={2} />
+            <Skeleton height={180} radius={16} />
+          </SkeletonCard>
+          <SkeletonList rows={4} />
+        </View>
+      </View>
+    );
   }
 
   if (openError || !lobby) {
@@ -318,11 +350,11 @@ export default function ProctorLobbyScreen() {
 
   const copyCode = async () => {
     try {
-      await Clipboard.setStringAsync(lobby.examinationCode);
+      await Clipboard.setStringAsync(lobby.examinationCode ?? '');
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
-      Alert.alert('Examination Code', lobby.examinationCode);
+      Alert.alert('Examination Code', lobby.examinationCode ?? '');
     }
   };
 
@@ -367,12 +399,23 @@ export default function ProctorLobbyScreen() {
             </Card>
 
             <Card delay={40}>
+              {peerHost ? (
+                <View style={styles.peerBanner}>
+                  <Text style={styles.peerTitle}>Hosting on this phone</Text>
+                  <Text style={styles.peerBody}>
+                    Students join over Wi‑Fi at {peerHost}. Keep this screen open —
+                    Laravel does not need to be running.
+                  </Text>
+                </View>
+              ) : null}
               <QrCodePanel
                 value={lobby.qrValue}
                 note={
                   lobby.status === 'in_progress'
                     ? 'Examination in progress. New QR scans are blocked.'
-                    : `Room-specific QR for ${lobby.roomName || lobby.session.roomName || lobby.session.venue}. Other rooms have different codes.`
+                    : peerHost
+                      ? `Students scan this QR to reach THIS phone (${peerHost}). Same Wi‑Fi required — no Laravel.`
+                      : `Room-specific QR for ${lobby.roomName || lobby.session.roomName || lobby.session.venue}. Other rooms have different codes.`
                 }
               />
               <View style={styles.codeBlock}>
@@ -381,7 +424,9 @@ export default function ProctorLobbyScreen() {
                 </Text>
                 <Text style={styles.codeValue}>{lobby.examinationCode}</Text>
                 <Text style={styles.codeHint}>
-                  Unique to this room. Students in another room need that room’s code/QR.
+                  {peerHost
+                    ? 'Unique to this room. The QR also carries this phone’s Wi‑Fi address.'
+                    : 'Unique to this room. Students in another room need that room’s code/QR.'}
                 </Text>
               </View>
             </Card>
@@ -605,8 +650,30 @@ export default function ProctorLobbyScreen() {
             <Text style={styles.sectionHint}>
               {lobby.waitingCount} waiting to start · {lobby.takingCount} taking ·{' '}
               {lobby.connectedCount} joined of {lobby.registeredCount} registered. Tap a student
-              for details. Disconnected students show a 6-digit reconnect code.
+              for details. Disconnected students show a 6-digit reconnect PIN (not the exam code).
             </Text>
+
+            {(lobby.recentViolations?.length ?? 0) > 0 ? (
+              <Card>
+                <Text style={styles.historyTitle}>Security violations</Text>
+                {(lobby.recentViolations ?? []).slice(0, 8).map((v) => (
+                  <View key={String(v.id)} style={styles.historyRow}>
+                    <Text style={[styles.historyKind, styles.historyDisconnect]}>
+                      {String(v.type).replace(/_/g, ' ')}
+                    </Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.historyBody}>
+                        {v.studentName}: {v.message || v.type}
+                      </Text>
+                      <Text style={styles.historyTime}>
+                        {formatTime(v.occurredAt)} · warning #{v.violationCount}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </Card>
+            ) : null}
+
             <Button
               title={
                 showHistory
@@ -767,12 +834,13 @@ export default function ProctorLobbyScreen() {
 
               {selected.status === 'disconnected' ? (
                 <View style={styles.reconnectBox}>
-                  <Text style={styles.reconnectLabel}>Reconnect code (tell the student)</Text>
+                  <Text style={styles.reconnectLabel}>Reconnect PIN (tell the student)</Text>
                   <Text style={styles.reconnectCode}>
                     {reconnectCode || selected.reconnectCode || '————'}
                   </Text>
                   <Text style={styles.reconnectHint}>
-                    6-digit number only — not the examination / QR code.
+                    6-digit PIN only — never the examination / QR code. Student enters it on the
+                    lock screen after Wi‑Fi is back.
                     {(reconnectExpiresAt || selected.reconnectCodeExpiresAt)
                       ? ` Expires ${formatTime(reconnectExpiresAt || selected.reconnectCodeExpiresAt)}.`
                       : ''}
@@ -783,7 +851,7 @@ export default function ProctorLobbyScreen() {
               <View style={styles.detailActions}>
                 {selected.status === 'disconnected' ? (
                   <Button
-                    title="Issue new reconnect code"
+                    title="Issue new reconnect PIN"
                     fullWidth
                     loading={busy}
                     onPress={async () => {
@@ -867,6 +935,7 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
+  lobbySkeleton: { padding: 20, gap: 12 },
   list: { padding: 20, gap: 10, paddingBottom: 40 },
   headerBlock: { gap: 14, marginBottom: 8 },
   examHead: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
@@ -900,6 +969,17 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 8,
   },
+  peerBanner: {
+    gap: 4,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: colors.success,
+  },
+  peerTitle: { fontSize: 14, fontWeight: '800', color: colors.success },
+  peerBody: { fontSize: 12, lineHeight: 18, color: colors.inkSecondary, fontWeight: '500' },
   monitorTitle: {
     fontSize: 15,
     fontWeight: '800',

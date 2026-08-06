@@ -11,13 +11,13 @@ import { useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Button, Card, Header, Input, Loader } from '@/components/ui';
-import { LobbyRepository, StudentRepository } from '@/repositories';
+import { Button, Card, Header, Input, SkeletonDetail } from '@/components/ui';
+import { LobbyRepository } from '@/repositories';
 import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 import { useLobbyStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
 
-const confirmationSchema = z.object({
+const gmailSchema = z.object({
   email: z
     .string()
     .trim()
@@ -29,24 +29,30 @@ const confirmationSchema = z.object({
     ),
 });
 
-type ConfirmationValues = z.infer<typeof confirmationSchema>;
+type ConfirmationValues = z.infer<typeof gmailSchema>;
 
 export default function StudentConfirmationScreen() {
   const router = useRouter();
   const selectedStudent = useStudentStore((s) => s.selectedStudent);
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
+  const examPasskey = useStudentStore((s) => s.examPasskey);
   const setVerifiedStudent = useStudentStore((s) => s.setVerifiedStudent);
+  const setSelectedStudent = useStudentStore((s) => s.setSelectedStudent);
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
   const [joinError, setJoinError] = React.useState<string | null>(null);
+  const [joining, setJoining] = React.useState(false);
+
+  // Already has Gmail from import — confirm identity only; do not ask again.
+  const hasGmail = Boolean(selectedStudent?.email?.trim());
 
   const {
     control,
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<ConfirmationValues>({
-    resolver: zodResolver(confirmationSchema),
-    defaultValues: { email: '' },
+    resolver: zodResolver(gmailSchema),
+    defaultValues: { email: selectedStudent?.email?.trim() || '' },
   });
 
   React.useEffect(() => {
@@ -55,23 +61,27 @@ export default function StudentConfirmationScreen() {
       return;
     }
     if (!selectedStudent || !scannedSessionId) {
-      router.replace('/(student)/verify');
+      router.replace('/(student)/passkey');
     }
   }, [selectedStudent, scannedSessionId, verifiedStudent, router]);
 
   const goBack = React.useCallback(() => {
-    if (selectedStudent?.id) {
-      void StudentRepository.releaseClaim(selectedStudent.id).catch(() => undefined);
-    }
-    router.back();
-  }, [selectedStudent?.id, router]);
+    setSelectedStudent(null);
+    router.replace('/(student)/passkey');
+  }, [router, setSelectedStudent]);
 
   if (!selectedStudent || !scannedSessionId) {
-    return <Loader fullscreen label="Loading confirmation…" />;
+    return (
+      <View style={styles.screen}>
+        <Header title="Confirm Identity" subtitle="Loading…" onBack={goBack} />
+        <SkeletonDetail />
+      </View>
+    );
   }
 
-  const onConfirm = handleSubmit(async (values) => {
+  const joinWithEmail = async (email: string) => {
     setJoinError(null);
+    setJoining(true);
     try {
       const gate = await assertCampusWifiForJoin({
         requireServer: !String(scannedSessionId).startsWith('offline-'),
@@ -82,16 +92,29 @@ export default function StudentConfirmationScreen() {
       }
       const verified = {
         ...selectedStudent,
-        email: values.email.trim().toLowerCase(),
+        email: email.trim().toLowerCase(),
       };
       setVerifiedStudent(verified);
-      const lobby = await LobbyRepository.joinStudent(verified, scannedSessionId);
+      const lobby =
+        examPasskey
+          ? await LobbyRepository.joinWithPasskey(verified, scannedSessionId, examPasskey)
+          : await LobbyRepository.joinStudent(verified, scannedSessionId);
       setSnapshot(lobby);
       router.replace('/(student)/lobby');
     } catch (error) {
       setJoinError(error instanceof Error ? error.message : 'Unable to join examination.');
+    } finally {
+      setJoining(false);
     }
+  };
+
+  const onConfirmWithForm = handleSubmit(async (values) => {
+    await joinWithEmail(values.email);
   });
+
+  const onConfirmExisting = async () => {
+    await joinWithEmail(selectedStudent.email);
+  };
 
   return (
     <KeyboardAvoidingView
@@ -100,7 +123,7 @@ export default function StudentConfirmationScreen() {
     >
       <Header
         title="Confirm Identity"
-        subtitle="Enter your Gmail for results"
+        subtitle={hasGmail ? 'Confirm your details to join' : 'Enter your Gmail for results'}
         onBack={goBack}
       />
       <ScrollView
@@ -109,32 +132,36 @@ export default function StudentConfirmationScreen() {
       >
         <Card>
           <Text style={styles.intro}>
-            Confirm that this is your record, then enter your Gmail address. Official examination
-            results will be sent to this email.
+            {hasGmail
+              ? 'Confirm that this is your record. Your examination key matched this registration.'
+              : 'Confirm that this is your record, then enter your Gmail address for results.'}
           </Text>
 
           <ReadOnlyField label="Full Name" value={selectedStudent.fullName} />
           <ReadOnlyField label="Desired Program" value={selectedStudent.programName} />
-
-          <Controller
-            control={control}
-            name="email"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <Input
-                label="Gmail Address"
-                placeholder="yourname@gmail.com"
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="email-address"
-                textContentType="emailAddress"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.email?.message}
-                hint="Required so your score can be emailed later"
-              />
-            )}
-          />
+          {hasGmail ? (
+            <ReadOnlyField label="Gmail" value={selectedStudent.email} />
+          ) : (
+            <Controller
+              control={control}
+              name="email"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <Input
+                  label="Gmail Address"
+                  placeholder="yourname@gmail.com"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="email-address"
+                  textContentType="emailAddress"
+                  value={value}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  error={errors.email?.message}
+                  hint="Required so your score can be emailed later"
+                />
+              )}
+            />
+          )}
 
           {joinError ? <Text style={styles.error}>{joinError}</Text> : null}
 
@@ -144,13 +171,13 @@ export default function StudentConfirmationScreen() {
               variant="outline"
               style={styles.btn}
               onPress={goBack}
-              disabled={isSubmitting}
+              disabled={joining || isSubmitting}
             />
             <Button
-              title="Confirm"
+              title="Confirm & Join"
               style={styles.btn}
-              loading={isSubmitting}
-              onPress={onConfirm}
+              loading={joining || isSubmitting}
+              onPress={hasGmail ? onConfirmExisting : onConfirmWithForm}
             />
           </View>
         </Card>

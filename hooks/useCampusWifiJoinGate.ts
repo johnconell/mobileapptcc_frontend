@@ -22,13 +22,16 @@ export function useCampusWifiJoinGate(options?: {
   });
   const [checking, setChecking] = useState(true);
 
-  const refresh = useCallback(async () => {
-    setChecking(true);
-    const next = await assertCampusWifiForJoin({ requireServer });
-    setResult(next);
-    setChecking(false);
-    return next;
-  }, [requireServer]);
+  const refresh = useCallback(
+    async (scannedPayload?: string) => {
+      setChecking(true);
+      const next = await assertCampusWifiForJoin({ requireServer, scannedPayload });
+      setResult(next);
+      setChecking(false);
+      return next;
+    },
+    [requireServer],
+  );
 
   useEffect(() => {
     let cancelled = false;

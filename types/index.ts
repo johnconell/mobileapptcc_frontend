@@ -157,6 +157,16 @@ export interface LobbySnapshot {
   warningCount: number;
   terminatedCount: number;
   violationsDetected: number;
+  recentViolations?: Array<{
+    id: number;
+    registration_id: number;
+    studentName: string;
+    studentId: string;
+    type: string;
+    message?: string | null;
+    violationCount: number;
+    occurredAt?: string | null;
+  }>;
   students: LobbyStudent[];
   proctor_id?: number | null;
   proctor_name?: string | null;

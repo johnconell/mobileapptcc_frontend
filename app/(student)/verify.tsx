@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Alert, FlatList, Pressable, Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Lock } from 'lucide-react-native';
-import { Header, SearchBar, Loader, EmptyState, Avatar, Card } from '@/components/ui';
+import { Header, SearchBar, SkeletonList, EmptyState, Avatar, Card } from '@/components/ui';
 import { useStudents } from '@/hooks/useRepositories';
 import { StudentRepository } from '@/repositories';
 import { useStudentStore } from '@/stores';
@@ -110,7 +110,9 @@ export default function VerifyStudentScreen() {
       </View>
 
       {studentsQuery.isLoading && !studentsQuery.data ? (
-        <Loader label="Loading students…" />
+        <View style={styles.list}>
+          <SkeletonList rows={6} />
+        </View>
       ) : studentsQuery.isError ? (
         <EmptyState
           title="Unable to load students"

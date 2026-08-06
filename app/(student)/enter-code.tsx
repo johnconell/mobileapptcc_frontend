@@ -59,7 +59,7 @@ export default function EnterCodeScreen() {
       return;
     }
     setScannedSession(result.schedule.id, result.session.id);
-    router.replace('/(student)/verify');
+    router.replace('/(student)/passkey');
   });
 
   return (

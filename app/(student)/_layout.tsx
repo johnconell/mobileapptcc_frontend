@@ -13,6 +13,7 @@ export default function StudentLayout() {
     >
       <Stack.Screen name="scan" />
       <Stack.Screen name="enter-code" />
+      <Stack.Screen name="passkey" />
       <Stack.Screen name="verify" />
       <Stack.Screen name="confirmation" />
       <Stack.Screen

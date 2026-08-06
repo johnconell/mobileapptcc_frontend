@@ -1,7 +1,7 @@
 import React from 'react';
 import { FlatList, Text, View, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Header, Loader, EmptyState } from '@/components/ui';
+import { Header, EmptyState, SkeletonList } from '@/components/ui';
 import { SessionCard } from '@/features/proctor/SessionCard';
 import { useSchedules, useSessions } from '@/hooks/useRepositories';
 import { useProctorStore } from '@/stores';
@@ -22,7 +22,18 @@ export default function SessionsScreen() {
     null;
 
   if (sessionsQuery.isLoading) {
-    return <Loader fullscreen label="Loading examination times…" />;
+    return (
+      <View style={styles.screen}>
+        <Header
+          title="Examination Time"
+          subtitle={schedule?.name ?? 'Loading…'}
+          onBack={() => safeBack(router, '/(proctor)/schedules')}
+        />
+        <View style={styles.list}>
+          <SkeletonList rows={5} showAvatar={false} />
+        </View>
+      </View>
+    );
   }
 
   return (
