@@ -35,6 +35,8 @@ export const STORAGE_KEYS = {
   offlineScheduleId: 'tcc.offline.schedule.id',
   offlineExamCode: 'tcc.offline.exam.code',
   offlineClaims: 'tcc.offline.claims',
+  /** scheduleId:roomId → opened lobby metadata (code + status) */
+  offlineOpenedRooms: 'tcc.offline.opened.rooms',
   /** Student side: proctor phone acting as the exam server (http://IP:PORT) */
   peerTarget: 'tcc.peer.target',
   examCheckpoint: 'tcc.student.exam.checkpoint',

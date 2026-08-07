@@ -148,7 +148,7 @@ export const ScheduleRepository = {
   },
 
   async getSessionsBySchedule(scheduleId: string): Promise<ExamSession[]> {
-    if (await OfflineStore.isOfflineMode()) {
+    const fromPack = async (): Promise<ExamSession[]> => {
       const pack = await OfflineStore.getPack();
       if (!pack) return [];
       const date = scheduleId.startsWith('date-') ? scheduleId.slice(5) : null;
@@ -174,46 +174,75 @@ export const ScheduleRepository = {
           }),
         )
         .sort((a, b) => a.startTime.localeCompare(b.startTime));
+    };
+
+    if (await OfflineStore.isOfflineMode()) {
+      return fromPack();
     }
 
-    const date = scheduleId.startsWith('date-') ? scheduleId.slice(5) : scheduleId;
-    const json = await apiRequest<{ success: boolean; data: BackendSchedule[] }>(
-      `/proctor/schedules?per_page=200${date ? `&date=${encodeURIComponent(date)}` : ''}`,
-    );
-    return (json.data || [])
-      .map(toMobileSession)
-      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+    try {
+      const date = scheduleId.startsWith('date-') ? scheduleId.slice(5) : scheduleId;
+      const json = await apiRequest<{ success: boolean; data: BackendSchedule[] }>(
+        `/proctor/schedules?per_page=200${date ? `&date=${encodeURIComponent(date)}` : ''}`,
+      );
+      return (json.data || [])
+        .map(toMobileSession)
+        .sort((a, b) => a.startTime.localeCompare(b.startTime));
+    } catch {
+      if (await OfflineStore.hasPack()) {
+        await OfflineStore.setOfflineMode(true);
+        return fromPack();
+      }
+      throw new Error('Unable to load examination times. Download the offline pack while online first.');
+    }
   },
 
   async getRoomsBySession(sessionId: string): Promise<ExamRoom[]> {
-    if (await OfflineStore.isOfflineMode()) {
+    const fromPack = async (): Promise<ExamRoom[]> => {
       const pack = await OfflineStore.getPack();
       if (!pack) return [];
       const sid = Number(String(sessionId).replace(/^offline-/, ''));
       const schedule = pack.schedules.find((s) => Number(s.id) === sid);
       const rooms = schedule?.rooms?.length
         ? schedule.rooms
-        : [{ id: sid * 1000 + 1, room_name: 'Offline Room', capacity: 40 }];
-      return rooms.map((row) =>
-        toMobileRoom(
+        : [{ id: sid * 1000 + 1, room_name: 'Examination Room', capacity: 40 }];
+      const opened = await OfflineStore.getOpenedRooms();
+
+      return rooms.map((row) => {
+        const key = OfflineStore.roomKey(sid, row.id);
+        const live = opened[key];
+        const status = live?.status ?? 'idle';
+        return toMobileRoom(
           {
             id: row.id,
             room_name: row.room_name,
             capacity: row.capacity,
-            examination_code: OfflineExamRepository.makeOfflineCode(sid, row.id),
-            status: 'lobby_open',
+            examination_code: live?.code ?? null,
+            status,
             connected_count: 0,
-            can_reopen: true,
+            can_reopen: status === 'ended',
           },
           String(sid),
-        ),
-      );
+        );
+      });
+    };
+
+    if (await OfflineStore.isOfflineMode()) {
+      return fromPack();
     }
 
-    const json = await apiRequest<{ success: boolean; data: BackendRoom[] }>(
-      `/proctor/schedules/${sessionId}/rooms`,
-    );
-    return (json.data || []).map((row) => toMobileRoom(row, sessionId));
+    try {
+      const json = await apiRequest<{ success: boolean; data: BackendRoom[] }>(
+        `/proctor/schedules/${sessionId}/rooms`,
+      );
+      return (json.data || []).map((row) => toMobileRoom(row, sessionId));
+    } catch {
+      if (await OfflineStore.hasPack()) {
+        await OfflineStore.setOfflineMode(true);
+        return fromPack();
+      }
+      throw new Error('Unable to load rooms. Download the offline pack while online first.');
+    }
   },
 
   async getSessionById(id: string): Promise<ExamSession | null> {

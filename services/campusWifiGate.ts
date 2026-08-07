@@ -60,11 +60,10 @@ function isOfflinePackCode(code: string): boolean {
 }
 
 /**
- * Before QR scan / examination-code entry:
+ * Validate network AFTER a QR scan or examination-code submit:
  * 1) Must be on Wi‑Fi (not mobile data alone).
- * 2) Live lobby codes also require the exam Hub to be reachable (same LAN /
- *    correct network as the exam computer). Offline OFF-* codes only need Wi‑Fi
- *    once the pack is already on the phone.
+ * 2) Peer QR → ping the proctor phone on LAN.
+ * 3) Live Hub codes → probe Laravel. Offline OFF-* codes skip the Hub probe.
  */
 export async function assertCampusWifiForJoin(options?: {
   /** When verifying a typed code; OFF-* skips Hub probe. */
@@ -75,15 +74,15 @@ export async function assertCampusWifiForJoin(options?: {
   scannedPayload?: string;
 }): Promise<CampusWifiGateResult> {
   const wifiConnected = await isWifiConnected();
+  const mismatchMessage =
+    'You are connected to a different examination network. Please connect to the same Wi‑Fi network as the proctor and scan again.';
+
   if (!wifiConnected) {
     return {
       ok: false,
       wifiConnected: false,
       serverReachable: null,
-      message:
-        'Wi‑Fi / LAN does not match the proctor exam network.\n\n' +
-        'Connect this phone to the SAME Wi‑Fi as the proctor / exam computer, then scan again. ' +
-        'Mobile data or a different hotspot will not work.',
+      message: mismatchMessage,
     };
   }
 
@@ -99,17 +98,25 @@ export async function assertCampusWifiForJoin(options?: {
           ok: false,
           wifiConnected: true,
           serverReachable: false,
-          message:
-            'Wi‑Fi does not match the proctor.\n\n' +
-            `This phone cannot reach the proctor phone (${peerTarget.host}). ` +
-            'Join the SAME Wi‑Fi as the proctor (or the proctor hotspot), then scan again.',
+          message: mismatchMessage,
         };
   }
 
   const code = options?.examinationCode?.trim() ?? '';
-  const skipServer =
+  let skipServer =
     options?.requireServer === false ||
     (code.length > 0 && isOfflinePackCode(code));
+
+  // Opened local lobbies use normal codes (K7M2P9QX) — skip Laravel hub probe.
+  if (!skipServer && code.length > 0) {
+    try {
+      const { OfflineStore } = await import('@/services/offlineStore');
+      const opened = await OfflineStore.findOpenedRoomByCode(code);
+      if (opened) skipServer = true;
+    } catch {
+      // ignore
+    }
+  }
 
   if (skipServer) {
     return {
@@ -133,10 +140,7 @@ export async function assertCampusWifiForJoin(options?: {
       ok: false,
       wifiConnected: true,
       serverReachable: false,
-      message:
-        'Wi‑Fi / LAN does not match the proctor exam network.\n\n' +
-        `This phone cannot reach the exam server (${host}). ` +
-        'Join the same Wi‑Fi as the proctor, then try scanning or entering the code again.',
+      message: `${mismatchMessage}\n\n(Cannot reach exam server ${host}.)`,
     };
   }
 

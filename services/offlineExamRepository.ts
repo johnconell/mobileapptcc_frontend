@@ -240,8 +240,21 @@ export function grade(
 export const OfflineExamRepository = {
   async downloadPackFromCloud(
     examDate?: string,
-    options?: { includeAuth?: boolean },
+    options?: {
+      includeAuth?: boolean;
+      onProgress?: (progress: { percent: number; label: string }) => void;
+    },
   ): Promise<OfflinePack> {
+    const report = (percent: number, label: string) => {
+      try {
+        options?.onProgress?.({ percent, label });
+      } catch {
+        // UI progress must never break the download.
+      }
+    };
+
+    report(5, 'Connecting…');
+
     // Pack export requires ADMIN_SYNC_TOKEN (or admin Sanctum). A proctor
     // login token must NOT be preferred — it causes 401 Unauthorized.
     const syncToken = process.env.EXPO_PUBLIC_SYNC_TOKEN?.trim() || null;
@@ -255,22 +268,25 @@ export const OfflineExamRepository = {
     if (options?.includeAuth) params.set('include_auth', '1');
     const q = params.toString() ? `?${params.toString()}` : '';
 
+    report(20, 'Downloading exam pack…');
     const json = await cloudFetch<{
       success: boolean;
       data: OfflinePack & { proctors?: unknown };
-    }>(`/sync/exam-day-pack${q}`, { token: syncToken });
+    }>(`/sync/exam-day-pack${q}`, { token: syncToken, timeoutMs: 120000 });
     if (!json.data) throw new Error('Cloud returned an empty exam pack.');
 
+    report(55, 'Processing students and questions…');
     if (options?.includeAuth && json.data.proctors) {
+      report(65, 'Caching proctor accounts…');
       const { ProctorAuthCache } = await import('@/services/proctorAuthCache');
       await ProctorAuthCache.saveFromPackProctors(json.data.proctors);
     }
 
     // Never leave password hashes in the on-disk exam pack (student devices).
     const { proctors: _proctors, ...safePack } = json.data;
+    report(80, 'Saving securely on this phone…');
     await OfflineStore.savePack(safePack as OfflinePack);
-    // Keep LAN / online mode. Offline mode turns on only when a student/proctor
-    // uses an OFF-{scheduleId} exam code.
+    report(100, 'Download complete');
     return safePack as OfflinePack;
   },
 
@@ -404,24 +420,10 @@ export const OfflineExamRepository = {
     };
   },
 
-  async getLobbyStudentsForSchedule(scheduleId: string) {
-    const roster = await this.getStudentsForSchedule(scheduleId);
-    const now = new Date().toISOString();
-    return roster.map((s) => ({
-      id: String(s.registration_id ?? s.id),
-      studentId: s.studentId,
-      fullName: s.fullName,
-      email: s.email,
-      programCode: s.programCode,
-      programName: s.programName,
-      avatarInitials: s.avatarInitials || 'ST',
-      status: 'waiting' as const,
-      joinedAt: now,
-      startedAt: null,
-      lastActivityAt: now,
-      violationCount: 0,
-      terminationReason: null,
-    }));
+  async getLobbyStudentsForSchedule(_scheduleId: string) {
+    // Waiting list = students who actually joined (handled by PeerExamServer).
+    // Never pre-fill from the full offline roster.
+    return [];
   },
 
   async getQuestions(): Promise<Question[]> {
@@ -430,7 +432,23 @@ export const OfflineExamRepository = {
     return buildExamQuestions(pack);
   },
 
-  /** Offline codes: OFF-12-R3 (schedule 12, room 3). Legacy OFF-12 still accepted. */
+  /**
+   * Same alphabet as Laravel ExamSessionService::generateUniqueCode —
+   * 8 chars, no ambiguous I/O/0/1.
+   */
+  generateExamCode(existing: Set<string> = new Set()): string {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    for (let attempt = 0; attempt < 40; attempt++) {
+      let code = '';
+      for (let i = 0; i < 8; i++) {
+        code += alphabet[Math.floor(Math.random() * alphabet.length)]!;
+      }
+      if (!existing.has(code)) return code;
+    }
+    return `X${Date.now().toString(36).slice(-7).toUpperCase()}`;
+  },
+
+  /** Legacy OFF-12-R3 still accepted for older QRs. */
   parseOfflineCode(code: string): { scheduleId: number; roomId: number | null } | null {
     const m = code
       .trim()
@@ -443,6 +461,7 @@ export const OfflineExamRepository = {
     };
   },
 
+  /** @deprecated Prefer generateExamCode + OfflineStore.setOpenedRoom */
   makeOfflineCode(scheduleId: string | number, roomId?: string | number | null): string {
     const sid = String(scheduleId).replace(/^offline-/, '');
     if (roomId != null && String(roomId).trim() !== '') {
@@ -462,25 +481,21 @@ export const OfflineExamRepository = {
     });
   },
 
-  async resolveOfflineCode(code: string) {
-    const extracted = extractExaminationCode(code);
-    const parsed = this.parseOfflineCode(extracted);
-    if (!parsed) return null;
+  async resolveScheduleRoom(
+    scheduleId: number,
+    roomId: number | null,
+    examCode: string,
+  ) {
     const pack = await OfflineStore.getPack();
     if (!pack) return null;
-    const schedule = pack.schedules.find((s) => s.id === parsed.scheduleId);
+    const schedule = pack.schedules.find((s) => Number(s.id) === scheduleId);
     if (!schedule) return null;
 
     const rooms = schedule.rooms ?? [];
     const room =
-      (parsed.roomId != null
-        ? rooms.find((r) => Number(r.id) === parsed.roomId)
-        : null) ?? rooms[0] ?? null;
-
-    const examCode = this.makeOfflineCode(
-      schedule.id,
-      room?.id ?? parsed.roomId,
-    );
+      (roomId != null ? rooms.find((r) => Number(r.id) === roomId) : null) ??
+      rooms[0] ??
+      null;
 
     return {
       valid: true as const,
@@ -503,7 +518,7 @@ export const OfflineExamRepository = {
         venue: room?.room_name || schedule.venue || 'Offline',
         batchNumber: schedule.batch_code || '',
         registeredStudents: pack.registrations.filter(
-          (r) => r.examination_schedule_id === schedule.id,
+          (r) => Number(r.examination_schedule_id) === Number(schedule.id),
         ).length,
         durationMinutes: pack.examination_settings?.duration_minutes ?? 90,
         totalQuestions: selectedQuestions(pack).length,
@@ -511,9 +526,25 @@ export const OfflineExamRepository = {
       },
       examinationCode: examCode,
       message: room
-        ? `Offline examination ready for ${room.room_name}.`
-        : 'Offline examination ready on this device.',
+        ? `Examination ready for ${room.room_name}.`
+        : 'Examination ready on this device.',
     };
+  },
+
+  async resolveOfflineCode(code: string) {
+    const extracted = extractExaminationCode(code);
+
+    // Prefer explicitly opened rooms (normal codes like K7M2P9QX).
+    const opened = await OfflineStore.findOpenedRoomByCode(extracted);
+    if (opened) {
+      return this.resolveScheduleRoom(opened.scheduleId, opened.roomId, opened.code);
+    }
+
+    // Legacy OFF-* codes.
+    const parsed = this.parseOfflineCode(extracted);
+    if (!parsed) return null;
+    const examCode = this.makeOfflineCode(parsed.scheduleId, parsed.roomId);
+    return this.resolveScheduleRoom(parsed.scheduleId, parsed.roomId, examCode);
   },
 
   durationMinutes(): Promise<number> {
@@ -545,7 +576,7 @@ export const OfflineExamRepository = {
     return row;
   },
 
-  async syncQueuedToCloud(): Promise<{ synced: number; message: string }> {
+    async syncQueuedToCloud(): Promise<{ synced: number; message: string }> {
     const pending = await OfflineStore.pendingResults();
     if (!pending.length) {
       return { synced: 0, message: 'No offline results waiting to sync.' };
@@ -561,6 +592,7 @@ export const OfflineExamRepository = {
     const payload = {
       results: pending.map((r) => ({
         lan_registration_id: 0,
+        client_local_id: r.local_id,
         applicant_code: r.applicant_code,
         examination_schedule_id: r.examination_schedule_id,
         attendance_status: r.attendance_status,
@@ -576,17 +608,41 @@ export const OfflineExamRepository = {
     const json = await cloudFetch<{
       success: boolean;
       message?: string;
-      data?: { accepted_ids?: number[] };
+      data?: {
+        accepted_ids?: number[];
+        accepted_client_ids?: string[];
+        accepted_keys?: string[];
+        created?: number;
+        updated?: number;
+      };
     }>('/sync/offline-results', {
       method: 'POST',
       body: payload,
       token: syncToken,
     });
 
-    await OfflineStore.markSynced(pending.map((p) => p.local_id));
+    const acceptedClient = new Set(json.data?.accepted_client_ids ?? []);
+    const acceptedKeys = new Set(json.data?.accepted_keys ?? []);
+    const syncedIds = pending
+      .filter((p) => {
+        if (acceptedClient.has(p.local_id)) return true;
+        return acceptedKeys.has(`${p.applicant_code}|${p.examination_schedule_id}`);
+      })
+      .map((p) => p.local_id);
+
+    // Never mark the whole batch synced — skipped rows (unknown applicant/schedule) must retry.
+    if (syncedIds.length > 0) {
+      await OfflineStore.markSynced(syncedIds);
+    }
+
+    const skipped = pending.length - syncedIds.length;
     return {
-      synced: pending.length,
-      message: json.message || `Synced ${pending.length} result(s) to the administrator.`,
+      synced: syncedIds.length,
+      message:
+        json.message ||
+        (skipped > 0
+          ? `Synced ${syncedIds.length} result(s); ${skipped} left pending (applicant/schedule not found on server).`
+          : `Synced ${syncedIds.length} result(s) to the administrator.`),
     };
   },
 };

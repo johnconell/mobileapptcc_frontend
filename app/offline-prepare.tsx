@@ -11,6 +11,7 @@ import { safeBack } from '@/utils';
 export default function OfflinePrepareScreen() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ percent: number; label: string } | null>(null);
   const [meta, setMeta] = useState<{ ready: boolean; at: string | null }>({
     ready: false,
     at: null,
@@ -28,8 +29,12 @@ export default function OfflinePrepareScreen() {
 
   const download = async () => {
     setBusy(true);
+    setProgress({ percent: 0, label: 'Starting…' });
     try {
-      await OfflineExamRepository.downloadPackFromCloud();
+      await OfflineExamRepository.downloadPackFromCloud(undefined, {
+        includeAuth: true,
+        onProgress: setProgress,
+      });
       await refresh();
       Alert.alert(
         'Exam cached',
@@ -44,6 +49,7 @@ export default function OfflinePrepareScreen() {
       );
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   };
 
@@ -94,7 +100,16 @@ export default function OfflinePrepareScreen() {
           <Text style={styles.meta}>Pending results to sync: {pending}</Text>
         </Card>
 
-        {busy ? (
+        {progress ? (
+          <Card>
+            <Text style={styles.title}>
+              {progress.label} · {progress.percent}%
+            </Text>
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${Math.max(4, progress.percent)}%` }]} />
+            </View>
+          </Card>
+        ) : busy ? (
           <SkeletonCard>
             <Skeleton height={13} width="50%" />
             <SkeletonText lines={2} />
@@ -102,10 +117,15 @@ export default function OfflinePrepareScreen() {
         ) : null}
 
         <Button
-          title="Download exam pack (needs internet)"
+          title={
+            progress
+              ? `Downloading… ${progress.percent}%`
+              : 'Download exam pack (needs internet)'
+          }
           size="lg"
           fullWidth
-          loading={busy}
+          loading={busy && !progress}
+          disabled={Boolean(progress)}
           onPress={() => void download()}
         />
         <Button
@@ -134,4 +154,16 @@ const styles = StyleSheet.create({
   title: { fontSize: 17, fontWeight: '700', color: colors.ink, marginBottom: 8 },
   bodyText: { fontSize: 14, lineHeight: 22, color: colors.inkSecondary },
   meta: { fontSize: 13, color: colors.inkMuted, marginBottom: 6, fontWeight: '600' },
+  progressTrack: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceMuted,
+    overflow: 'hidden',
+    marginTop: 8,
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: colors.primary,
+  },
 });

@@ -16,7 +16,11 @@ const {
 function withExamSecurity(config) {
   return withAndroidManifest(config, (config) => {
     const manifest = config.modResults;
+    const mainApplication = AndroidConfig.Manifest.getMainApplicationOrThrow(manifest);
     const mainActivity = AndroidConfig.Manifest.getMainActivityOrThrow(manifest);
+
+    // Required for LAN peer exam hosting (HTTP on the proctor phone) and local API.
+    mainApplication.$['android:usesCleartextTraffic'] = 'true';
 
     mainActivity.$['android:resizeableActivity'] = 'false';
     mainActivity.$['android:supportsPictureInPicture'] = 'false';

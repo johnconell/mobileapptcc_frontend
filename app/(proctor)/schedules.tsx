@@ -32,6 +32,10 @@ export default function SchedulesScreen() {
   const schedulesQuery = useSchedules(Boolean(profile));
   const [refreshing, setRefreshing] = useState(false);
   const [pack, setPack] = useState<PackSummary | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<{
+    percent: number;
+    label: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!profile) {
@@ -46,9 +50,29 @@ export default function SchedulesScreen() {
     void OfflineStore.getPackSummary().then(setPack);
   }, []);
 
+  // When internet returns, push any queued offline results without blocking the UI.
+  useEffect(() => {
+    let cancelled = false;
+    const trySync = async () => {
+      try {
+        const pending = await OfflineStore.pendingResults();
+        if (!pending.length || cancelled) return;
+        const { OfflineExamRepository } = await import('@/services/offlineExamRepository');
+        await OfflineExamRepository.syncQueuedToCloud();
+      } catch {
+        // Stay silent — proctor can sync manually from Offline prepare.
+      }
+    };
+    void trySync();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (schedulesQuery.isError) {
       const err = schedulesQuery.error as { status?: number } | null;
+      // Network errors must NOT force logout when a pack is already on the phone.
       if (err?.status === 401 || err?.status === 403) {
         void AuthRepository.logout().then(() => {
           reset();
@@ -60,8 +84,13 @@ export default function SchedulesScreen() {
 
   const downloadPack = async () => {
     setRefreshing(true);
+    setDownloadProgress({ percent: 0, label: 'Starting…' });
     try {
-      const result = await ensureExamPackCached({ force: true });
+      const result = await ensureExamPackCached({
+        force: true,
+        includeAuth: true,
+        onProgress: setDownloadProgress,
+      });
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.schedules });
       const summary = await OfflineStore.getPackSummary();
       setPack(summary);
@@ -75,6 +104,7 @@ export default function SchedulesScreen() {
       );
     } finally {
       setRefreshing(false);
+      setDownloadProgress(null);
     }
   };
 
@@ -129,18 +159,40 @@ export default function SchedulesScreen() {
                   Last downloaded {new Date(pack.at).toLocaleString()}
                 </Text>
               ) : null}
+              {downloadProgress ? (
+                <View style={styles.progressBlock}>
+                  <View style={styles.progressTrack}>
+                    <View
+                      style={[
+                        styles.progressFill,
+                        { width: `${Math.max(4, downloadProgress.percent)}%` },
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.progressLabel}>
+                    {downloadProgress.label} · {downloadProgress.percent}%
+                  </Text>
+                </View>
+              ) : null}
               <Button
-                title={pack?.ready ? 'Download again' : 'Download exam pack'}
-                variant={pack?.ready ? 'outline' : 'primary'}
+                title={
+                  downloadProgress
+                    ? `Downloading… ${downloadProgress.percent}%`
+                    : pack?.ready
+                      ? 'Download again'
+                      : 'Download exam pack'
+                }
+                variant={pack?.ready && !downloadProgress ? 'outline' : 'primary'}
                 fullWidth
-                loading={refreshing}
+                loading={refreshing && !downloadProgress}
+                disabled={Boolean(downloadProgress)}
                 onPress={() => void downloadPack()}
               />
             </View>
             <Text style={styles.intro}>
-              Select a schedule, then a room. Each room gets a random letter+number code and
-              its own QR (example K7M2P9QX · offline OFF-12-R3). When every room has ended,
-              the batch shows as complete.
+              Select a schedule, then a room. Opening a room generates a normal examination
+              code and QR (example K7M2P9QX). Rooms stay Closed until you open them. When
+              every room has ended, the batch shows as complete.
             </Text>
             <Button
               title="Sync offline results to Admin"
@@ -186,4 +238,17 @@ const styles = StyleSheet.create({
   packTitle: { fontSize: 16, fontWeight: '700', color: colors.ink },
   packBody: { fontSize: 13, lineHeight: 20, color: colors.inkSecondary, fontWeight: '500' },
   packMeta: { fontSize: 12, color: colors.inkMuted, fontWeight: '600' },
+  progressBlock: { gap: 6 },
+  progressTrack: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceMuted,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: colors.primary,
+  },
+  progressLabel: { fontSize: 12, fontWeight: '700', color: colors.inkSecondary },
 });

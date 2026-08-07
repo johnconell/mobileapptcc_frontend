@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, Modal, Pressable, Text, View, StyleSheet } from 'react-native';
+import { Modal, Pressable, Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
@@ -15,59 +15,16 @@ import {
   SkeletonText,
 } from '@/components/ui';
 import { SchoolLogo } from '@/features/student/SchoolLogo';
-import { ensureExamPackCached } from '@/services/ensureExamPack';
-import { getCloudApiBaseUrl, getApiBaseUrl } from '@/services/api';
-import { studentPackDownloadFailureMessage } from '@/services/apiReachability';
-import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [joinOpen, setJoinOpen] = useState(false);
-  const [preparing, setPreparing] = useState(false);
+  const [preparing] = useState(false);
 
-  const startTakeExam = async () => {
-    setPreparing(true);
-    const wifi = await assertCampusWifiForJoin({ requireServer: false });
-    if (!wifi.ok) {
-      setPreparing(false);
-      Alert.alert(
-        wifi.wifiConnected === false ? 'Campus Wi‑Fi required' : 'Cannot reach exam computer',
-        wifi.message ??
-          'Connect to the campus exam Wi‑Fi before joining. Mobile data alone is not allowed.',
-      );
-      return;
-    }
-
-    // Live QR/code join also needs the exam Hub on this Wi‑Fi.
-    const hub = await assertCampusWifiForJoin({ requireServer: true });
-    if (!hub.ok) {
-      setPreparing(false);
-      Alert.alert(
-        hub.wifiConnected && hub.serverReachable === false
-          ? 'Wi‑Fi / LAN does not match'
-          : 'Campus Wi‑Fi required',
-        hub.message ??
-          'Phone and proctor must share the same Wi‑Fi so this phone can reach the exam server.',
-      );
-      return;
-    }
-
-    const result = await ensureExamPackCached({ force: false });
-    setPreparing(false);
-    if (!result.ok) {
-      setPreparing(true);
-      const forced = await ensureExamPackCached({ force: true });
-      setPreparing(false);
-      if (!forced.ok) {
-        const apiBase = getCloudApiBaseUrl() || getApiBaseUrl();
-        Alert.alert(
-          'Exam data needed',
-          studentPackDownloadFailureMessage(apiBase, forced.message),
-        );
-        return;
-      }
-    }
+  // No Wi‑Fi / Hub check here — students open the scanner first.
+  // Network matching is validated only AFTER a QR is scanned (or a code is submitted).
+  const startTakeExam = () => {
     setJoinOpen(true);
   };
 

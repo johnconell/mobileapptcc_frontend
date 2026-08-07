@@ -122,10 +122,10 @@ export default function RoomDetailScreen() {
 
     setBusy(true);
     try {
-      if (!isOpen) {
-        await LobbyRepository.openLobby(sessionId, undefined, roomId);
-        await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.rooms(sessionId) });
-      }
+      // Always ensureLobby so offline peer HTTP (re)starts even if the room
+      // was already marked lobby_open after a previous download / app restart.
+      await LobbyRepository.ensureLobby(sessionId, undefined, roomId);
+      await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.rooms(sessionId) });
       router.push({
         pathname: '/(proctor)/lobby',
         params: { sessionId, roomId },

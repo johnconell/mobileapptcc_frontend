@@ -2,6 +2,8 @@ import { OfflineExamRepository } from '@/services/offlineExamRepository';
 import { OfflineStore } from '@/services/offlineStore';
 import { ProctorAuthCache } from '@/services/proctorAuthCache';
 
+export type PackProgress = { percent: number; label: string };
+
 export type EnsurePackResult = {
   ok: boolean;
   message: string;
@@ -18,6 +20,7 @@ export type EnsurePackResult = {
 export async function ensureExamPackCached(options?: {
   force?: boolean;
   includeAuth?: boolean;
+  onProgress?: (progress: PackProgress) => void;
 }): Promise<EnsurePackResult> {
   const force = options?.force ?? true;
   const includeAuth = options?.includeAuth ?? false;
@@ -25,6 +28,7 @@ export async function ensureExamPackCached(options?: {
   const hasAuth = await ProctorAuthCache.hasAccounts();
 
   if (!force && meta.ready && (!includeAuth || hasAuth)) {
+    options?.onProgress?.({ percent: 100, label: 'Already on this phone' });
     return {
       ok: true,
       message: 'Exam cache already on this device.',
@@ -33,7 +37,10 @@ export async function ensureExamPackCached(options?: {
   }
 
   try {
-    await OfflineExamRepository.downloadPackFromCloud(undefined, { includeAuth });
+    await OfflineExamRepository.downloadPackFromCloud(undefined, {
+      includeAuth,
+      onProgress: options?.onProgress,
+    });
     const authCount = includeAuth ? (await ProctorAuthCache.list()).length : undefined;
     return {
       ok: true,

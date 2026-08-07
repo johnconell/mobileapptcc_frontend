@@ -267,7 +267,15 @@ async function deleteIfExists(path: string, webKey: string): Promise<void> {
 }
 
 export const OfflineStore = {
+  // In-memory pack avoids AES decrypt + JSON.parse on every navigation (was 3–6 min).
+  _packCache: null as OfflinePack | null,
+
+  invalidatePackCache(): void {
+    this._packCache = null;
+  },
+
   async savePack(pack: OfflinePack): Promise<void> {
+    this._packCache = pack;
     await writeEncrypted(PACK_ENC_FILE, WEB_PACK_ENC_KEY, pack);
     // Remove legacy plaintext after successful encrypt.
     await deleteIfExists(PACK_FILE, WEB_PACK_KEY);
@@ -276,6 +284,8 @@ export const OfflineStore = {
   },
 
   async getPack(): Promise<OfflinePack | null> {
+    if (this._packCache) return this._packCache;
+
     const { data, needsMigrate } = await readEncryptedOrLegacy<OfflinePack>(
       PACK_ENC_FILE,
       PACK_FILE,
@@ -285,15 +295,87 @@ export const OfflineStore = {
     if (data && needsMigrate) {
       // Migrate plaintext → encrypted at rest on next successful read.
       await this.savePack(data);
+      return data;
     }
+    if (data) this._packCache = data;
     return data;
   },
 
   async hasPack(): Promise<boolean> {
+    if (this._packCache) return true;
     const flag = await appStorage.getItem(STORAGE_KEYS.offlinePackReady);
     if (flag === '1') return true;
     const pack = await this.getPack();
     return Boolean(pack?.schedules?.length);
+  },
+
+  /**
+   * Rooms the proctor has explicitly opened. Key = `${scheduleId}:${roomId}`.
+   * Default rooms stay Closed until an entry exists here.
+   */
+  async getOpenedRooms(): Promise<
+    Record<string, { code: string; openedAt: string; status: 'lobby_open' | 'in_progress' | 'ended' }>
+  > {
+    try {
+      const raw = await appStorage.getItem(STORAGE_KEYS.offlineOpenedRooms);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as Record<
+        string,
+        { code: string; openedAt: string; status?: 'lobby_open' | 'in_progress' | 'ended' }
+      >;
+      const out: Record<
+        string,
+        { code: string; openedAt: string; status: 'lobby_open' | 'in_progress' | 'ended' }
+      > = {};
+      for (const [key, value] of Object.entries(parsed || {})) {
+        if (!value?.code) continue;
+        out[key] = {
+          code: String(value.code).toUpperCase(),
+          openedAt: value.openedAt || new Date().toISOString(),
+          status: value.status || 'lobby_open',
+        };
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  },
+
+  async setOpenedRoom(
+    scheduleId: string | number,
+    roomId: string | number,
+    code: string,
+    status: 'lobby_open' | 'in_progress' | 'ended' = 'lobby_open',
+  ): Promise<void> {
+    const key = `${Number(scheduleId)}:${Number(roomId)}`;
+    const all = await this.getOpenedRooms();
+    all[key] = {
+      code: code.trim().toUpperCase(),
+      openedAt: all[key]?.openedAt || new Date().toISOString(),
+      status,
+    };
+    await appStorage.setItem(STORAGE_KEYS.offlineOpenedRooms, JSON.stringify(all));
+  },
+
+  async findOpenedRoomByCode(code: string): Promise<{
+    scheduleId: number;
+    roomId: number;
+    code: string;
+    status: 'lobby_open' | 'in_progress' | 'ended';
+  } | null> {
+    const normalized = code.trim().toUpperCase();
+    const all = await this.getOpenedRooms();
+    for (const [key, value] of Object.entries(all)) {
+      if (value.code !== normalized) continue;
+      const [scheduleId, roomId] = key.split(':').map(Number);
+      if (!scheduleId || !roomId) continue;
+      return { scheduleId, roomId, code: value.code, status: value.status };
+    }
+    return null;
+  },
+
+  roomKey(scheduleId: string | number, roomId: string | number): string {
+    return `${Number(scheduleId)}:${Number(roomId)}`;
   },
 
   async getPackMeta(): Promise<{ ready: boolean; at: string | null }> {

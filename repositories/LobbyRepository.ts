@@ -46,46 +46,80 @@ export const LobbyRepository = {
     questionBankId?: number,
     roomId?: string,
   ): Promise<LobbySnapshot> {
-    if (await OfflineStore.isOfflineMode()) {
+    const startPeerHost = async (): Promise<LobbySnapshot> => {
       if (!roomId) {
-        throw new Error('Select a room first. Each room has its own offline exam code and QR.');
+        throw new Error('Select a room first. Each room has its own examination code and QR.');
       }
       const sid = String(sessionId).replace(/^offline-/, '');
-      const examCode = OfflineExamRepository.makeOfflineCode(sid, roomId);
+      const opened = await OfflineStore.getOpenedRooms();
+      const existing = opened[OfflineStore.roomKey(sid, roomId)];
+      const usedCodes = new Set(Object.values(opened).map((r) => r.code));
+      const examCode =
+        existing?.code && existing.status !== 'ended'
+          ? existing.code
+          : OfflineExamRepository.generateExamCode(usedCodes);
+
+      await OfflineStore.setOpenedRoom(sid, roomId, examCode, 'lobby_open');
       await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, sid);
       await appStorage.setItem(STORAGE_KEYS.offlineExamCode, examCode);
       await setStoredCode(examCode);
 
-      // Host the examination on this phone so student phones on the same Wi‑Fi
-      // can join with no Laravel server running.
-      if (PeerExamServer.isSupported()) {
-        await PeerExamServer.start({ scheduleId: sid, roomId, examCode });
-        const hosted = await PeerExamServer.snapshot();
-        if (hosted) return hosted;
+      if (!PeerExamServer.isSupported()) {
+        throw new Error(
+          'This build cannot host an examination offline. Install the development build APK (Expo Go cannot run the proctor LAN server).',
+        );
       }
 
-      const lobby = await this.getLobby(sid, roomId);
-      if (!lobby) throw new Error('Offline pack missing this schedule. Download again.');
-      return lobby;
+      // Reuse a live server for the same room instead of restarting (was very slow).
+      const info = PeerExamServer.info();
+      const hostedNow = await PeerExamServer.snapshot();
+      if (
+        info.running &&
+        hostedNow &&
+        String(hostedNow.roomId ?? '') === String(roomId) &&
+        hostedNow.examinationCode === examCode
+      ) {
+        return hostedNow;
+      }
+
+      await PeerExamServer.start({ scheduleId: sid, roomId, examCode });
+      const hosted = await PeerExamServer.snapshot();
+      if (!hosted) throw new Error('Unable to start the local examination server on this phone.');
+      return hosted;
+    };
+
+    if (await OfflineStore.isOfflineMode()) {
+      return startPeerHost();
     }
 
     if (!roomId) {
       throw new Error('Select a room first. Each room has its own examination code and QR.');
     }
 
-    const body: Record<string, unknown> = {
-      examination_schedule_id: Number(sessionId),
-    };
-    if (questionBankId) body.question_bank_id = questionBankId;
-    if (roomId) body.examination_room_id = Number(roomId);
+    try {
+      const body: Record<string, unknown> = {
+        examination_schedule_id: Number(sessionId),
+      };
+      if (questionBankId) body.question_bank_id = questionBankId;
+      if (roomId) body.examination_room_id = Number(roomId);
 
-    const json = await apiRequest<LobbyResponse>('/proctor/sessions', {
-      method: 'POST',
-      body,
-    });
-    if (!json.data) throw new Error(json.message || 'Unable to open lobby.');
-    await setStoredCode(json.data.examinationCode);
-    return json.data;
+      const json = await apiRequest<LobbyResponse>('/proctor/sessions', {
+        method: 'POST',
+        body,
+      });
+      if (!json.data) throw new Error(json.message || 'Unable to open lobby.');
+      await setStoredCode(json.data.examinationCode);
+      return json.data;
+    } catch (error) {
+      // Pack already on phone + Laravel unreachable → host on this device.
+      if (await OfflineStore.hasPack()) {
+        await OfflineStore.setOfflineMode(true);
+        return startPeerHost();
+      }
+      throw error instanceof Error
+        ? error
+        : new Error('Unable to open lobby. Download the offline pack while online first.');
+    }
   },
 
   /** Open lobby once if none exists; otherwise return the active lobby. */
@@ -94,12 +128,22 @@ export const LobbyRepository = {
     questionBankId?: number,
     roomId?: string,
   ): Promise<LobbySnapshot> {
+    // Offline / peer: always (re)start the local server so a QR with a live host IP exists.
     if (await OfflineStore.isOfflineMode()) {
       return this.openLobby(sessionId, questionBankId, roomId);
     }
-    const existing = await this.fetchProctorLobby(sessionId, roomId);
-    if (existing) return existing;
-    return this.openLobby(sessionId, questionBankId, roomId);
+
+    try {
+      const existing = await this.fetchProctorLobby(sessionId, roomId);
+      if (existing) return existing;
+      return this.openLobby(sessionId, questionBankId, roomId);
+    } catch (error) {
+      if (await OfflineStore.hasPack()) {
+        await OfflineStore.setOfflineMode(true);
+        return this.openLobby(sessionId, questionBankId, roomId);
+      }
+      throw error;
+    }
   },
 
   /** Kept for compatibility; opens/reuses real lobby (no demo seeding). */
@@ -112,21 +156,35 @@ export const LobbyRepository = {
     roomId?: string,
     examSessionId?: string,
   ): Promise<LobbySnapshot | null> {
-    // Hosting on this phone: state is local, never behind Laravel.
-    await PeerExamServer.restore();
-    const hosted = await PeerExamServer.snapshot();
-    if (hosted) return hosted;
+    // Hosting on this phone: restore encrypted session AND restart HTTP.
+    const restored = await PeerExamServer.restore();
+    if (restored) {
+      const hosted = await PeerExamServer.snapshot();
+      if (hosted) return hosted;
+    }
 
-    const qs = roomId
-      ? `?examination_room_id=${encodeURIComponent(roomId)}`
-      : '';
-    const bySchedule = await apiRequest<LobbyResponse>(
-      `/proctor/schedules/${sessionId}/lobby${qs}`,
-    ).catch(() => null);
+    if (await OfflineStore.isOfflineMode()) {
+      // No live peer session yet — openLobby will start one.
+      return null;
+    }
 
-    if (bySchedule?.data) {
-      await setStoredCode(bySchedule.data.examinationCode);
-      return bySchedule.data;
+    try {
+      const qs = roomId
+        ? `?examination_room_id=${encodeURIComponent(roomId)}`
+        : '';
+      const bySchedule = await apiRequest<LobbyResponse>(
+        `/proctor/schedules/${sessionId}/lobby${qs}`,
+      );
+
+      if (bySchedule?.data) {
+        await setStoredCode(bySchedule.data.examinationCode);
+        return bySchedule.data;
+      }
+    } catch {
+      if (await OfflineStore.hasPack()) {
+        await OfflineStore.setOfflineMode(true);
+        return null;
+      }
     }
 
     // Ended sessions: load by exam session id (view results / sync).
@@ -159,49 +217,45 @@ export const LobbyRepository = {
     }
 
     if (await OfflineStore.isOfflineMode()) {
+      // Without a live peer host there is no waiting list yet — openLobby starts hosting.
       const scheduleId =
         (await appStorage.getItem(STORAGE_KEYS.offlineScheduleId)) ||
         String(sessionId || '').replace(/^offline-/, '');
+      const opened = await OfflineStore.getOpenedRooms();
+      const openedEntry = roomId
+        ? opened[OfflineStore.roomKey(scheduleId, roomId)]
+        : Object.values(opened).find((r) => r.status !== 'ended');
       const examCode =
-        (roomId
-          ? OfflineExamRepository.makeOfflineCode(scheduleId, roomId)
-          : null) ||
+        openedEntry?.code ||
         (await appStorage.getItem(STORAGE_KEYS.offlineExamCode)) ||
-        (await getStoredCode()) ||
-        OfflineExamRepository.makeOfflineCode(scheduleId, roomId);
+        (await getStoredCode());
+      if (!examCode) return null;
+
       const resolved = await OfflineExamRepository.resolveOfflineCode(examCode);
       if (!resolved) return null;
-      const canonical =
-        resolved.examinationCode ||
-        OfflineExamRepository.makeOfflineCode(
-          resolved.schedule.id,
-          resolved.session.roomId,
-        );
+      const canonical = resolved.examinationCode || examCode;
       await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, resolved.schedule.id);
       await appStorage.setItem(STORAGE_KEYS.offlineExamCode, canonical);
       await setStoredCode(canonical);
-      const students = await OfflineExamRepository.getLobbyStudentsForSchedule(
-        resolved.schedule.id,
-      );
-      const waiting = students.filter((s) => s.status === 'waiting').length;
+      const registered = Number(resolved.session.registeredStudents ?? 0);
       return {
         schedule: resolved.schedule,
         session: resolved.session,
-        status: 'lobby_open',
+        status: openedEntry?.status || 'lobby_open',
         examinationCode: canonical,
         qrValue: canonical,
         roomName: resolved.session.roomName,
         roomId: resolved.session.roomId ? Number(resolved.session.roomId) : undefined,
-        registeredCount: students.length,
+        registeredCount: registered,
         connectedCount: 0,
-        notYetConnectedCount: waiting,
-        waitingCount: waiting,
+        notYetConnectedCount: registered,
+        waitingCount: 0,
         takingCount: 0,
         finishedCount: 0,
         warningCount: 0,
         terminatedCount: 0,
         violationsDetected: 0,
-        students,
+        students: [],
         can_control: true,
       } as LobbySnapshot;
     }
@@ -583,9 +637,10 @@ export const LobbyRepository = {
         );
       }
       const sid = String(sessionId).replace(/^offline-/, '');
-      const examCode =
-        current.examinationCode ||
-        OfflineExamRepository.makeOfflineCode(sid, roomId);
+      const examCode = current.examinationCode;
+      if (!examCode) {
+        throw new Error('Open the room lobby first to generate an examination code.');
+      }
       await PeerExamServer.start({ scheduleId: sid, roomId: roomId ?? null, examCode });
       return PeerExamServer.startExam();
     }

@@ -98,22 +98,18 @@ export default function ScanScreen() {
         <Header title="Scan QR Code" onBack={() => router.back()} />
         <View style={styles.permission}>
           <CampusWifiBlockedCard
-            title={
-              wifiGate.wifiConnected && wifiGate.serverReachable === false
-                ? 'Wi‑Fi / LAN does not match the proctor'
-                : 'Campus Wi‑Fi required'
-            }
+            title="Different examination network"
             message={
               error ??
               wifiGate.message ??
-              'Connect to the same Wi‑Fi as the proctor, then scan again.'
+              'You are connected to a different examination network. Please connect to the same Wi‑Fi network as the proctor and scan again.'
             }
             checking={wifiGate.checking}
             onRetry={() => {
               setWifiBlocked(false);
               setError(null);
               setScanning(true);
-              void wifiGate.refresh();
+              setBusy(false);
             }}
           />
           <Button
@@ -123,6 +119,7 @@ export default function ScanScreen() {
               setWifiBlocked(false);
               setError(null);
               setScanning(true);
+              setBusy(false);
             }}
             style={{ marginTop: 12 }}
           />

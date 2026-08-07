@@ -6,8 +6,6 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { KeyRound } from 'lucide-react-native';
 import { Button, Card, Header, Input } from '@/components/ui';
-import { CampusWifiBlockedCard } from '@/features/student/CampusWifiBlockedCard';
-import { useCampusWifiJoinGate } from '@/hooks/useCampusWifiJoinGate';
 import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 import { LobbyRepository } from '@/repositories';
 import { useStudentStore } from '@/stores';
@@ -31,7 +29,6 @@ export default function EnterCodeScreen() {
   const router = useRouter();
   const setScannedSession = useStudentStore((s) => s.setScannedSession);
   const [error, setError] = useState<string | null>(null);
-  const wifiGate = useCampusWifiJoinGate({ requireServer: false });
 
   const {
     control,
@@ -44,12 +41,16 @@ export default function EnterCodeScreen() {
 
   const onVerify = handleSubmit(async (values) => {
     setError(null);
+    // Validate network only AFTER the student submits a code.
     const gate = await assertCampusWifiForJoin({
       examinationCode: values.code,
       requireServer: true,
     });
     if (!gate.ok) {
-      setError(gate.message ?? 'Campus Wi‑Fi required.');
+      setError(
+        gate.message ??
+          'You are connected to a different examination network. Please connect to the same Wi‑Fi network as the proctor and try again.',
+      );
       return;
     }
 
@@ -69,65 +70,49 @@ export default function EnterCodeScreen() {
     >
       <Header
         title="Enter Examination Code"
-        subtitle="Campus exam Wi‑Fi required"
+        subtitle="Type the room code from your proctor"
         onBack={() => router.back()}
       />
       <View style={styles.content}>
-        {!wifiGate.ok ? (
-          <CampusWifiBlockedCard
-            title={
-              wifiGate.wifiConnected && wifiGate.serverReachable === false
-                ? 'Wi‑Fi / LAN does not match'
-                : 'Campus Wi‑Fi required'
-            }
-            message={
-              wifiGate.message ??
-              'Connect to the same Wi‑Fi as the proctor before entering the code.'
-            }
-            checking={wifiGate.checking}
-            onRetry={() => void wifiGate.refresh()}
+        <Card>
+          <View style={styles.iconWrap}>
+            <KeyRound size={26} color={colors.primary} />
+          </View>
+          <Text style={styles.title}>Examination Code</Text>
+          <Text style={styles.body}>
+            Type this room’s code from your proctor (not the reconnect PIN). Example:
+            K7M2P9QX. You will be asked to join the same Wi‑Fi as the proctor after you
+            submit.
+          </Text>
+
+          <Controller
+            control={control}
+            name="code"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <Input
+                label="Examination Code"
+                placeholder="K7M2P9QX"
+                autoCapitalize="characters"
+                autoCorrect={false}
+                value={value}
+                onChangeText={(text) => onChange(text.toUpperCase())}
+                onBlur={onBlur}
+                error={errors.code?.message}
+                onSubmitEditing={onVerify}
+              />
+            )}
           />
-        ) : (
-          <Card>
-            <View style={styles.iconWrap}>
-              <KeyRound size={26} color={colors.primary} />
-            </View>
-            <Text style={styles.title}>Examination Code</Text>
-            <Text style={styles.body}>
-              You must stay on the campus exam Wi‑Fi. Type this room’s code from your proctor
-              (not the reconnect PIN). Live example: K7M2P9QX. Offline: OFF-12-R3.
-            </Text>
 
-            <Controller
-              control={control}
-              name="code"
-              render={({ field: { onChange, onBlur, value } }) => (
-                <Input
-                  label="Examination Code"
-                  placeholder="K7M2P9QX"
-                  autoCapitalize="characters"
-                  autoCorrect={false}
-                  value={value}
-                  onChangeText={(text) => onChange(text.toUpperCase())}
-                  onBlur={onBlur}
-                  error={errors.code?.message}
-                  onSubmitEditing={onVerify}
-                />
-              )}
-            />
+          {error ? <Text style={styles.error}>{error}</Text> : null}
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
-
-            <Button
-              title="Verify Code"
-              size="lg"
-              fullWidth
-              loading={isSubmitting}
-              onPress={onVerify}
-              style={{ marginTop: 16 }}
-            />
-          </Card>
-        )}
+          <Button
+            title="Verify Code"
+            size="lg"
+            fullWidth
+            loading={isSubmitting}
+            onPress={onVerify}
+          />
+        </Card>
       </View>
     </KeyboardAvoidingView>
   );
@@ -140,12 +125,12 @@ const styles = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 16,
-    backgroundColor: '#F0D9DC',
+    backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
   },
-  title: { fontSize: 20, fontWeight: '700', color: colors.ink, marginBottom: 6 },
+  title: { fontSize: 20, fontWeight: '700', color: colors.ink, marginBottom: 8 },
   body: { fontSize: 14, lineHeight: 21, color: colors.inkSecondary, marginBottom: 16 },
-  error: { marginTop: 10, color: colors.danger, fontWeight: '600', fontSize: 13 },
+  error: { color: colors.danger, fontSize: 13, fontWeight: '600', marginBottom: 10 },
 });

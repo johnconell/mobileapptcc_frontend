@@ -191,29 +191,21 @@ function remainingSeconds(state: PeerSessionState): number | null {
   return Math.max(0, Math.round(state.durationMinutes * 60 - elapsed));
 }
 
-/** Roster from the pack merged with everyone who actually joined this room. */
+/** Live roster only — students who scanned, entered a key, and joined. */
 async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
-  const resolved = await OfflineExamRepository.resolveOfflineCode(state.examCode);
-  const roster = await OfflineExamRepository.getLobbyStudentsForSchedule(
-    String(state.scheduleId),
+  const resolved = await OfflineExamRepository.resolveScheduleRoom(
+    state.scheduleId,
+    state.roomId,
+    state.examCode,
   );
 
-  const joined = Object.values(state.students);
-  const joinedByRegistration = new Map(joined.map((s) => [String(s.registrationId), s]));
-
-  const students: LobbyStudent[] = roster.map((row) => {
-    const live = joinedByRegistration.get(row.id);
-    return live ? toLobbyStudent(live) : { ...row, terminationReason: null };
-  });
-  for (const live of joined) {
-    if (!roster.some((row) => row.id === String(live.registrationId))) {
-      students.push(toLobbyStudent(live));
-    }
-  }
+  const students: LobbyStudent[] = Object.values(state.students).map(toLobbyStudent);
+  const registeredCount =
+    Number(resolved?.session?.registeredStudents ?? 0) || students.length;
 
   const count = (status: LobbyStudentStatus) =>
     students.filter((s) => s.status === status).length;
-  const connected = joined.length;
+  const connected = students.length;
 
   return {
     schedule: resolved?.schedule as LobbySnapshot['schedule'],
@@ -227,9 +219,9 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
     qrValue: peerQrPayload(state),
     roomName: resolved?.session?.roomName ?? null,
     roomId: state.roomId,
-    registeredCount: students.length,
+    registeredCount,
     connectedCount: connected,
-    notYetConnectedCount: Math.max(0, students.length - connected),
+    notYetConnectedCount: Math.max(0, registeredCount - connected),
     waitingCount: count('waiting'),
     takingCount: count('taking_exam'),
     finishedCount: count('finished'),
@@ -316,7 +308,11 @@ function registerRoutes(mod: HttpServerModule) {
     if (code && code !== session.examCode) {
       return fail(404, 'That examination code is not the one open in this room.');
     }
-    const resolved = await OfflineExamRepository.resolveOfflineCode(session.examCode);
+    const resolved = await OfflineExamRepository.resolveScheduleRoom(
+      session.scheduleId,
+      session.roomId,
+      session.examCode,
+    );
     if (!resolved) return fail(500, 'Proctor phone has no exam pack for this schedule.');
     return ok(
       {
@@ -594,10 +590,31 @@ export const PeerExamServer = {
 
   /** Restore a session after the proctor app was killed mid-examination. */
   async restore(): Promise<boolean> {
-    if (session) return true;
-    const saved = await OfflineStore.getPeerSession<PeerSessionState>();
-    if (!saved || saved.status === 'ended') return false;
-    session = saved;
+    if (!session) {
+      const saved = await OfflineStore.getPeerSession<PeerSessionState>();
+      if (!saved || saved.status === 'ended') return false;
+      session = saved;
+    }
+
+    // Encrypted state alone is not enough — restart HTTP so students can reconnect.
+    const mod = loadHttpServer();
+    if (!mod) return Boolean(session);
+
+    hostIp = await resolveHostIp();
+    if (!running) {
+      try {
+        mod.setup(PEER_PORT);
+        registerRoutes(mod);
+        mod.start();
+        running = true;
+      } catch {
+        // Port may already be bound from a previous JS context; treat as running.
+        running = true;
+      }
+    }
+
+    await persist();
+    notify();
     return true;
   },
 
@@ -684,6 +701,14 @@ export const PeerExamServer = {
         student.startedAt = student.startedAt ?? now;
       }
     }
+    if (session.roomId != null) {
+      await OfflineStore.setOpenedRoom(
+        session.scheduleId,
+        session.roomId,
+        session.examCode,
+        'in_progress',
+      );
+    }
     await persist();
     notify();
     return buildSnapshot(session);
@@ -699,6 +724,14 @@ export const PeerExamServer = {
         student.status = 'finished';
         student.terminationReason = student.terminationReason ?? 'time_expired';
       }
+    }
+    if (session.roomId != null) {
+      await OfflineStore.setOpenedRoom(
+        session.scheduleId,
+        session.roomId,
+        session.examCode,
+        'ended',
+      );
     }
     await persist();
     notify();
