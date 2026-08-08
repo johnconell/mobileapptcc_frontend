@@ -36,6 +36,25 @@ function lobbyQueryKey(sessionId: string, roomId?: string) {
   return roomId ? `${sessionId}:room:${roomId}` : sessionId;
 }
 
+/** True when a peer-hosted lobby belongs to the requested schedule/room. */
+function peerMatchesRequest(
+  hosted: LobbySnapshot,
+  sessionId?: string,
+  roomId?: string,
+): boolean {
+  if (roomId != null && String(roomId).trim() !== '') {
+    if (String(hosted.roomId ?? '') !== String(roomId)) return false;
+  }
+  if (sessionId != null && String(sessionId).trim() !== '') {
+    const sid = String(sessionId).replace(/^offline-/, '');
+    const hostedSchedule = String(
+      hosted.session?.scheduleId ?? hosted.schedule?.id ?? '',
+    ).replace(/^offline-/, '');
+    if (hostedSchedule && hostedSchedule !== sid) return false;
+  }
+  return true;
+}
+
 /**
  * LobbyRepository — Laravel exam session lobby + QR code workflow.
  * `sessionId` = examination_schedules.id; `roomId` = examination_rooms.id.
@@ -157,10 +176,13 @@ export const LobbyRepository = {
     examSessionId?: string,
   ): Promise<LobbySnapshot | null> {
     // Hosting on this phone: restore encrypted session AND restart HTTP.
+    // Only reuse when the peer session matches the requested room/schedule.
     const restored = await PeerExamServer.restore();
     if (restored) {
       const hosted = await PeerExamServer.snapshot();
-      if (hosted) return hosted;
+      if (hosted && peerMatchesRequest(hosted, sessionId, roomId)) {
+        return hosted;
+      }
     }
 
     if (await OfflineStore.isOfflineMode()) {
@@ -204,7 +226,9 @@ export const LobbyRepository = {
   async getLobby(sessionId?: string, roomId?: string): Promise<LobbySnapshot | null> {
     // Proctor phone hosting: it owns the lobby state, so read it directly.
     const hosted = await PeerExamServer.snapshot();
-    if (hosted) return hosted;
+    if (hosted && peerMatchesRequest(hosted, sessionId, roomId)) {
+      return hosted;
+    }
 
     // Student joined to a proctor phone: poll that phone.
     if (await PeerExamClient.isActive()) {
@@ -656,22 +680,108 @@ export const LobbyRepository = {
     return json.data;
   },
 
-  async endExamination(sessionId: string, roomId?: string): Promise<LobbySnapshot> {
-    const current = await this.ensureLobby(sessionId, undefined, roomId);
+  async closeLobby(sessionId: string, roomId?: string): Promise<void> {
+    const sid = String(sessionId).replace(/^offline-/, '');
 
-    if (await PeerExamServer.snapshot()) {
-      return PeerExamServer.endExam();
+    const peer = await PeerExamServer.snapshot();
+    if (peer && peerMatchesRequest(peer, sessionId, roomId)) {
+      if (peer.status === 'in_progress') {
+        throw new Error('Examination has started. Use End Examination instead.');
+      }
+      await PeerExamServer.closeLobby();
+      return;
     }
 
-    const examSessionId = current?.session?.examSessionId;
-    if (!examSessionId) throw new Error('Examination session not found.');
+    let examSessionId: number | null = null;
+    if (!(await OfflineStore.isOfflineMode())) {
+      try {
+        const qs = roomId
+          ? `?examination_room_id=${encodeURIComponent(roomId)}`
+          : '';
+        const bySchedule = await apiRequest<LobbyResponse>(
+          `/proctor/schedules/${sessionId}/lobby${qs}`,
+        );
+        const lobby = bySchedule?.data;
+        if (lobby?.status === 'in_progress') {
+          throw new Error('Examination has started. Use End Examination instead.');
+        }
+        examSessionId = lobby?.session?.examSessionId ?? null;
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('End Examination')) {
+          throw err;
+        }
+      }
+    }
 
-    const json = await apiRequest<LobbyResponse>(
-      `/proctor/sessions/${examSessionId}/end`,
-      { method: 'POST' },
-    );
-    if (!json.data) throw new Error(json.message || 'Unable to end examination.');
-    return json.data;
+    if (examSessionId) {
+      await apiRequest(`/proctor/sessions/${examSessionId}/close`, { method: 'POST' });
+    }
+
+    if (roomId) {
+      await OfflineStore.clearOpenedRoom(sid, roomId);
+    }
+
+    await setStoredCode(null);
+  },
+
+  async endExamination(sessionId: string, roomId?: string): Promise<LobbySnapshot> {
+    const peer = await PeerExamServer.snapshot();
+    let peerSnapshot: LobbySnapshot | null = null;
+    if (peer && peerMatchesRequest(peer, sessionId, roomId)) {
+      if (peer.status === 'lobby_open') {
+        throw new Error('Examination has not started. Close the lobby instead.');
+      }
+      peerSnapshot =
+        peer.status === 'ended' ? peer : await PeerExamServer.endExam();
+    }
+
+    let examSessionId = peerSnapshot?.session?.examSessionId ?? null;
+    if (!examSessionId && !(await OfflineStore.isOfflineMode())) {
+      try {
+        const qs = roomId
+          ? `?examination_room_id=${encodeURIComponent(roomId)}`
+          : '';
+        const bySchedule = await apiRequest<LobbyResponse>(
+          `/proctor/schedules/${sessionId}/lobby${qs}`,
+        );
+        const lobby = bySchedule?.data;
+        if (lobby?.status === 'lobby_open') {
+          throw new Error('Examination has not started. Close the lobby instead.');
+        }
+        examSessionId = lobby?.session?.examSessionId ?? null;
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('Close the lobby')) {
+          throw err;
+        }
+        examSessionId = null;
+      }
+    }
+
+    if (examSessionId) {
+      try {
+        const json = await apiRequest<LobbyResponse>(
+          `/proctor/sessions/${examSessionId}/end`,
+          { method: 'POST' },
+        );
+        if (json.data) {
+          if (!peerSnapshot && roomId) {
+            const code = json.data.examinationCode || 'ENDED';
+            await OfflineStore.setOpenedRoom(
+              String(sessionId).replace(/^offline-/, ''),
+              roomId,
+              code,
+              'ended',
+            );
+          }
+          return json.data;
+        }
+      } catch {
+        // Fall through to peer snapshot if Laravel is unreachable.
+      }
+    }
+
+    if (peerSnapshot) return peerSnapshot;
+    throw new Error('Examination session not found.');
   },
 
   async finishStudent(

@@ -369,15 +369,42 @@ export const OfflineExamRepository = {
     });
   },
 
-  async validatePasskey(examinationCode: string, passkey: string) {
+  /**
+   * Validate a student examination key against the offline pack.
+   * Resolves the schedule from (in order):
+   * 1) explicit scheduleIdOverride (peer host session)
+   * 2) opened-room map for modern codes like K7M2P9QX
+   * 3) legacy OFF-{scheduleId}[-R{roomId}] codes
+   */
+  async validatePasskey(
+    examinationCode: string,
+    passkey: string,
+    scheduleIdOverride?: number | null,
+  ) {
     const pack = await OfflineStore.getPack();
     if (!pack) return null;
-    const parsed = this.parseOfflineCode(examinationCode);
-    if (!parsed) return null;
+
+    let scheduleId: number | null =
+      scheduleIdOverride != null && Number.isFinite(Number(scheduleIdOverride))
+        ? Number(scheduleIdOverride)
+        : null;
+
+    if (scheduleId == null) {
+      const opened = await OfflineStore.findOpenedRoomByCode(examinationCode);
+      if (opened) {
+        scheduleId = opened.scheduleId;
+      } else {
+        const parsed = this.parseOfflineCode(examinationCode);
+        if (parsed) scheduleId = parsed.scheduleId;
+      }
+    }
+
+    if (scheduleId == null) return null;
+
     const normalized = passkey.trim().toUpperCase();
     const reg = pack.registrations.find(
       (r) =>
-        Number(r.examination_schedule_id) === parsed.scheduleId &&
+        Number(r.examination_schedule_id) === scheduleId &&
         String(r.exam_passkey || '').toUpperCase() === normalized,
     );
     if (!reg) return null;
@@ -385,7 +412,7 @@ export const OfflineExamRepository = {
     if (!a) return null;
     const name = (a.name || '').trim() || 'Student';
     const parts = name.trim().split(/\s+/);
-    const schedule = pack.schedules.find((s) => s.id === parsed.scheduleId);
+    const schedule = pack.schedules.find((s) => Number(s.id) === scheduleId);
     return {
       student: {
         id: String(a.id),

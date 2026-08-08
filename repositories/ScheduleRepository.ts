@@ -220,7 +220,9 @@ export const ScheduleRepository = {
             examination_code: live?.code ?? null,
             status,
             connected_count: 0,
-            can_reopen: status === 'ended',
+            // Match Laravel ExamSessionService::roomsForSchedule —
+            // idle/active rooms can open; ended rooms cannot reopen.
+            can_reopen: status !== 'ended',
           },
           String(sid),
         );

@@ -492,9 +492,13 @@ export default function ProctorLobbyScreen() {
                   lobby.status === 'ended'
                 }
               />
-              {lobby.status === 'in_progress' ? (
+              {lobby.status === 'lobby_open' || lobby.status === 'in_progress' ? (
                 <Button
-                  title="End Examination"
+                  title={
+                    lobby.status === 'lobby_open'
+                      ? 'Close Lobby'
+                      : 'End Examination'
+                  }
                   variant="danger"
                   size="lg"
                   fullWidth
@@ -503,7 +507,9 @@ export default function ProctorLobbyScreen() {
                     if (lobby.can_control === false) {
                       Alert.alert(
                         'Not allowed',
-                        'Only the proctor who opened this lobby can end the examination.',
+                        lobby.status === 'lobby_open'
+                          ? 'Only the proctor who opened this lobby can close it.'
+                          : 'Only the proctor who opened this lobby can end the examination.',
                       );
                       return;
                     }
@@ -761,9 +767,15 @@ export default function ProctorLobbyScreen() {
 
       <ConfirmationModal
         visible={endOpen}
-        title="End Examination?"
-        description="This immediately ends the exam, auto-submits every student still taking it, and closes the session. This cannot be undone."
-        confirmLabel="Yes, end now"
+        title={
+          lobby?.status === 'lobby_open' ? 'Close Lobby?' : 'End Examination?'
+        }
+        description={
+          lobby?.status === 'lobby_open'
+            ? 'This closes the lobby before the exam starts. No new students can join until you open this room again.'
+            : 'This immediately ends the exam, auto-submits every student still taking it, and closes the session. This cannot be undone.'
+        }
+        confirmLabel={lobby?.status === 'lobby_open' ? 'Yes, close lobby' : 'Yes, end now'}
         cancelLabel="Cancel"
         loading={busy}
         onCancel={() => setEndOpen(false)}
@@ -771,14 +783,32 @@ export default function ProctorLobbyScreen() {
           if (!sessionId) return;
           setBusy(true);
           try {
-            const snapshot = await LobbyRepository.endExamination(sessionId, roomId);
-            setSnapshot(snapshot);
+            const wasLobbyOnly = lobby?.status === 'lobby_open';
+            if (wasLobbyOnly) {
+              await LobbyRepository.closeLobby(sessionId, roomId);
+              setSnapshot(null);
+            } else {
+              const snapshot = await LobbyRepository.endExamination(sessionId, roomId);
+              setSnapshot(snapshot);
+            }
             await refresh();
+            await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.rooms(sessionId) });
             setEndOpen(false);
-            Alert.alert('Examination ended', 'All active examinees were submitted and the session is closed.');
+            Alert.alert(
+              wasLobbyOnly ? 'Lobby closed' : 'Examination ended',
+              wasLobbyOnly
+                ? 'This room is closed but not ended. You can open it again when ready.'
+                : 'All active examinees were submitted and the session is closed.',
+            );
+            if (sessionId) {
+              router.replace({
+                pathname: '/(proctor)/rooms',
+                params: { sessionId },
+              });
+            }
           } catch (error) {
             Alert.alert(
-              'Unable to end',
+              'Unable to close',
               error instanceof Error ? error.message : 'Please try again.',
             );
           } finally {

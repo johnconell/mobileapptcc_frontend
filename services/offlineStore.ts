@@ -357,6 +357,18 @@ export const OfflineStore = {
     await appStorage.setItem(STORAGE_KEYS.offlineOpenedRooms, JSON.stringify(all));
   },
 
+  /** Remove opened-room entry so the room returns to idle and can be opened again. */
+  async clearOpenedRoom(
+    scheduleId: string | number,
+    roomId: string | number,
+  ): Promise<void> {
+    const key = `${Number(scheduleId)}:${Number(roomId)}`;
+    const all = await this.getOpenedRooms();
+    if (!all[key]) return;
+    delete all[key];
+    await appStorage.setItem(STORAGE_KEYS.offlineOpenedRooms, JSON.stringify(all));
+  },
+
   async findOpenedRoomByCode(code: string): Promise<{
     scheduleId: number;
     roomId: number;

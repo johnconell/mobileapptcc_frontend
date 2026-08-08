@@ -100,7 +100,9 @@ export default function RoomDetailScreen() {
 
   const accent = roomAccent(room.status);
   const isOpen = room.status === 'lobby_open' || room.status === 'in_progress';
-  const isEnded = room.status === 'ended' || room.canReopen === false;
+  // Only truly ended sessions show "View results & sync".
+  // Do not treat canReopen===false alone as ended (idle rooms must stay openable).
+  const isEnded = room.status === 'ended';
 
   const openOrEnter = async () => {
     if (!sessionId) return;
@@ -184,8 +186,10 @@ export default function RoomDetailScreen() {
                   {isEnded && !isOpen
                     ? 'Examination ended. You can still view the student list and sync results to Admin.'
                     : isOpen
-                      ? 'Lobby is open.'
-                      : 'This room is closed. Open the lobby to generate a QR code.'}
+                      ? lobby.status === 'lobby_open'
+                        ? 'Lobby is open. Close the lobby before starting if you need to reopen this room later.'
+                        : 'Examination in progress.'
+                      : 'This room is closed. Open the lobby when you are ready to start.'}
                 </Text>
               )}
 

@@ -334,6 +334,7 @@ function registerRoutes(mod: HttpServerModule) {
     const validated = await OfflineExamRepository.validatePasskey(
       session.examCode,
       passkey,
+      session.scheduleId,
     );
     if (!validated) return fail(404, 'Invalid examination key for this examination.');
     return ok({ student: validated.student, schedule: validated.schedule });
@@ -350,6 +351,7 @@ function registerRoutes(mod: HttpServerModule) {
     const validated = await OfflineExamRepository.validatePasskey(
       session.examCode,
       passkey,
+      session.scheduleId,
     );
     if (!validated) return fail(404, 'Invalid examination key for this examination.');
 
@@ -656,6 +658,19 @@ export const PeerExamServer = {
       session.roomId === roomId &&
       session.status !== 'ended';
 
+    // Peer host serves one room at a time. Require Close Lobby / End Examination
+    // before opening a different room so room status stays consistent.
+    if (
+      session &&
+      !reopening &&
+      session.status !== 'ended' &&
+      (session.scheduleId !== scheduleId || session.roomId !== roomId)
+    ) {
+      throw new Error(
+        'Close or end the current room lobby before opening another room.',
+      );
+    }
+
     if (!reopening) {
       session = {
         scheduleId,
@@ -716,6 +731,9 @@ export const PeerExamServer = {
 
   async endExam(): Promise<LobbySnapshot> {
     if (!session) throw new Error('Open the room lobby first.');
+    if (session.status === 'lobby_open') {
+      throw new Error('Examination has not started. Close the lobby instead.');
+    }
     const now = new Date().toISOString();
     session.status = 'ended';
     session.endedAt = now;
@@ -736,6 +754,22 @@ export const PeerExamServer = {
     await persist();
     notify();
     return buildSnapshot(session);
+  },
+
+  /**
+   * Close lobby before exam start — room returns to idle and can be opened again.
+   */
+  async closeLobby(): Promise<void> {
+    if (!session) return;
+    if (session.status === 'in_progress') {
+      throw new Error('Examination has started. Use End Examination instead.');
+    }
+    const scheduleId = session.scheduleId;
+    const roomId = session.roomId;
+    await this.reset();
+    if (roomId != null) {
+      await OfflineStore.clearOpenedRoom(scheduleId, roomId);
+    }
   },
 
   async terminateStudent(registrationId: string | number): Promise<LobbySnapshot | null> {
