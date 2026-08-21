@@ -186,7 +186,7 @@ export default function RoomDetailScreen() {
                   {isEnded && !isOpen
                     ? 'Examination ended. You can still view the student list and sync results to Admin.'
                     : isOpen
-                      ? lobby.status === 'lobby_open'
+                      ? room.status === 'lobby_open'
                         ? 'Lobby is open. Close the lobby before starting if you need to reopen this room later.'
                         : 'Examination in progress.'
                       : 'This room is closed. Open the lobby when you are ready to start.'}
