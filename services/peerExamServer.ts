@@ -107,11 +107,18 @@ let running = false;
 let hostIp: string | null = null;
 let listeners: Array<() => void> = [];
 
-// Performance optimizations
+// Performance optimizations & Bulletproof Caching
+let _cachedSnapshot: LobbySnapshot | null = null;
+let _snapshotDirty = true; // Flag to rebuild only when necessary
 let _packCache: OfflinePack | null = null;
 let _resolvedCache: any = null;
 let _resolvedAt = 0;
 let _builtQuestionsCache: Question[] | null = null;
+
+function invalidateSnapshot() {
+  _snapshotDirty = true;
+  _cachedSnapshot = null;
+}
 
 function ok(data: unknown, message?: string): JsonResponse {
   return {
@@ -257,6 +264,9 @@ function remainingSeconds(state: PeerSessionState): number | null {
 
 /** Live roster only — students who scanned, entered a key, and joined. */
 async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
+  // Return cached if clean (Critical Fix for Root Cause 1)
+  if (!_snapshotDirty && _cachedSnapshot) return _cachedSnapshot;
+
   const now = Date.now();
   if (!_resolvedCache || now - _resolvedAt > 5000) {
     _resolvedCache = await OfflineExamRepository.resolveScheduleRoom(
@@ -268,7 +278,6 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
   }
   const resolved = _resolvedCache;
 
-  // Optimized single-pass status counting and student mapping
   const students: LobbyStudent[] = [];
   let waiting = 0;
   let taking = 0;
@@ -286,7 +295,7 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
     else if (student.status === 'finished') finished++;
     else if (student.status === 'warning') {
         warning++;
-        taking++; // warning is still taking
+        taking++;
     }
     else if (student.status === 'terminated') terminated++;
     else if (student.status === 'disconnected') disconnected++;
@@ -295,7 +304,7 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
   const registeredCount =
     Number(resolved?.session?.registeredStudents ?? 0) || students.length;
 
-  return {
+  _cachedSnapshot = {
     schedule: resolved?.schedule as LobbySnapshot['schedule'],
     session: {
       ...(resolved?.session as LobbySnapshot['session']),
@@ -324,6 +333,9 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
     remainingSeconds: remainingSeconds(state),
     wifiSsid: state.wifiSsid,
   };
+
+  _snapshotDirty = false;
+  return _cachedSnapshot;
 }
 
 /**
@@ -395,18 +407,23 @@ function registerRoutes(mod: HttpServerModule) {
 
   /**
    * Ultra-fast signal endpoint (Minecraft-style).
-   * Returns ONLY the minimal state needed to trigger the exam start.
-   * Total payload is ~50 bytes.
+   * RETURNS ONLY PRIMITIVES. NO STUDENT LIST. NO HEAVY OBJECTS.
+   * Fixing Root Cause 1 (Congestion) and 2 (Token Gate).
    */
   mod.route(p('/status'), 'GET', async (request) => {
     if (!session) return fail(503, 'Offline');
+
+    // We try to find the student for personalized status, but the
+    // ROOM status is always returned regardless of token.
     const params = parseParams(request);
     const student = studentByToken(params.participation_token ?? '');
 
     return ok({
-      s: session.status,          // 'lobby_open' | 'in_progress' | 'ended'
-      ss: student?.status ?? '?', // student-specific status
-      t: Date.now()               // server time
+      examStarted: session.status !== 'lobby_open',
+      roomStatus: session.status,
+      myStatus: student?.status ?? 'anonymous',
+      serverTime: Date.now(),
+      v: session.status === 'in_progress' ? 2 : 1 // Simple versioning
     });
   });
 
@@ -545,6 +562,7 @@ function registerRoutes(mod: HttpServerModule) {
       console.log('[SERVER] Student connected. Registration ID:', registrationId);
     }
 
+    invalidateSnapshot();
     await persist();
     notify();
 
@@ -575,6 +593,7 @@ function registerRoutes(mod: HttpServerModule) {
       student.status = 'taking_exam';
       student.startedAt = student.startedAt ?? now;
       changed = true;
+      invalidateSnapshot();
       console.log(`[SESSION] Student ${student.applicantCode} transitioned: waiting -> taking_exam`);
     }
 
@@ -607,6 +626,7 @@ function registerRoutes(mod: HttpServerModule) {
       console.log(`[SESSION] Student ${student.applicantCode} left the lobby.`);
       delete session.students[student.registrationId];
       if (session.tokenMap) delete session.tokenMap[token];
+      invalidateSnapshot();
       await persist();
       notify();
     }
@@ -665,6 +685,7 @@ function registerRoutes(mod: HttpServerModule) {
       }
     }
     student.lastActivityAt = new Date().toISOString();
+    invalidateSnapshot();
     await persist();
     notify();
 
@@ -708,6 +729,7 @@ function registerRoutes(mod: HttpServerModule) {
       synced: false,
     });
 
+    invalidateSnapshot();
     await persist();
     notify();
 
@@ -743,6 +765,7 @@ function registerRoutes(mod: HttpServerModule) {
       student.status = 'warning';
     }
 
+    invalidateSnapshot();
     await persist();
     notify();
 
@@ -776,6 +799,7 @@ function registerRoutes(mod: HttpServerModule) {
 
     console.log(`[SERVER] Issued Reconnect PIN ${pin} for student ${student.applicantCode}`);
 
+    invalidateSnapshot();
     await persist();
     notify();
 
@@ -814,6 +838,7 @@ function registerRoutes(mod: HttpServerModule) {
 
     console.log(`[SERVER] Student ${student.applicantCode} reconnected via PIN.`);
 
+    invalidateSnapshot();
     await persist();
     notify();
 
@@ -1002,6 +1027,7 @@ export const PeerExamServer = {
       console.log('[START_EVENT] ROOM_UPDATED');
     }
     console.log('[START_EVENT] BROADCAST_SENT (via polling update)');
+    invalidateSnapshot();
     await persist();
     notify();
     return buildSnapshot(session);
@@ -1029,6 +1055,7 @@ export const PeerExamServer = {
         'ended',
       );
     }
+    invalidateSnapshot();
     await persist();
     notify();
     return buildSnapshot(session);
@@ -1057,6 +1084,7 @@ export const PeerExamServer = {
     if (target) {
       target.status = 'terminated';
       target.terminationReason = 'proctor_terminated';
+      invalidateSnapshot();
       await persist();
       notify();
     }
@@ -1090,6 +1118,7 @@ export const PeerExamServer = {
     const id = Number(registrationId);
     if (currentSession.students[id]) {
       delete currentSession.students[id];
+      invalidateSnapshot();
       await persist();
       notify();
     }

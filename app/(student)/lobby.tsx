@@ -1,10 +1,9 @@
 import React, { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import { Alert, BackHandler, ScrollView, Text, View, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
-import { Check, Download, User, Wifi, ShieldAlert, RefreshCw, AlertTriangle } from 'lucide-react-native';
+import { Check, User, ShieldAlert, RefreshCw, AlertTriangle } from 'lucide-react-native';
 import { Header } from '@/components/ui/Header';
 import { Card } from '@/components/ui/Card';
-import { SkeletonDetail } from '@/components/ui/Skeleton';
 import { Button } from '@/components/ui/Button';
 import { LobbyWaitingAnimation } from '@/features/lobby/LobbyWaitingAnimation';
 import { useLobby } from '@/hooks/useRepositories';
@@ -14,7 +13,6 @@ import { QuestionRepository, LobbyRepository } from '@/repositories';
 import { useExamStore, useLobbyStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
 import { PeerExamClient } from '@/services/peerExamClient';
-import { ExamPreloader } from '@/services/examPreloader';
 import { OfflineStore } from '@/services/offlineStore';
 
 /**
@@ -37,39 +35,57 @@ function useLobbyController() {
 
   const [state, setState] = useState<LobbyState>('DASHBOARD');
   const [error, setError] = useState<string | null>(null);
-  const [preloaded, setPreloaded] = useState(false);
-  const [preloading, setPreloading] = useState(false);
   const [lastSeen, setLastSeen] = useState<number>(Date.now());
+  const [lastSuccessAt, setLastSuccessAt] = useState<number>(Date.now());
 
   const hasJoined = useRef(false);
   const hasEntered = useRef(false);
 
   // Polling is ALWAYS active on this screen to ensure proctor stays updated.
   const lobbyQuery = useLobby(scannedSessionId ?? undefined, undefined, true);
-  const lobbyData = useMemo(() => lobbyQuery.data ?? storedSnapshot, [lobbyQuery.data, storedSnapshot]);
 
-  // -- SIGNAL MONITOR (Minecraft-style high speed) --
+  // Anti-Stale Data Strategy (Fix Root Cause 3)
+  const isStale = Date.now() - lastSuccessAt > 15000;
+
+  const lobbyData = useMemo(() => {
+    if (lobbyQuery.data) {
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        setLastSuccessAt(Date.now());
+        return lobbyQuery.data;
+    }
+    return storedSnapshot;
+  }, [lobbyQuery.data, storedSnapshot]);
+
+  // -- SIGNAL MONITOR (UN-GATED - Fix Root Cause 2) --
   useEffect(() => {
     if (hasEntered.current) return;
 
-    // Priority 1: Check local polled data (Lobby Snapshot)
+    // Priority 1: Check snapshot status
     if (lobbyData?.status === 'in_progress') {
         console.log('[LOBBY_CTL] START_SIGNAL_BY_SNAPSHOT');
         setState('STARTING');
         return;
     }
 
-    // Priority 2: Lightweight status check (Bypass heavy snapshot if poll is slow)
     const checkSignal = async () => {
-        const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
-        if (!token) return;
-        const quick = await PeerExamClient.getQuickStatus(token);
-        if (quick?.s === 'in_progress' || quick?.ss === 'taking_exam') {
-             console.log('[LOBBY_CTL] START_SIGNAL_BY_QUICK_STATUS');
+        // Ultra-fast Global status check
+        const global = await PeerExamClient.getGlobalStatus();
+        if (global?.examStarted || global?.roomStatus === 'in_progress') {
+             console.log('[LOBBY_CTL] START_SIGNAL_BY_GLOBAL_PULSE');
              setState('STARTING');
+             return;
+        }
+
+        // Standard student-specific check
+        const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+        if (token) {
+            const quick = await PeerExamClient.getQuickStatus(token);
+            if (quick?.s === 'in_progress' || quick?.ss === 'taking_exam') {
+                 setState('STARTING');
+            }
         }
     };
-    const id = setInterval(checkSignal, 2000);
+    const id = setInterval(checkSignal, 2500);
     return () => clearInterval(id);
   }, [lobbyData?.status]);
 
@@ -93,35 +109,32 @@ function useLobbyController() {
             console.error('[LOBBY_CTL] ENTRY_CRASH:', err);
             hasEntered.current = false;
             setState('DASHBOARD');
-            Alert.alert('Load Failure', 'Could not open examination. Ensure modules are downloaded.');
+            Alert.alert('Load Failure', 'Could not open examination. Ensure modules were downloaded at the start.');
         }
     };
     void go();
   }, [state, lobbyData, scannedSessionId]);
 
-  // -- PRESENCE HEARTBEAT (Starts instantly on mount) --
+  // -- PRESENCE HEARTBEAT (Always Active) --
   useEffect(() => {
     const id = setInterval(async () => {
         try {
+            const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+            if (!token) return;
             await LobbyRepository.sendHeartbeat();
             setLastSeen(Date.now());
         } catch { }
-    }, 4000);
+    }, 5000);
     return () => clearInterval(id);
   }, []);
 
-  // -- BACKGROUND READINESS & HANDSHAKE --
+  // -- BACKGROUND HANDSHAKE --
   const initializeAndJoin = useCallback(async () => {
     if (!scannedSessionId || (!verifiedStudent && !selectedStudent)) {
         router.replace('/');
         return;
     }
 
-    // 1. Force refresh of the local pack readiness
-    const hasPack = await OfflineStore.hasPack();
-    setPreloaded(hasPack);
-
-    // 2. Network handshake (if not already verified)
     if (!verifiedStudent && !hasJoined.current) {
         hasJoined.current = true;
         try {
@@ -135,6 +148,7 @@ function useLobbyController() {
 
             setVerifiedStudent(verified);
             setSnapshot(lobby);
+            setLastSuccessAt(Date.now());
         } catch (e) {
             console.warn("Lobby handshake delay...", e);
             hasJoined.current = false;
@@ -149,18 +163,8 @@ function useLobbyController() {
     error,
     currentStudent: verifiedStudent || selectedStudent,
     lobbyData,
-    preloaded,
-    preloading,
     lastSeen,
-    download: async () => {
-      setPreloading(true);
-      try {
-          await ExamPreloader.preloadQuestions(scannedSessionId!);
-          setPreloaded(true);
-      }
-      catch (e) { Alert.alert('Connection Error', 'Check Wi-Fi connection to proctor.'); }
-      finally { setPreloading(false); }
-    },
+    isStale,
     lobbyQuery
   };
 }
@@ -186,13 +190,13 @@ export default function StudentLobbyScreen() {
       );
   }
 
-  const { lobbyData, currentStudent } = controller;
+  const { lobbyData, currentStudent, isStale } = controller;
 
   return (
     <View style={styles.screen}>
       <Header
         title={lobbyData?.schedule?.name || "Entrance Examination"}
-        subtitle="Secure Student Dashboard"
+        subtitle={isStale ? "Syncing Connection..." : "Secure Student Dashboard"}
         onBack={undefined}
       />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -209,6 +213,7 @@ export default function StudentLobbyScreen() {
               </View>
            </View>
 
+           {/* HARDCODED GREEN STATUS - As requested, the pack is already downloaded at home */}
            <View style={[styles.readinessBanner, styles.readyBg]}>
               <Check size={18} color={colors.success} />
               <Text style={[styles.readinessText, styles.readyText]}>
@@ -219,7 +224,7 @@ export default function StudentLobbyScreen() {
 
         {/* SECTION 2: EXAM DETAILS */}
         <Card style={styles.infoCard}>
-           {lobbyData ? (
+           {(!isStale && lobbyData) ? (
               <View style={styles.infoGrid}>
                   <InfoItem label="Batch" value={lobbyData?.session?.batchNumber || "—"} />
                   <InfoItem label="Time" value={lobbyData?.session?.timeLabel || "—"} />
@@ -227,7 +232,9 @@ export default function StudentLobbyScreen() {
               </View>
            ) : (
               <View style={{ padding: 16 }}>
-                 <Text style={styles.loadingInfo}>Syncing room details...</Text>
+                 <Text style={styles.loadingInfo}>
+                    {isStale ? "Reconnecting to Room..." : "Syncing room details..."}
+                 </Text>
                  <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 8 }} />
               </View>
            )}
@@ -253,9 +260,9 @@ export default function StudentLobbyScreen() {
 
         {/* SECTION 4: NETWORK HEALTH */}
         <View style={styles.networkBox}>
-           <View style={[styles.pulse, { backgroundColor: controller.lobbyQuery.isError ? colors.danger : colors.success }]} />
+           <View style={[styles.pulse, { backgroundColor: (controller.lobbyQuery.isError || isStale) ? colors.danger : colors.success }]} />
            <Text style={styles.networkText}>
-              {controller.lobbyQuery.isError ? "Connection Interrupted" : `LOCAL LINK ACTIVE · PULSE ${new Date(controller.lastSeen).toLocaleTimeString()}`}
+              {(controller.lobbyQuery.isError || isStale) ? "Signal Interrupted" : `LOCAL LINK ACTIVE · PULSE ${new Date(controller.lastSeen).toLocaleTimeString()}`}
            </Text>
            <Pressable onPress={() => void controller.lobbyQuery.refetch()} style={styles.refreshBtn}>
               <RefreshCw size={14} color={colors.primary} />
@@ -293,10 +300,8 @@ const styles = StyleSheet.create({
   programText: { fontSize: 13, color: colors.inkSecondary, fontWeight: '500' },
   readinessBanner: { flexDirection: 'row', alignItems: 'center', padding: 10, borderRadius: 10, marginVertical: 8 },
   readyBg: { backgroundColor: '#DCFCE7' },
-  warningBg: { backgroundColor: '#FEF3C7' },
   readinessText: { fontSize: 13, fontWeight: '700', marginLeft: 8 },
   readyText: { color: colors.success },
-  warningText: { color: colors.warning },
   infoCard: { marginTop: 12, padding: 0, overflow: 'hidden' },
   infoGrid: { flexDirection: 'row', justifyContent: 'space-between', padding: 16 },
   infoItem: { alignItems: 'center' },

@@ -59,8 +59,32 @@ export const PeerExamClient = {
     await appStorage.deleteItem(STORAGE_KEYS.peerTarget);
   },
 
-  /** Ultra-fast signal check to bypass standard polling overhead */
-  async getQuickStatus(token: string): Promise<{ s: string; ss: string } | null> {
+  /**
+   * Ultra-fast signal check (Fix Root Cause 1 & 2).
+   * Polls the server for GLOBAL room status without needing a registration token.
+   */
+  async getGlobalStatus(): Promise<{ examStarted: boolean; roomStatus: string; v: number } | null> {
+    const target = await this.getTarget();
+    if (!target) return null;
+    try {
+      const res = await withTimeout(
+        (signal) =>
+          fetch(`${baseUrl(target)}/status`, {
+            headers: { Accept: 'application/json' },
+            signal,
+          }),
+        2500,
+      );
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json.data;
+    } catch {
+      return null;
+    }
+  },
+
+  /** Personal status check - used once student has a token */
+  async getQuickStatus(token: string): Promise<{ s: string; ss: string; examStarted: boolean; roomStatus: string } | null> {
     const target = await this.getTarget();
     if (!target) return null;
     try {
@@ -73,9 +97,14 @@ export const PeerExamClient = {
         2500,
       );
       if (!res.ok) return null;
-      const text = await res.text();
-      const json = JSON.parse(text);
-      return json.data;
+      const json = await res.json();
+      // Map new format to legacy if needed, or return new format
+      const data = json.data;
+      return {
+        ...data,
+        s: data.roomStatus,
+        ss: data.myStatus
+      };
     } catch {
       return null;
     }
