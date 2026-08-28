@@ -1,15 +1,21 @@
 import React, { useMemo, useState } from 'react';
-import { Text, View, StyleSheet, Alert } from 'react-native';
+import { Text, View, StyleSheet, Alert, Pressable } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { DoorOpen, Users, UserRound } from 'lucide-react-native';
-import { Button, Card, Header, SkeletonDetail, StatusChip } from '@/components/ui';
+import { DoorOpen, Users, UserRound, Menu } from 'lucide-react-native';
+import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { Header } from '@/components/ui/Header';
+import { SkeletonDetail } from '@/components/ui/Skeleton';
+import { StatusChip } from '@/components/ui/StatusChip';
+import { useProctorDrawer } from './ProctorDrawer';
 import { useRooms, useSessions } from '@/hooks/useRepositories';
-import { LobbyRepository } from '@/repositories';
+import { AuthRepository, LobbyRepository } from '@/repositories';
 import { QUERY_KEYS, STATUS_LABELS } from '@/constants';
 import { useProctorStore } from '@/stores';
 import { colors } from '@/theme';
 import { safeBack } from '@/utils';
+import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 
 function statusLabel(status: string) {
   if (status === 'idle') return 'Closed';
@@ -38,6 +44,7 @@ export default function RoomDetailScreen() {
     roomId: string;
   }>();
   const selectedSession = useProctorStore((s) => s.selectedSession);
+  const reset = useProctorStore((s) => s.reset);
   const sessionsQuery = useSessions(selectedSession?.scheduleId);
   const roomsQuery = useRooms(sessionId, Boolean(sessionId));
   const [busy, setBusy] = useState(false);
@@ -53,11 +60,18 @@ export default function RoomDetailScreen() {
   );
 
   if (roomsQuery.isLoading && !room) {
-    return (
+    const { toggleDrawer } = useProctorDrawer();
+
+  return (
       <View style={styles.screen}>
         <Header
           title="Room"
           subtitle={session?.timeLabel ?? 'Loading…'}
+          left={
+            <Pressable onPress={toggleDrawer} style={styles.menuBtn}>
+                <Menu size={24} color={colors.ink} />
+            </Pressable>
+          }
           onBack={() =>
             safeBack(router, {
               pathname: '/(proctor)/rooms',
@@ -105,34 +119,111 @@ export default function RoomDetailScreen() {
   const isEnded = room.status === 'ended';
 
   const openOrEnter = async () => {
-    if (!sessionId) return;
+    console.log('RoomDetailScreen: Enter Lobby pressed', {
+      sessionId,
+      roomId,
+      room,
+      isOpen,
+      isEnded,
+    });
+
+    if (!sessionId || !roomId) {
+      Alert.alert('Unable to open lobby', 'Missing session or room identifier.');
+      return;
+    }
+
+    const query = new URLSearchParams({
+      sessionId,
+      roomId,
+      roomName: room.roomName,
+      roomCode: room.examinationCode ?? '',
+      roomStatus: room.status,
+      ...(room.examSessionId != null ? { examSessionId: String(room.examSessionId) } : {}),
+    }).toString();
+
+    const targetRoute = `/lobby?${query}`;
+    console.log('RoomDetailScreen: Enter Lobby pressed', {
+      sessionId,
+      roomId,
+      roomStatus: room.status,
+      roomCode: room.examinationCode,
+      isOpen,
+      isEnded,
+      targetRoute,
+    });
 
     // Ended: view-only — student list + Sync to Admin (no new lobby).
     if (isEnded && !isOpen) {
-      router.push({
-        pathname: '/(proctor)/lobby',
-        params: {
-          sessionId,
-          roomId,
-          ...(room.examSessionId != null
-            ? { examSessionId: String(room.examSessionId) }
-            : {}),
-        },
-      });
+      console.log('RoomDetailScreen: navigating to existing ended lobby', targetRoute);
+      router.push(targetRoute as any);
       return;
     }
 
     setBusy(true);
     try {
+        // Ensure required exam data is present and up-to-date on this device.
+        try {
+          const { OfflineStore } = await import('@/services/offlineStore');
+          const pack = await OfflineStore.getPack();
+          const missing: string[] = [];
+          if (!pack) {
+            missing.push('Offline Exam Pack');
+          } else {
+            // Check question banks
+            const hasQuestions = (pack.question_banks ?? []).some((b) => (b.subjects ?? []).some((s) => (s.questions ?? []).length > 0));
+            if (!hasQuestions) missing.push('Question Bank');
+
+            // Only block on critical missing data.
+            const sid = session?.scheduleId ?? null;
+            let scheduleExists = false;
+            if (sid && String(sid).startsWith('date-')) {
+              const d = String(sid).substring(5, 15);
+              const t = String(sid).substring(16).replace(/-/g, ' ');
+              scheduleExists = (pack.schedules ?? []).some((s) =>
+                (s.exam_date || '') === d && (s.title || 'Entrance Examination') === t
+              );
+            } else if (sid) {
+              const sidClean = String(sid).replace(/^offline-/, '');
+              scheduleExists = (pack.schedules ?? []).some((s) => String(s.id) === sidClean);
+            }
+
+            if (!scheduleExists && sid) missing.push('Schedule');
+          }
+          if (missing.length) {
+            Alert.alert(
+              'System Update Required',
+              `The following items are outdated or missing:\n\n• ${missing.join('\n• ')}\n\nPlease synchronize before starting the examination.`,
+            );
+            return;
+          }
+        } catch {
+          // If the store read fails, fallback to network checks below.
+        }
+
+        // Validate Wi‑Fi / LAN server before changing any lobby state.
+        // For Proctors, if they have an offline pack, we allow opening the lobby
+        // even if the central server is unreachable (it will switch to local peer mode).
+        const { OfflineStore } = await import('@/services/offlineStore');
+        const hasPack = await OfflineStore.hasPack();
+        const wifiCheck = await assertCampusWifiForJoin({ requireServer: !hasPack });
+
+        if (!wifiCheck.ok) {
+          // Present a clear, actionable message and DO NOT change room state.
+          Alert.alert(
+            'Unable to Open Lobby',
+            wifiCheck.message ?? 'This phone has no Wi‑Fi connection. Connect to the examination Wi‑Fi or enable hotspot and try again.',
+          );
+          return;
+        }
       // Always ensureLobby so offline peer HTTP (re)starts even if the room
       // was already marked lobby_open after a previous download / app restart.
-      await LobbyRepository.ensureLobby(sessionId, undefined, roomId);
+      const snapshot = await LobbyRepository.ensureLobby(sessionId, undefined, roomId);
+      console.log('RoomDetailScreen: ensureLobby succeeded', snapshot);
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.rooms(sessionId) });
-      router.push({
-        pathname: '/(proctor)/lobby',
-        params: { sessionId, roomId },
-      });
+      console.log('RoomDetailScreen: navigating to lobby', targetRoute);
+      router.push(targetRoute as any);
     } catch (error) {
+      console.log('RoomDetailScreen: ensureLobby failed', error);
       Alert.alert(
         'Unable to open lobby',
         error instanceof Error ? error.message : 'Please try again.',
@@ -147,6 +238,27 @@ export default function RoomDetailScreen() {
       <Header
         title={room.roomName}
         subtitle={session?.timeLabel ?? 'Room details'}
+        right={
+          <Button
+            title="Logout"
+            variant="ghost"
+            size="sm"
+            onPress={() => {
+              Alert.alert('Are you sure you want to log out?', undefined, [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Yes, Logout',
+                  style: 'destructive',
+                  onPress: async () => {
+                    await AuthRepository.logout();
+                    reset();
+                    router.replace('/');
+                  },
+                },
+              ]);
+            }}
+          />
+        }
         onBack={() =>
           safeBack(router, {
             pathname: '/(proctor)/rooms',
@@ -186,7 +298,7 @@ export default function RoomDetailScreen() {
                   {isEnded && !isOpen
                     ? 'Examination ended. You can still view the student list and sync results to Admin.'
                     : isOpen
-                      ? lobby.status === 'lobby_open'
+                      ? room.status === 'lobby_open'
                         ? 'Lobby is open. Close the lobby before starting if you need to reopen this room later.'
                         : 'Examination in progress.'
                       : 'This room is closed. Open the lobby when you are ready to start.'}
@@ -255,4 +367,14 @@ const styles = StyleSheet.create({
   },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 },
   emptyTitle: { fontSize: 16, fontWeight: '700', color: colors.ink },
+  menuBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
 });

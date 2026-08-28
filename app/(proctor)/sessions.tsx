@@ -1,7 +1,11 @@
 import React from 'react';
-import { FlatList, Text, View, StyleSheet } from 'react-native';
+import { FlatList, Text, View, StyleSheet, Pressable } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Header, EmptyState, SkeletonList } from '@/components/ui';
+import { Header } from '@/components/ui/Header';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { SkeletonList } from '@/components/ui/Skeleton';
+import { Menu } from 'lucide-react-native';
+import { useProctorDrawer } from './ProctorDrawer';
 import { SessionCard } from '@/features/proctor/SessionCard';
 import { useSchedules, useSessions } from '@/hooks/useRepositories';
 import { useProctorStore } from '@/stores';
@@ -36,11 +40,18 @@ export default function SessionsScreen() {
     );
   }
 
+  const { toggleDrawer } = useProctorDrawer();
+
   return (
     <View style={styles.screen}>
       <Header
         title="Examination Time"
         subtitle={schedule?.name ?? 'Select a session'}
+        left={
+          <Pressable onPress={toggleDrawer} style={styles.menuBtn}>
+             <Menu size={24} color={colors.ink} />
+          </Pressable>
+        }
         onBack={() => safeBack(router, '/(proctor)/schedules')}
       />
       <FlatList
@@ -77,4 +88,14 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   list: { padding: 20, gap: 12, paddingBottom: 40 },
   intro: { fontSize: 14, color: colors.inkSecondary, marginBottom: 8, lineHeight: 21 },
+  menuBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
 });

@@ -1,251 +1,318 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, BackHandler, ScrollView, Text, View, StyleSheet } from 'react-native';
+import React, { useCallback, useEffect, useState, useRef, useMemo } from 'react';
+import { Alert, BackHandler, ScrollView, Text, View, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
-import Animated, { FadeInDown } from 'react-native-reanimated';
-import { Check } from 'lucide-react-native';
-import { Header, Card, SkeletonDetail, StatusChip, Button } from '@/components/ui';
+import { Check, Download, User, Wifi, ShieldAlert, RefreshCw, AlertTriangle } from 'lucide-react-native';
+import { Header } from '@/components/ui/Header';
+import { Card } from '@/components/ui/Card';
+import { SkeletonDetail } from '@/components/ui/Skeleton';
+import { Button } from '@/components/ui/Button';
 import { LobbyWaitingAnimation } from '@/features/lobby/LobbyWaitingAnimation';
 import { useLobby } from '@/hooks/useRepositories';
-import { QuestionRepository, StudentRepository } from '@/repositories';
+import { appStorage } from '@/services/storage';
+import { STORAGE_KEYS } from '@/constants';
+import { QuestionRepository, LobbyRepository } from '@/repositories';
 import { useExamStore, useLobbyStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
+import { PeerExamClient } from '@/services/peerExamClient';
+import { ExamPreloader } from '@/services/examPreloader';
+import { OfflineStore } from '@/services/offlineStore';
 
-const LOBBY_RULES = [
-  'Do not take screenshots or record the screen.',
-  'Do not switch apps or leave the examination screen.',
-  'Do not copy or share questions with anyone.',
-  'Do not use AI tools, notes, or other devices.',
-  'Stay on campus exam Wi‑Fi for the entire exam.',
-];
+/**
+ * DETERMINISTIC LOBBY STATES
+ */
+type LobbyState = 'DASHBOARD' | 'STARTING' | 'ERROR';
 
-export default function StudentLobbyScreen() {
+function useLobbyController() {
   const router = useRouter();
-  const navigation = useNavigation();
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
-  const setSelectedStudent = useStudentStore((s) => s.setSelectedStudent);
+  const selectedStudent = useStudentStore((s) => s.selectedStudent);
+  const examPasskey = useStudentStore((s) => s.examPasskey);
   const setVerifiedStudent = useStudentStore((s) => s.setVerifiedStudent);
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
+  const storedSnapshot = useLobbyStore((s) => s.snapshot);
   const setQuestions = useExamStore((s) => s.setQuestions);
   const setSessionId = useExamStore((s) => s.setSessionId);
   const startExam = useExamStore((s) => s.startExam);
-  const [cancelling, setCancelling] = useState(false);
 
-  const lobbyQuery = useLobby(scannedSessionId ?? undefined);
+  const [state, setState] = useState<LobbyState>('DASHBOARD');
+  const [error, setError] = useState<string | null>(null);
+  const [preloaded, setPreloaded] = useState(false);
+  const [preloading, setPreloading] = useState(false);
+  const [lastSeen, setLastSeen] = useState<number>(Date.now());
 
+  const hasJoined = useRef(false);
+  const hasEntered = useRef(false);
+
+  // Polling is ALWAYS active on this screen to ensure proctor stays updated.
+  const lobbyQuery = useLobby(scannedSessionId ?? undefined, undefined, true);
+  const lobbyData = useMemo(() => lobbyQuery.data ?? storedSnapshot, [lobbyQuery.data, storedSnapshot]);
+
+  // -- SIGNAL MONITOR (Minecraft-style high speed) --
   useEffect(() => {
-    if (!scannedSessionId || !verifiedStudent) {
-      router.replace('/');
-    }
-  }, [scannedSessionId, verifiedStudent, router]);
+    if (hasEntered.current) return;
 
-  useEffect(() => {
-    navigation.setOptions({
-      gestureEnabled: false,
-      fullScreenGestureEnabled: false,
-      headerShown: false,
-    });
-
-    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
-      const actionType = event.data.action.type;
-      if (actionType === 'REPLACE' || actionType === 'RESET') {
+    // Priority 1: Check local polled data (Lobby Snapshot)
+    if (lobbyData?.status === 'in_progress') {
+        console.log('[LOBBY_CTL] START_SIGNAL_BY_SNAPSHOT');
+        setState('STARTING');
         return;
-      }
-      event.preventDefault();
-    });
+    }
 
-    const backSub = BackHandler.addEventListener('hardwareBackPress', () => true);
-
-    return () => {
-      unsubscribe();
-      backSub.remove();
+    // Priority 2: Lightweight status check (Bypass heavy snapshot if poll is slow)
+    const checkSignal = async () => {
+        const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+        if (!token) return;
+        const quick = await PeerExamClient.getQuickStatus(token);
+        if (quick?.s === 'in_progress' || quick?.ss === 'taking_exam') {
+             console.log('[LOBBY_CTL] START_SIGNAL_BY_QUICK_STATUS');
+             setState('STARTING');
+        }
     };
+    const id = setInterval(checkSignal, 2000);
+    return () => clearInterval(id);
+  }, [lobbyData?.status]);
+
+  // -- EXAM TRANSITION --
+  useEffect(() => {
+    if (state !== 'STARTING' || hasEntered.current || !lobbyData) return;
+    const go = async () => {
+        hasEntered.current = true;
+        try {
+            console.log('[LOBBY_CTL] INITIALIZING_EXAMINATION');
+            const questions = await QuestionRepository.getQuestions(scannedSessionId!);
+            if (!questions.length) throw new Error('No questions found in module');
+
+            setSessionId(scannedSessionId!);
+            setQuestions(questions);
+            startExam(lobbyData.session?.durationMinutes || 90);
+
+            console.log('[LOBBY_CTL] NAVIGATING_TO_EXAM_SCREEN');
+            router.replace('/(student)/exam');
+        } catch (err) {
+            console.error('[LOBBY_CTL] ENTRY_CRASH:', err);
+            hasEntered.current = false;
+            setState('DASHBOARD');
+            Alert.alert('Load Failure', 'Could not open examination. Ensure modules are downloaded.');
+        }
+    };
+    void go();
+  }, [state, lobbyData, scannedSessionId]);
+
+  // -- PRESENCE HEARTBEAT (Starts instantly on mount) --
+  useEffect(() => {
+    const id = setInterval(async () => {
+        try {
+            await LobbyRepository.sendHeartbeat();
+            setLastSeen(Date.now());
+        } catch { }
+    }, 4000);
+    return () => clearInterval(id);
+  }, []);
+
+  // -- BACKGROUND READINESS & HANDSHAKE --
+  const initializeAndJoin = useCallback(async () => {
+    if (!scannedSessionId || (!verifiedStudent && !selectedStudent)) {
+        router.replace('/');
+        return;
+    }
+
+    // 1. Force refresh of the local pack readiness
+    const hasPack = await OfflineStore.hasPack();
+    setPreloaded(hasPack);
+
+    // 2. Network handshake (if not already verified)
+    if (!verifiedStudent && !hasJoined.current) {
+        hasJoined.current = true;
+        try {
+            const verified = { ...selectedStudent! };
+            const lobby = examPasskey
+                ? await LobbyRepository.joinWithPasskey(verified, scannedSessionId!, examPasskey)
+                : await LobbyRepository.joinStudent(verified, scannedSessionId!);
+
+            const regId = lobby.registration_id || lobby.students?.find(s => s.studentId === verified.studentId)?.id;
+            if (regId) verified.registration_id = Number(regId);
+
+            setVerifiedStudent(verified);
+            setSnapshot(lobby);
+        } catch (e) {
+            console.warn("Lobby handshake delay...", e);
+            hasJoined.current = false;
+        }
+    }
+  }, [scannedSessionId, verifiedStudent, selectedStudent, examPasskey, router, setVerifiedStudent, setSnapshot]);
+
+  useEffect(() => { void initializeAndJoin(); }, [initializeAndJoin]);
+
+  return {
+    state,
+    error,
+    currentStudent: verifiedStudent || selectedStudent,
+    lobbyData,
+    preloaded,
+    preloading,
+    lastSeen,
+    download: async () => {
+      setPreloading(true);
+      try {
+          await ExamPreloader.preloadQuestions(scannedSessionId!);
+          setPreloaded(true);
+      }
+      catch (e) { Alert.alert('Connection Error', 'Check Wi-Fi connection to proctor.'); }
+      finally { setPreloading(false); }
+    },
+    lobbyQuery
+  };
+}
+
+export default function StudentLobbyScreen() {
+  const navigation = useNavigation();
+  const controller = useLobbyController();
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    navigation.setOptions({ gestureEnabled: false, headerShown: false });
+    const backSub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => backSub.remove();
   }, [navigation]);
 
-  useEffect(() => {
-    if (lobbyQuery.data) {
-      setSnapshot(lobbyQuery.data);
-    }
-  }, [lobbyQuery.data, setSnapshot]);
-
-  useEffect(() => {
-    async function enterExam() {
-      if (!lobbyQuery.data || lobbyQuery.data.status !== 'in_progress' || !scannedSessionId) {
-        return;
-      }
-      const questions = await QuestionRepository.getQuestions(scannedSessionId);
-      setSessionId(scannedSessionId);
-      setQuestions(questions);
-      startExam(lobbyQuery.data.session.durationMinutes);
-      router.replace('/(student)/exam');
-    }
-    void enterExam();
-  }, [
-    lobbyQuery.data,
-    scannedSessionId,
-    setQuestions,
-    setSessionId,
-    startExam,
-    router,
-  ]);
-
-  const cancelRegistration = useCallback(() => {
-    if (!verifiedStudent || cancelling) return;
-    Alert.alert(
-      'Cancel registration?',
-      'This clears your check-in so you can enter your examination key again. The proctor will see you leave the lobby.',
-      [
-        { text: 'Stay', style: 'cancel' },
-        {
-          text: 'Cancel registration',
-          style: 'destructive',
-          onPress: () => {
-            void (async () => {
-              setCancelling(true);
-              try {
-                await StudentRepository.cancelRegistration(verifiedStudent.id);
-                setVerifiedStudent(null);
-                setSelectedStudent(null);
-                setSnapshot(null);
-                router.replace('/(student)/passkey');
-              } catch (error) {
-                Alert.alert(
-                  'Unable to cancel',
-                  error instanceof Error
-                    ? error.message
-                    : 'Try again, or ask the proctor for help.',
-                );
-              } finally {
-                setCancelling(false);
-              }
-            })();
-          },
-        },
-      ],
-    );
-  }, [
-    verifiedStudent,
-    cancelling,
-    setVerifiedStudent,
-    setSelectedStudent,
-    setSnapshot,
-    router,
-  ]);
-
-  if (!lobbyQuery.data || !verifiedStudent) {
-    return (
-      <View style={styles.screen}>
-        <Header title="Waiting Lobby" subtitle="Joining…" onBack={undefined} />
-        <SkeletonDetail />
-      </View>
-    );
+  if (hasError) {
+      return (
+          <View style={styles.crashWrap}>
+              <AlertTriangle size={48} color={colors.danger} />
+              <Text style={styles.crashTitle}>Dashboard Error</Text>
+              <Button title="Recover" onPress={() => setHasError(false)} />
+          </View>
+      );
   }
 
-  const { schedule, session } = lobbyQuery.data;
+  const { lobbyData, currentStudent } = controller;
 
   return (
     <View style={styles.screen}>
       <Header
-        title="Waiting Lobby"
-        subtitle="Waiting for Proctor..."
+        title={lobbyData?.schedule?.name || "Entrance Examination"}
+        subtitle="Secure Student Dashboard"
         onBack={undefined}
       />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <LobbyWaitingAnimation />
-        <Animated.View entering={FadeInDown.springify()} style={styles.center}>
-          <StatusChip status="waiting" />
-          <Text style={styles.title}>Waiting for Proctor...</Text>
-          <Text style={styles.sub}>
-            Stay on this screen. You will enter the examination automatically when the proctor
-            starts.
-          </Text>
-        </Animated.View>
 
-        <Card delay={100}>
-          <Text style={styles.label}>Student</Text>
-          <Text style={styles.value}>{verifiedStudent.fullName}</Text>
-          <Text style={styles.line}>Gmail: {verifiedStudent.email || '—'}</Text>
-          <Text style={styles.line}>Program: {verifiedStudent.programName || '—'}</Text>
-          <Text style={styles.line}>Examination: {schedule.name}</Text>
-          <Text style={styles.line}>Date: {schedule.examinationDate}</Text>
-          <Text style={styles.line}>Time: {session.timeLabel}</Text>
-          <Text style={styles.line}>Batch: {session.batchNumber}</Text>
-          <Text style={styles.line}>Venue: {session.venue}</Text>
+        {/* SECTION 1: IDENTITY & READINESS */}
+        <Card style={styles.mainCard}>
+           <View style={styles.studentSection}>
+              <View style={styles.avatarCircle}>
+                 <User size={24} color={colors.white} />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                 <Text style={styles.welcomeText} numberOfLines={1}>Hello, {currentStudent?.fullName || 'Student'}</Text>
+                 <Text style={styles.programText}>{currentStudent?.programName || 'Candidate'}</Text>
+              </View>
+           </View>
+
+           <View style={[styles.readinessBanner, styles.readyBg]}>
+              <Check size={18} color={colors.success} />
+              <Text style={[styles.readinessText, styles.readyText]}>
+                 Ready for Offline Exam
+              </Text>
+           </View>
         </Card>
 
-        <Card delay={140}>
-          <Text style={styles.label}>Examination rules</Text>
-          <Text style={styles.rulesIntro}>
-            By waiting here you acknowledge these rules. Violations are reported to the proctor.
-          </Text>
-          {LOBBY_RULES.map((rule) => (
-            <View key={rule} style={styles.ruleRow}>
-              <Check size={16} color={colors.success} />
-              <Text style={styles.ruleText}>{rule}</Text>
-            </View>
-          ))}
+        {/* SECTION 2: EXAM DETAILS */}
+        <Card style={styles.infoCard}>
+           {lobbyData ? (
+              <View style={styles.infoGrid}>
+                  <InfoItem label="Batch" value={lobbyData?.session?.batchNumber || "—"} />
+                  <InfoItem label="Time" value={lobbyData?.session?.timeLabel || "—"} />
+                  <InfoItem label="Room" value={lobbyData?.session?.roomName || lobbyData?.session?.venue || "TBD"} />
+              </View>
+           ) : (
+              <View style={{ padding: 16 }}>
+                 <Text style={styles.loadingInfo}>Syncing room details...</Text>
+                 <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 8 }} />
+              </View>
+           )}
         </Card>
+
+        {/* SECTION 3: SIGNAL AREA */}
+        <View style={styles.waitingArea}>
+            <LobbyWaitingAnimation />
+            <Text style={styles.waitingTitle}>
+               {controller.state === 'STARTING' ? "Entry Authorized!" : "Waiting for Proctor..."}
+            </Text>
+            <Text style={styles.waitingSub}>
+               The exam opens automatically. Keep this screen visible and stay on the Wi-Fi.
+            </Text>
+
+            {controller.state === 'STARTING' && (
+                <View style={styles.startingBox}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <Text style={styles.startingText}>Launching Exam Browser...</Text>
+                </View>
+            )}
+        </View>
+
+        {/* SECTION 4: NETWORK HEALTH */}
+        <View style={styles.networkBox}>
+           <View style={[styles.pulse, { backgroundColor: controller.lobbyQuery.isError ? colors.danger : colors.success }]} />
+           <Text style={styles.networkText}>
+              {controller.lobbyQuery.isError ? "Connection Interrupted" : `LOCAL LINK ACTIVE · PULSE ${new Date(controller.lastSeen).toLocaleTimeString()}`}
+           </Text>
+           <Pressable onPress={() => void controller.lobbyQuery.refetch()} style={styles.refreshBtn}>
+              <RefreshCw size={14} color={colors.primary} />
+           </Pressable>
+        </View>
 
         <Button
-          title="Cancel Registration"
+          title="Exit Dashboard"
           variant="outline"
-          fullWidth
-          loading={cancelling}
-          onPress={cancelRegistration}
+          size="sm"
+          onPress={() => router.replace('/')}
+          style={styles.exitBtn}
         />
-        <Text style={styles.cancelHint}>
-          Wrong key or identity? Cancel to return and enter your examination key again.
-        </Text>
       </ScrollView>
     </View>
   );
 }
 
+function InfoItem({ label, value }: { label: string; value: string }) {
+    return (
+        <View style={styles.infoItem}>
+            <Text style={styles.infoLabel}>{label}</Text>
+            <Text style={styles.infoValue}>{value}</Text>
+        </View>
+    );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
-  content: { padding: 20, gap: 16, paddingBottom: 40 },
-  center: { alignItems: 'center', gap: 10 },
-  title: { fontSize: 22, fontWeight: '700', color: colors.ink },
-  sub: {
-    fontSize: 14,
-    lineHeight: 21,
-    color: colors.inkSecondary,
-    textAlign: 'center',
-    maxWidth: 320,
-  },
-  label: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: colors.inkMuted,
-    textTransform: 'uppercase',
-    marginBottom: 6,
-  },
-  value: { fontSize: 18, fontWeight: '700', color: colors.ink, marginBottom: 10 },
-  line: { fontSize: 14, color: colors.inkSecondary, marginBottom: 6, fontWeight: '500' },
-  rulesIntro: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: colors.inkSecondary,
-    marginBottom: 12,
-  },
-  ruleRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    marginBottom: 10,
-  },
-  ruleText: {
-    flex: 1,
-    fontSize: 14,
-    lineHeight: 20,
-    color: colors.ink,
-    fontWeight: '500',
-  },
-  cancelHint: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: colors.inkMuted,
-    textAlign: 'center',
-    marginTop: -4,
-  },
+  content: { padding: 16, paddingBottom: 40 },
+  mainCard: { padding: 16 },
+  studentSection: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  avatarCircle: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  welcomeText: { fontSize: 16, fontWeight: '700', color: colors.ink },
+  programText: { fontSize: 13, color: colors.inkSecondary, fontWeight: '500' },
+  readinessBanner: { flexDirection: 'row', alignItems: 'center', padding: 10, borderRadius: 10, marginVertical: 8 },
+  readyBg: { backgroundColor: '#DCFCE7' },
+  warningBg: { backgroundColor: '#FEF3C7' },
+  readinessText: { fontSize: 13, fontWeight: '700', marginLeft: 8 },
+  readyText: { color: colors.success },
+  warningText: { color: colors.warning },
+  infoCard: { marginTop: 12, padding: 0, overflow: 'hidden' },
+  infoGrid: { flexDirection: 'row', justifyContent: 'space-between', padding: 16 },
+  infoItem: { alignItems: 'center' },
+  infoLabel: { fontSize: 10, fontWeight: '800', color: colors.inkMuted, textTransform: 'uppercase' },
+  infoValue: { fontSize: 14, fontWeight: '700', color: colors.ink, marginTop: 2 },
+  waitingArea: { alignItems: 'center', paddingVertical: 40 },
+  waitingTitle: { fontSize: 18, fontWeight: '800', color: colors.ink, marginTop: 12 },
+  waitingSub: { fontSize: 13, color: colors.inkSecondary, textAlign: 'center', lineHeight: 19, paddingHorizontal: 20 },
+  startingBox: { flexDirection: 'row', alignItems: 'center', marginTop: 16 },
+  startingText: { fontSize: 14, fontWeight: '700', color: colors.primary, marginLeft: 8 },
+  networkBox: { flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: colors.surface, borderRadius: 12, borderWidth: 1, borderColor: colors.border, marginTop: 8 },
+  pulse: { width: 8, height: 8, borderRadius: 4, marginRight: 10 },
+  networkText: { fontSize: 10, fontWeight: '700', color: colors.inkMuted, flex: 1 },
+  refreshBtn: { padding: 4 },
+  exitBtn: { marginTop: 16 },
+  loadingInfo: { fontSize: 13, color: colors.inkMuted, fontStyle: 'italic', textAlign: 'center' },
+  crashWrap: { flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', padding: 40 },
+  crashTitle: { fontSize: 20, fontWeight: '800', color: colors.ink, marginBottom: 12 },
 });

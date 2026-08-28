@@ -14,7 +14,8 @@
         "EXPO_PUBLIC_API_URL": "https://metccapi.repohive.com/api/v1",
         "EXPO_PUBLIC_CLOUD_API_URL": "https://metccapi.repohive.com/api/v1",
         "EXPO_PUBLIC_SYNC_TOKEN": "metcc-lan-sync-secret"
-      }
+      },
+      "channel": "development"
     },
     "preview": {
       "distribution": "internal",
@@ -25,9 +26,11 @@
         "EXPO_PUBLIC_API_URL": "https://metccapi.repohive.com/api/v1",
         "EXPO_PUBLIC_CLOUD_API_URL": "https://metccapi.repohive.com/api/v1",
         "EXPO_PUBLIC_SYNC_TOKEN": "metcc-lan-sync-secret"
-      }
+      },
+      "channel": "preview"
     },
     "production": {
+      "channel": "production",
       "autoIncrement": true,
       "android": {
         "buildType": "apk"
@@ -47,7 +50,8 @@
         "EXPO_PUBLIC_API_URL": "https://metccapi.repohive.com/api/v1",
         "EXPO_PUBLIC_CLOUD_API_URL": "https://metccapi.repohive.com/api/v1",
         "EXPO_PUBLIC_SYNC_TOKEN": "metcc-lan-sync-secret"
-      }
+      },
+      "channel": "production-store"
     }
   },
   "submit": {

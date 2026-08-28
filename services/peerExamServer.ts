@@ -16,6 +16,7 @@ import type {
 
 export const PEER_PORT = 9777;
 export const PEER_PATH_PREFIX = '/p2p';
+export const MAX_ROOM_CAPACITY = 60;
 
 /**
  * expo-http-server is a native module: absent in Expo Go and on web. Loading it
@@ -62,6 +63,8 @@ type PeerStudentState = {
   order: string[];
   submittedAt: string | null;
   score: number | null;
+  reconnectCode: string | null;
+  reconnectCodeExpiresAt: string | null;
 };
 
 type PeerViolation = {
@@ -84,13 +87,16 @@ type PeerSessionState = {
   startedAt: string | null;
   endedAt: string | null;
   durationMinutes: number;
-  students: Record<string, PeerStudentState>;
+  students: Record<number, PeerStudentState>; // Keyed by registrationId (unique)
+  tokenMap: Record<string, number>; // Maps token -> registrationId for fast lookup
   violations: PeerViolation[];
   violationSeq: number;
 };
 
 type JsonResponse = {
-  statusCode?: number;
+  status?: number;     // Standard
+  statusCode?: number; // Legacy compatibility
+  headers?: Record<string, string>;
   contentType?: string;
   body?: string;
 };
@@ -101,18 +107,29 @@ let running = false;
 let hostIp: string | null = null;
 let listeners: Array<() => void> = [];
 
+// Performance optimizations
+let _packCache: OfflinePack | null = null;
+let _resolvedCache: any = null;
+let _resolvedAt = 0;
+let _builtQuestionsCache: Question[] | null = null;
+
 function ok(data: unknown, message?: string): JsonResponse {
   return {
+    status: 200,
     statusCode: 200,
     contentType: 'application/json',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ success: true, message, data }),
   };
 }
 
 function fail(status: number, message: string): JsonResponse {
+  console.warn(`[SERVER REJECT] Status ${status}: ${message}`);
   return {
+    status,
     statusCode: status,
     contentType: 'application/json',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ success: false, message }),
   };
 }
@@ -127,19 +144,47 @@ function parseBody(raw: string): Record<string, unknown> {
   }
 }
 
-function parseParams(raw: string): Record<string, string> {
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return {};
-    const out: Record<string, string> = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      out[key] = String(value ?? '');
+/**
+ * Robust parameter extractor. expo-http-server doesn't always parse query strings
+ * from the URL automatically, so we do it manually as a fallback.
+ */
+function parseParams(request: any): Record<string, string> {
+  const out: Record<string, string> = {};
+
+  // 1. Try manual URL query string parsing (most reliable for GET requests)
+  if (request.url && request.url.includes('?')) {
+    try {
+      const queryString = request.url.split('?')[1];
+      const pairs = queryString.split('&');
+      for (const pair of pairs) {
+        const [key, value] = pair.split('=');
+        if (key) out[decodeURIComponent(key)] = decodeURIComponent(value || '');
+      }
+    } catch (e) {
+      console.error('[SERVER] Query parse error:', e);
     }
-    return out;
-  } catch {
-    return {};
   }
+
+  // 2. Merge in provided JSON params/query if available from the bridge
+  const raw = request.paramsJson || request.queryJson;
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        for (const [key, value] of Object.entries(parsed)) {
+          out[key] = String(value ?? '');
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 3. Fallback to direct object properties
+  const obj = request.params || request.query || {};
+  for (const [key, value] of Object.entries(obj)) {
+    out[key] = String(value ?? '');
+  }
+
+  return out;
 }
 
 function notify() {
@@ -164,11 +209,28 @@ function makeToken(registrationId: number): string {
 
 function studentByToken(token: string): PeerStudentState | null {
   if (!session || !token) return null;
-  return session.students[token] ?? null;
+  const regId = session.tokenMap?.[token];
+  if (regId != null) {
+    return session.students[regId] ?? null;
+  }
+  // Fallback for legacy sessions without tokenMap
+  return Object.values(session.students).find(s => s.token === token) ?? null;
 }
 
 function toLobbyStudent(state: PeerStudentState): LobbyStudent {
-  return {
+  let status = state.status;
+
+  // Real-time status: if no heartbeat for > 60s, they are disconnected.
+  // Increased from 20s to be more resilient to network lag during exam start.
+  if (status !== 'finished' && status !== 'terminated') {
+    const lastSeen = new Date(state.lastActivityAt).getTime();
+    const idleSeconds = (Date.now() - lastSeen) / 1000;
+    if (idleSeconds > 60) {
+      status = 'disconnected';
+    }
+  }
+
+    return {
     id: String(state.registrationId),
     studentId: state.applicantCode,
     fullName: state.fullName,
@@ -176,12 +238,14 @@ function toLobbyStudent(state: PeerStudentState): LobbyStudent {
     programCode: state.programCode,
     programName: state.programName,
     avatarInitials: state.avatarInitials,
-    status: state.status,
+    status,
     joinedAt: state.joinedAt,
     startedAt: state.startedAt,
     lastActivityAt: state.lastActivityAt,
     violationCount: state.violationCount,
     terminationReason: state.terminationReason,
+    reconnectCode: state.reconnectCode,
+    reconnectCodeExpiresAt: state.reconnectCodeExpiresAt,
   };
 }
 
@@ -193,19 +257,43 @@ function remainingSeconds(state: PeerSessionState): number | null {
 
 /** Live roster only — students who scanned, entered a key, and joined. */
 async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
-  const resolved = await OfflineExamRepository.resolveScheduleRoom(
-    state.scheduleId,
-    state.roomId,
-    state.examCode,
-  );
+  const now = Date.now();
+  if (!_resolvedCache || now - _resolvedAt > 5000) {
+    _resolvedCache = await OfflineExamRepository.resolveScheduleRoom(
+      state.scheduleId,
+      state.roomId,
+      state.examCode,
+    );
+    _resolvedAt = now;
+  }
+  const resolved = _resolvedCache;
 
-  const students: LobbyStudent[] = Object.values(state.students).map(toLobbyStudent);
+  // Optimized single-pass status counting and student mapping
+  const students: LobbyStudent[] = [];
+  let waiting = 0;
+  let taking = 0;
+  let finished = 0;
+  let warning = 0;
+  let terminated = 0;
+  let disconnected = 0;
+
+  for (const s of Object.values(state.students)) {
+    const student = toLobbyStudent(s);
+    students.push(student);
+
+    if (student.status === 'waiting') waiting++;
+    else if (student.status === 'taking_exam') taking++;
+    else if (student.status === 'finished') finished++;
+    else if (student.status === 'warning') {
+        warning++;
+        taking++; // warning is still taking
+    }
+    else if (student.status === 'terminated') terminated++;
+    else if (student.status === 'disconnected') disconnected++;
+  }
+
   const registeredCount =
     Number(resolved?.session?.registeredStudents ?? 0) || students.length;
-
-  const count = (status: LobbyStudentStatus) =>
-    students.filter((s) => s.status === status).length;
-  const connected = students.length;
 
   return {
     schedule: resolved?.schedule as LobbySnapshot['schedule'],
@@ -220,19 +308,21 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
     roomName: resolved?.session?.roomName ?? null,
     roomId: state.roomId,
     registeredCount,
-    connectedCount: connected,
-    notYetConnectedCount: Math.max(0, registeredCount - connected),
-    waitingCount: count('waiting'),
-    takingCount: count('taking_exam'),
-    finishedCount: count('finished'),
-    warningCount: count('warning'),
-    terminatedCount: count('terminated'),
+    connectedCount: students.length,
+    notYetConnectedCount: Math.max(0, registeredCount - students.length),
+    waitingCount: waiting,
+    takingCount: taking,
+    finishedCount: finished,
+    warningCount: warning,
+    terminatedCount: terminated,
+    disconnectedCount: disconnected,
     violationsDetected: state.violations.length,
     recentViolations: state.violations.slice(-8).reverse(),
     students,
     can_control: true,
     is_owner: true,
     remainingSeconds: remainingSeconds(state),
+    wifiSsid: state.wifiSsid,
   };
 }
 
@@ -250,6 +340,7 @@ export function peerQrPayload(state: PeerSessionState): string {
     port: PEER_PORT,
     schedule_id: state.scheduleId,
     room_id: state.roomId,
+    wifi_ssid: state.wifiSsid,
   });
 }
 
@@ -259,6 +350,7 @@ export type PeerQrTarget = {
   code: string;
   scheduleId: number | null;
   roomId: number | null;
+  wifiSsid: string | null;
 };
 
 /** Read a scanned QR string; returns null when it is not a peer QR. */
@@ -279,6 +371,7 @@ export function parsePeerQr(raw: string): PeerQrTarget | null {
       code,
       scheduleId: parsed.schedule_id != null ? Number(parsed.schedule_id) : null,
       roomId: parsed.room_id != null ? Number(parsed.room_id) : null,
+      wifiSsid: parsed.wifi_ssid ? String(parsed.wifi_ssid) : null,
     };
   } catch {
     return null;
@@ -290,6 +383,32 @@ function registerRoutes(mod: HttpServerModule) {
   routesRegistered = true;
 
   const p = (path: string) => `${PEER_PATH_PREFIX}${path}`;
+
+  mod.route(p('/health'), 'GET', async () => {
+    return ok({
+      server: 'proctor',
+      mode: 'offline',
+      status: session ? 'ready' : 'idle',
+      session_status: session?.status ?? null,
+    });
+  });
+
+  /**
+   * Ultra-fast signal endpoint (Minecraft-style).
+   * Returns ONLY the minimal state needed to trigger the exam start.
+   * Total payload is ~50 bytes.
+   */
+  mod.route(p('/status'), 'GET', async (request) => {
+    if (!session) return fail(503, 'Offline');
+    const params = parseParams(request);
+    const student = studentByToken(params.participation_token ?? '');
+
+    return ok({
+      s: session.status,          // 'lobby_open' | 'in_progress' | 'ended'
+      ss: student?.status ?? '?', // student-specific status
+      t: Date.now()               // server time
+    });
+  });
 
   mod.route(p('/ping'), 'GET', async () => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
@@ -337,7 +456,19 @@ function registerRoutes(mod: HttpServerModule) {
       session.scheduleId,
     );
     if (!validated) return fail(404, 'Invalid examination key for this examination.');
-    return ok({ student: validated.student, schedule: validated.schedule });
+    if (validated.classification === 'wrong_schedule') {
+      return ok({
+        classification: 'wrong_schedule',
+        message: validated.message || 'This examination key belongs to a different schedule.',
+        schedule: validated.schedule,
+      });
+    }
+    return ok({
+      student: validated.student,
+      schedule: validated.schedule,
+      classification: validated.classification,
+      message: validated.message,
+    });
   });
 
   mod.route(p('/join'), 'POST', async (request) => {
@@ -354,11 +485,21 @@ function registerRoutes(mod: HttpServerModule) {
       session.scheduleId,
     );
     if (!validated) return fail(404, 'Invalid examination key for this examination.');
+    if (validated.classification === 'wrong_schedule') {
+      return fail(409, validated.message || 'This examination key belongs to a different schedule.');
+    }
+
+    if (!validated.student) {
+      return fail(404, 'Unable to continue with that examination key.');
+    }
 
     const registrationId = Number(validated.student.registration_id ?? 0);
-    const existing = Object.values(session.students).find(
-      (s) => s.registrationId === registrationId,
-    );
+    const existing = session.students[registrationId];
+
+    if (!existing && Object.keys(session.students).length >= MAX_ROOM_CAPACITY) {
+      return fail(409, 'Room Full. Maximum capacity of 60 students reached. Please contact the Proctor.');
+    }
+
     if (existing?.submittedAt) {
       return fail(409, 'This examination key has already been submitted.');
     }
@@ -369,8 +510,9 @@ function registerRoutes(mod: HttpServerModule) {
 
     let student = existing;
     if (student) {
-      // Rejoin (app restart / reconnect): keep answers and question order.
+      // Rejoin: refresh activity and return the existing token
       student.lastActivityAt = now;
+      console.log(`[SESSION] Student ${student.applicantCode} rejoined.`);
     } else {
       const questions = buildExamQuestions(pack);
       student = {
@@ -393,8 +535,14 @@ function registerRoutes(mod: HttpServerModule) {
         order: questions.map((q) => q.id),
         submittedAt: null,
         score: null,
+        reconnectCode: null,
+        reconnectCodeExpiresAt: null,
       };
-      session.students[student.token] = student;
+      session.students[registrationId] = student;
+      if (!session.tokenMap) session.tokenMap = {};
+      session.tokenMap[student.token] = registrationId;
+      console.log(`[SESSION] Student ${student.applicantCode} joined lobby.`);
+      console.log('[SERVER] Student connected. Registration ID:', registrationId);
     }
 
     await persist();
@@ -409,41 +557,92 @@ function registerRoutes(mod: HttpServerModule) {
 
   mod.route(p('/lobby'), 'GET', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
-    const params = parseParams(request.paramsJson);
-    const student = studentByToken(params.participation_token ?? '');
-    if (!student) return fail(404, 'You are no longer joined to this examination.');
+    const params = parseParams(request);
+    const token = params.participation_token ?? '';
+    const student = studentByToken(token);
 
-    student.lastActivityAt = new Date().toISOString();
+    if (!student) {
+      console.warn(`[SERVER] Token not found: ${token.slice(0, 10)}...`);
+      return fail(404, 'You are no longer joined to this examination. Please scan the QR again.');
+    }
+
+    console.log('[SERVER] Heartbeat received from student:', student.applicantCode);
+    const now = new Date().toISOString();
+    student.lastActivityAt = now;
+
+    let changed = false;
     if (session.status === 'in_progress' && student.status === 'waiting') {
       student.status = 'taking_exam';
-      student.startedAt = student.startedAt ?? student.lastActivityAt;
+      student.startedAt = student.startedAt ?? now;
+      changed = true;
+      console.log(`[SESSION] Student ${student.applicantCode} transitioned: waiting -> taking_exam`);
+    }
+
+    // Always notify proctor UI that a heartbeat was received to keep the list fresh
+    notify();
+
+    if (changed) {
+      await persist();
+    }
+
+    const snapshot = await buildSnapshot(session);
+
+    // DETECT STUDENT REQUEST: If polling via participation_token, return MINIFIED snapshot.
+    // This solves the 250-student "Data Bloat" that causes LAN congestion.
+    return ok({
+        ...snapshot,
+        students: [], // Empty for students to save bandwidth
+        recentViolations: [],
+        my_status: student.status,
+        registration_id: student.registrationId
+    });
+  });
+
+  mod.route(p('/leave'), 'POST', async (request) => {
+    if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    const body = parseBody(request.body);
+    const token = String(body.participation_token ?? '');
+    const student = studentByToken(token);
+    if (student) {
+      console.log(`[SESSION] Student ${student.applicantCode} left the lobby.`);
+      delete session.students[student.registrationId];
+      if (session.tokenMap) delete session.tokenMap[token];
       await persist();
       notify();
     }
-
-    return ok(await buildSnapshot(session));
+    return ok({ left: true });
   });
 
   mod.route(p('/questions'), 'GET', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
-    const params = parseParams(request.paramsJson);
+    const params = parseParams(request);
     const student = studentByToken(params.participation_token ?? '');
     if (!student) return fail(404, 'You are no longer joined to this examination.');
     if (session.status !== 'in_progress') {
       return fail(409, 'The proctor has not started the examination yet.');
     }
 
-    const pack = await OfflineStore.getPack();
+    if (!_packCache) {
+      _packCache = await OfflineStore.getPack();
+      _builtQuestionsCache = null; // Invalidate built questions if pack changes
+    }
+    const pack = _packCache;
     if (!pack) return fail(500, 'Proctor phone has no exam pack.');
 
     // Replay this student's stored order so a reload never reshuffles mid-exam.
-    const built = buildExamQuestions(pack);
+    if (!_builtQuestionsCache) {
+      console.log('[SERVER] Building exam questions cache...');
+      _builtQuestionsCache = buildExamQuestions(pack);
+    }
+    const built = _builtQuestionsCache;
+
     const byId = new Map(built.map((q) => [q.id, q]));
     const questions: Question[] = student.order
       .map((id) => byId.get(id))
       .filter((q): q is Question => Boolean(q))
       .map((q, index) => ({ ...q, number: index + 1 }));
 
+    console.log(`[SESSION] Student ${student.applicantCode} fetched questions. Count: ${questions.length}`);
     return ok({
       questions: questions.length ? questions : built,
       durationMinutes: session.durationMinutes,
@@ -512,6 +711,8 @@ function registerRoutes(mod: HttpServerModule) {
     await persist();
     notify();
 
+    console.log(`[SUBMISSION] Student ${student.applicantCode} submitted successfully.`);
+    console.log('[SERVER] Data stored successfully.');
     // Score is deliberately not returned: results are released by the admin.
     return ok({ submitted: true, items_total: graded.items_total });
   });
@@ -558,6 +759,65 @@ function registerRoutes(mod: HttpServerModule) {
     if (!student) return fail(404, 'You are no longer joined to this examination.');
     student.lastActivityAt = new Date().toISOString();
     return ok({ status: session.status, remainingSeconds: remainingSeconds(session) });
+  });
+
+  mod.route(p('/allow-reconnect'), 'POST', async (request) => {
+    if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    const body = parseBody(request.body);
+    const registrationId = Number(body.registration_id ?? 0);
+    const student = session.students[registrationId];
+    if (!student) return fail(404, 'Student not found.');
+
+    const pin = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 15 * 60000).toISOString(); // 15 mins
+
+    student.reconnectCode = pin;
+    student.reconnectCodeExpiresAt = expiresAt;
+
+    console.log(`[SERVER] Issued Reconnect PIN ${pin} for student ${student.applicantCode}`);
+
+    await persist();
+    notify();
+
+    return ok({
+      reconnect_code: pin,
+      expires_at: expiresAt,
+      student_name: student.fullName
+    });
+  });
+
+  mod.route(p('/reconnect'), 'POST', async (request) => {
+    if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    const body = parseBody(request.body);
+    const token = String(body.participation_token ?? '');
+    const pin = String(body.reconnect_code ?? '').trim();
+
+    const student = studentByToken(token);
+    if (!student) return fail(404, 'Session not found. Please scan the QR again.');
+
+    if (!student.reconnectCode || student.reconnectCode !== pin) {
+      return fail(403, 'Invalid reconnect PIN. Please ask the Proctor for a new PIN.');
+    }
+
+    const now = new Date().toISOString();
+    if (student.reconnectCodeExpiresAt && student.reconnectCodeExpiresAt < now) {
+      return fail(403, 'Reconnect PIN has expired. Please ask the Proctor for a new PIN.');
+    }
+
+    // Clear PIN and resume status
+    student.reconnectCode = null;
+    student.reconnectCodeExpiresAt = null;
+    student.lastActivityAt = now;
+    if (student.status === 'disconnected') {
+      student.status = 'taking_exam';
+    }
+
+    console.log(`[SERVER] Student ${student.applicantCode} reconnected via PIN.`);
+
+    await persist();
+    notify();
+
+    return ok({ success: true, status: student.status });
   });
 }
 
@@ -646,6 +906,9 @@ export const PeerExamServer = {
     }
 
     hostIp = await resolveHostIp();
+    const netState = await Network.getNetworkStateAsync();
+    const wifiSsid = netState.type === Network.NetworkStateType.WIFI ? netState.ssid : null;
+
     if (!hostIp) {
       throw new Error(
         'This phone has no Wi‑Fi address. Connect to the exam Wi‑Fi (or turn on a hotspot) and try again.',
@@ -672,6 +935,7 @@ export const PeerExamServer = {
     }
 
     if (!reopening) {
+      console.log('[SERVER] Starting FRESH examination session. Clearing roster.');
       session = {
         scheduleId,
         roomId,
@@ -682,16 +946,23 @@ export const PeerExamServer = {
         endedAt: null,
         durationMinutes: pack.examination_settings?.duration_minutes ?? 90,
         students: {},
+        tokenMap: {},
         violations: [],
         violationSeq: 0,
+        wifiSsid,
       };
     }
 
     if (!running) {
-      mod.setup(PEER_PORT);
-      registerRoutes(mod);
-      mod.start();
-      running = true;
+      try {
+        mod.setup(PEER_PORT);
+        registerRoutes(mod);
+        mod.start();
+        running = true;
+      } catch (err) {
+        console.warn('[SERVER] Could not start server (may be already running):', err);
+        running = true;
+      }
     }
 
     await persist();
@@ -707,9 +978,14 @@ export const PeerExamServer = {
 
   async startExam(): Promise<LobbySnapshot> {
     if (!session) throw new Error('Open the room lobby first.');
+    console.log('[START_EVENT] START_BUTTON_CLICKED');
     const now = new Date().toISOString();
     session.status = 'in_progress';
     session.startedAt = session.startedAt ?? now;
+    console.log('[START_EVENT] SESSION_UPDATED. Status: in_progress');
+    console.log('[LOBBY DEBUG] Proctor Action: START EXAM. New Status:', session.status);
+    console.log('[SESSION] Proctor started examination. Status: started');
+
     for (const student of Object.values(session.students)) {
       if (student.status === 'waiting') {
         student.status = 'taking_exam';
@@ -723,7 +999,9 @@ export const PeerExamServer = {
         session.examCode,
         'in_progress',
       );
+      console.log('[START_EVENT] ROOM_UPDATED');
     }
+    console.log('[START_EVENT] BROADCAST_SENT (via polling update)');
     await persist();
     notify();
     return buildSnapshot(session);
@@ -774,16 +1052,48 @@ export const PeerExamServer = {
 
   async terminateStudent(registrationId: string | number): Promise<LobbySnapshot | null> {
     if (!session) return null;
-    const target = Object.values(session.students).find(
-      (s) => s.registrationId === Number(registrationId),
-    );
+    const currentSession = session;
+    const target = currentSession.students[Number(registrationId)];
     if (target) {
       target.status = 'terminated';
       target.terminationReason = 'proctor_terminated';
       await persist();
       notify();
     }
-    return buildSnapshot(session);
+    return buildSnapshot(currentSession);
+  },
+
+  async allowReconnect(registrationId: string | number): Promise<{ reconnectCode: string; expiresAt: string; studentName?: string } | null> {
+    if (!session) return null;
+    const student = session.students[Number(registrationId)];
+    if (!student) return null;
+
+    const pin = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 15 * 60000).toISOString();
+
+    student.reconnectCode = pin;
+    student.reconnectCodeExpiresAt = expiresAt;
+
+    await persist();
+    notify();
+
+    return {
+      reconnectCode: pin,
+      expiresAt: expiresAt,
+      studentName: student.fullName
+    };
+  },
+
+  async removeStudent(registrationId: string | number): Promise<LobbySnapshot | null> {
+    if (!session) return null;
+    const currentSession = session;
+    const id = Number(registrationId);
+    if (currentSession.students[id]) {
+      delete currentSession.students[id];
+      await persist();
+      notify();
+    }
+    return buildSnapshot(currentSession);
   },
 
   async stop(): Promise<void> {
@@ -802,5 +1112,18 @@ export const PeerExamServer = {
     session = null;
     hostIp = null;
     await OfflineStore.clearPeerSession();
+  },
+
+  async refreshHostIp(): Promise<string | null> {
+    const ip = await resolveHostIp();
+    if (ip) {
+      hostIp = ip;
+      if (session) {
+        session.hostIp = ip;
+        await persist();
+      }
+      notify();
+    }
+    return ip;
   },
 };

@@ -58,13 +58,14 @@ function formatTime(value?: string | null): string {
 
 function toMobileSession(row: BackendSchedule): ExamSession {
   const examDate = row.exam_date || '';
+  const title = row.title || 'Entrance Examination';
   const timeLabel =
     row.time_slot ||
     [formatTime(row.start_time), formatTime(row.end_time)].filter(Boolean).join('–');
 
   return {
     id: String(row.id),
-    scheduleId: `date-${examDate}`,
+    scheduleId: `date-${examDate}-${title.replace(/\s+/g, '-')}`,
     timeLabel,
     startTime: formatTime(row.start_time),
     endTime: formatTime(row.end_time),
@@ -93,28 +94,34 @@ function toMobileRoom(row: BackendRoom, scheduleId: string): ExamRoom {
 }
 
 function toMobileSchedules(rows: BackendSchedule[]): ExamSchedule[] {
-  const map = new Map<string, ExamSchedule & { _count: number }>();
+  const map = new Map<string, any>();
   rows.forEach((row) => {
     const date = row.exam_date || 'unknown';
-    const key = `date-${date}`;
+    const title = row.title || 'Entrance Examination';
+    const key = `date-${date}-${title.replace(/\s+/g, '-')}`;
     if (!map.has(key)) {
       map.set(key, {
         id: key,
-        name: row.title || 'Entrance Examination',
+        name: title,
         schoolYear: date.slice(0, 4) || String(new Date().getFullYear()),
         examinationDate: formatDateLabel(date),
         examinationDateIso: date,
         batchCount: 0,
-        description: row.course || undefined,
-        _count: 0,
+        description: row.venue || row.course || undefined,
+        timeLabel: row.time_slot || undefined,
+        batchNumber: row.batch_code || undefined,
+        venue: row.venue || undefined,
       });
     }
     const item = map.get(key)!;
-    item._count += 1;
-    item.batchCount = item._count;
+    item.batchCount += 1;
+
+    if (item.batchCount > 1) {
+      item.timeLabel = undefined;
+      item.batchNumber = undefined;
+    }
   });
   return Array.from(map.values())
-    .map(({ _count, ...rest }) => rest)
     .sort((a, b) => String(b.examinationDateIso).localeCompare(String(a.examinationDateIso)));
 }
 
@@ -151,9 +158,20 @@ export const ScheduleRepository = {
     const fromPack = async (): Promise<ExamSession[]> => {
       const pack = await OfflineStore.getPack();
       if (!pack) return [];
-      const date = scheduleId.startsWith('date-') ? scheduleId.slice(5) : null;
+
+      let date: string | null = null;
+      let title: string | null = null;
+
+      if (scheduleId.startsWith('date-')) {
+        // date-YYYY-MM-DD-title
+        date = scheduleId.substring(5, 15);
+        title = scheduleId.substring(16).replace(/-/g, ' ');
+      }
+
       const rows = pack.schedules.filter((s) => {
-        if (date) return (s.exam_date || '') === date;
+        if (date && title) {
+          return (s.exam_date || '') === date && (s.title || 'Entrance Examination') === title;
+        }
         return String(s.id) === String(scheduleId).replace(/^offline-/, '');
       });
       return rows
@@ -181,11 +199,23 @@ export const ScheduleRepository = {
     }
 
     try {
-      const date = scheduleId.startsWith('date-') ? scheduleId.slice(5) : scheduleId;
+      let date = scheduleId;
+      let title: string | null = null;
+
+      if (scheduleId.startsWith('date-')) {
+        date = scheduleId.substring(5, 15);
+        title = scheduleId.substring(16).replace(/-/g, ' ');
+      }
+
       const json = await apiRequest<{ success: boolean; data: BackendSchedule[] }>(
         `/proctor/schedules?per_page=200${date ? `&date=${encodeURIComponent(date)}` : ''}`,
       );
-      return (json.data || [])
+
+      const filtered = title
+        ? (json.data || []).filter(s => (s.title || 'Entrance Examination') === title)
+        : (json.data || []);
+
+      return filtered
         .map(toMobileSession)
         .sort((a, b) => a.startTime.localeCompare(b.startTime));
     } catch {
@@ -237,7 +267,26 @@ export const ScheduleRepository = {
       const json = await apiRequest<{ success: boolean; data: BackendRoom[] }>(
         `/proctor/schedules/${sessionId}/rooms`,
       );
-      return (json.data || []).map((row) => toMobileRoom(row, sessionId));
+      const rooms = (json.data || []).map((row) => toMobileRoom(row, sessionId));
+
+      // If we are online, also check for locally opened rooms (opened while offline)
+      // and merge them so the proctor can "Enter Lobby" and resume synchronization.
+      const opened = await OfflineStore.getOpenedRooms();
+      const sid = Number(String(sessionId).replace(/^offline-/, ''));
+
+      return rooms.map((room) => {
+        const key = OfflineStore.roomKey(sid, room.id);
+        const local = opened[key];
+        // If the server thinks it's idle but we have a local open/started/ended session, prefer local.
+        if (local && (room.status === 'idle' || room.status === 'scheduled')) {
+          return {
+            ...room,
+            status: local.status,
+            examinationCode: local.code,
+          };
+        }
+        return room;
+      });
     } catch {
       if (await OfflineStore.hasPack()) {
         await OfflineStore.setOfflineMode(true);

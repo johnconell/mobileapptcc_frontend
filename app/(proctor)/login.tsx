@@ -11,7 +11,11 @@ import { useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Shield } from 'lucide-react-native';
-import { Button, Header, Input, Card, SkeletonForm } from '@/components/ui';
+import { Button } from '@/components/ui/Button';
+import { Header } from '@/components/ui/Header';
+import { Input } from '@/components/ui/Input';
+import { Card } from '@/components/ui/Card';
+import { SkeletonForm } from '@/components/ui/Skeleton';
 import {
   proctorLoginSchema,
   type ProctorLoginValues,
@@ -30,6 +34,7 @@ import { ensureExamPackCached } from '@/services/ensureExamPack';
 import { OfflineStore } from '@/services/offlineStore';
 import { ProctorAuthCache } from '@/services/proctorAuthCache';
 import { colors } from '@/theme';
+import { VersionInfo } from '@/components/VersionInfo';
 
 export default function ProctorLoginScreen() {
   const router = useRouter();
@@ -208,6 +213,10 @@ export default function ProctorLoginScreen() {
             Server: {getAuthApiBaseUrl()}
           </Text>
         </Card>
+
+        <View style={{ paddingHorizontal: 20, paddingBottom: 40 }}>
+           <VersionInfo />
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );

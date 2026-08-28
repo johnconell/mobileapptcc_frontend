@@ -7,6 +7,7 @@ import { colors, shadows } from '@/theme';
 
 interface ExamWifiDisconnectOverlayProps {
   visible: boolean;
+  requiresPin: boolean;
   loading?: boolean;
   error?: string | null;
   onSubmitCode: (code: string) => void | Promise<void>;
@@ -14,6 +15,7 @@ interface ExamWifiDisconnectOverlayProps {
 
 export function ExamWifiDisconnectOverlay({
   visible,
+  requiresPin,
   loading = false,
   error = null,
   onSubmitCode,
@@ -27,34 +29,43 @@ export function ExamWifiDisconnectOverlay({
           <View style={styles.iconWrap}>
             <WifiOff size={36} color={colors.danger} />
           </View>
-          <Text style={styles.title}>Examination locked</Text>
+          <Text style={styles.title}>{requiresPin ? 'Examination locked' : 'Reconnecting...'}</Text>
           <Text style={styles.message}>
-            Wi‑Fi dropped or the exam server lost your heartbeat. Turn campus Wi‑Fi back on,
-            then ask your proctor for the 6-digit reconnect PIN on their lobby (shown next to
-            your name). Do not enter the room examination / QR code — that will not unlock this
-            screen.
+            {requiresPin
+              ? 'Disconnection exceeded 30 seconds. Campus Wi‑Fi must be restored and a proctor must issue a 6-digit PIN to unlock your exam.'
+              : 'Wi‑Fi connection lost. Attempting to reconnect automatically...'}
           </Text>
-          <Input
-            label="6-digit reconnect PIN"
-            value={code}
-            onChangeText={(text) => setCode(text.replace(/\D/g, '').slice(0, 6))}
-            keyboardType="number-pad"
-            maxLength={6}
-            placeholder="e.g. 482917"
-            editable={!loading}
-            autoFocus
-          />
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-          <Button
-            title="Reconnect"
-            size="lg"
-            fullWidth
-            loading={loading}
-            disabled={code.trim().length !== 6 || loading}
-            onPress={() => void onSubmitCode(code.trim())}
-          />
-          <Text style={styles.hint}>
-            After reconnecting, stay on campus Wi‑Fi for the rest of the exam.
+
+          {requiresPin ? (
+            <>
+              <Input
+                label="6-digit reconnect PIN"
+                value={code}
+                onChangeText={(text) => setCode(text.replace(/\D/g, '').slice(0, 6))}
+                keyboardType="number-pad"
+                maxLength={6}
+                placeholder="e.g. 482917"
+                editable={!loading}
+                autoFocus
+              />
+              {error ? <Text style={styles.error}>{error}</Text> : null}
+              <Button
+                title="Unlock & Resume"
+                size="lg"
+                fullWidth
+                loading={loading}
+                disabled={code.trim().length !== 6 || loading}
+                onPress={() => void onSubmitCode(code.trim())}
+              />
+            </>
+          ) : (
+            <Text style={styles.hint}>
+               Please move closer to the exam Wi‑Fi hotspot.
+            </Text>
+          )}
+
+          <Text style={styles.disclaimer}>
+            Your answers remain saved locally on this phone.
           </Text>
         </View>
       </View>
@@ -108,9 +119,16 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   hint: {
-    fontSize: 12,
+    fontSize: 13,
+    color: colors.primary,
+    textAlign: 'center',
+    fontWeight: '700',
+  },
+  disclaimer: {
+    fontSize: 11,
     color: colors.inkMuted,
     textAlign: 'center',
+    marginTop: 8,
     fontWeight: '500',
   },
 });

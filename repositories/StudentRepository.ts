@@ -3,6 +3,7 @@ import { apiRequest } from '@/services/api';
 import { OfflineExamRepository } from '@/services/offlineExamRepository';
 import { OfflineStore } from '@/services/offlineStore';
 import { appStorage } from '@/services/storage';
+import { PeerExamClient } from '@/services/peerExamClient';
 import type { Program, StudentRecord } from '@/types';
 
 /**
@@ -88,10 +89,28 @@ export const StudentRepository = {
   },
 
   async releaseClaim(studentId: string): Promise<void> {
+    if (await PeerExamClient.isActive()) {
+      const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      if (token) {
+        // Peer mode registration is tied to the proctor phone session.
+        // We call /leave or /remove (implementation depends on server routes).
+        try {
+          await PeerExamClient.request('/leave', {
+            method: 'POST',
+            body: { participation_token: token },
+          });
+        } catch (e) {
+          // ignore error if server unreachable, we clear locally anyway in cancelRegistration
+        }
+      }
+      return;
+    }
+
     if (await OfflineStore.isOfflineMode()) {
       await OfflineStore.clearLocalClaim(studentId);
       return;
     }
+
     const code = await appStorage.getItem(STORAGE_KEYS.examinationCode);
     if (!code) return;
 

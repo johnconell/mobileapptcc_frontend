@@ -3,12 +3,13 @@ import {
   describeApiReachabilityProblem,
   studentPackDownloadFailureMessage,
 } from '@/services/apiReachability';
+import { classifyPasskeyMatch, type PasskeyMatchClassification } from '@/services/passkeyClassification';
 import {
   OfflinePack,
   OfflineQueuedResult,
   OfflineStore,
 } from '@/services/offlineStore';
-import type { ChoiceKey, Question } from '@/types';
+import type { ChoiceKey, Question, StudentRecord } from '@/types';
 
 /** Pull typed exam code from plain text or METCC QR JSON. */
 export function extractExaminationCode(raw: string): string {
@@ -237,6 +238,18 @@ export function grade(
  * 2) Offline: take / proctor from cache
  * 3) Online again: sync queued results to cloud
  */
+export interface OfflinePasskeyValidationResult {
+  classification: PasskeyMatchClassification;
+  message?: string;
+  student?: StudentRecord;
+  schedule?: {
+    id?: number;
+    title?: string;
+    exam_date?: string;
+    time_slot?: string;
+  };
+}
+
 export const OfflineExamRepository = {
   async downloadPackFromCloud(
     examDate?: string,
@@ -293,35 +306,35 @@ export const OfflineExamRepository = {
   async getCachedSchedules() {
     const pack = await OfflineStore.getPack();
     if (!pack) return [];
-    // Match online grouping: one schedule card per exam date.
-    const map = new Map<
-      string,
-      {
-        id: string;
-        name: string;
-        schoolYear: string;
-        examinationDate: string;
-        examinationDateIso: string;
-        batchCount: number;
-        description?: string;
-      }
-    >();
+    // Group by date + title so different exams on the same day are distinct.
+    const map = new Map<string, any>();
     for (const s of pack.schedules) {
       const date = s.exam_date || 'unknown';
-      const key = `date-${date}`;
+      const title = s.title || 'Entrance Examination';
+      const key = `date-${date}-${title.replace(/\s+/g, '-')}`;
       if (!map.has(key)) {
         map.set(key, {
           id: key,
-          name: s.title || 'Entrance Examination',
-          schoolYear: date.slice(0, 4) || '',
+          name: title,
+          schoolYear: date.slice(0, 4) || String(new Date().getFullYear()),
           examinationDate: date,
           examinationDateIso: date,
           batchCount: 0,
           description: s.venue,
+          timeLabel: s.time_slot,
+          batchNumber: s.batch_code,
+          venue: s.venue,
         });
       }
       const item = map.get(key)!;
       item.batchCount += 1;
+
+      // For multiple sessions, we clear specific fields to show the generic group card.
+      if (item.batchCount > 1) {
+        item.timeLabel = undefined;
+        item.batchNumber = undefined;
+        item.description = s.venue || item.description;
+      }
     }
     return Array.from(map.values()).sort((a, b) =>
       String(b.examinationDateIso).localeCompare(String(a.examinationDateIso)),
@@ -380,7 +393,7 @@ export const OfflineExamRepository = {
     examinationCode: string,
     passkey: string,
     scheduleIdOverride?: number | null,
-  ) {
+  ): Promise<OfflinePasskeyValidationResult | null> {
     const pack = await OfflineStore.getPack();
     if (!pack) return null;
 
@@ -402,18 +415,53 @@ export const OfflineExamRepository = {
     if (scheduleId == null) return null;
 
     const normalized = passkey.trim().toUpperCase();
-    const reg = pack.registrations.find(
-      (r) =>
-        Number(r.examination_schedule_id) === scheduleId &&
-        String(r.exam_passkey || '').toUpperCase() === normalized,
+    const matches = pack.registrations.filter(
+      (r) => String(r.exam_passkey || '').toUpperCase() === normalized,
+    );
+    if (!matches.length) return null;
+
+    const matchingScheduleIds = matches.map((r) => String(r.examination_schedule_id ?? ''));
+    const classification = classifyPasskeyMatch({
+      currentScheduleId: scheduleId,
+      matchingScheduleIds,
+    });
+
+    if (classification !== 'valid') {
+      const otherScheduleId = matchingScheduleIds.find(
+        (value) => Number(value) !== scheduleId,
+      );
+      const otherSchedule = otherScheduleId
+        ? pack.schedules.find((s) => Number(s.id) === Number(otherScheduleId))
+        : undefined;
+      return {
+        classification,
+        message:
+          classification === 'wrong_schedule'
+            ? `This examination key belongs to ${otherSchedule?.title || 'a different examination schedule'}. Use the correct key for this room.`
+            : 'Invalid examination key for this session.',
+        schedule: otherSchedule
+          ? {
+              id: otherSchedule.id,
+              title: otherSchedule.title,
+              exam_date: otherSchedule.exam_date,
+              time_slot: otherSchedule.time_slot,
+            }
+          : undefined,
+      };
+    }
+
+    const reg = matches.find(
+      (r) => Number(r.examination_schedule_id) === scheduleId,
     );
     if (!reg) return null;
+
     const a = pack.applicants.find((x) => Number(x.id) === Number(reg.applicant_id));
     if (!a) return null;
     const name = (a.name || '').trim() || 'Student';
     const parts = name.trim().split(/\s+/);
     const schedule = pack.schedules.find((s) => Number(s.id) === scheduleId);
     return {
+      classification: 'valid',
       student: {
         id: String(a.id),
         studentId: a.applicant_code || String(a.id),
@@ -524,10 +572,14 @@ export const OfflineExamRepository = {
       rooms[0] ??
       null;
 
+    const examDate = schedule.exam_date || '';
+    const title = schedule.title || 'Entrance Examination';
+    const sid = `date-${examDate}-${title.replace(/\s+/g, '-')}`;
+
     return {
       valid: true as const,
       schedule: {
-        id: String(schedule.id),
+        id: sid,
         name: schedule.title,
         schoolYear: schedule.batch_code || '',
         examinationDate: schedule.exam_date || '',
@@ -536,7 +588,7 @@ export const OfflineExamRepository = {
       },
       session: {
         id: `offline-${schedule.id}${room ? `-r${room.id}` : ''}`,
-        scheduleId: String(schedule.id),
+        scheduleId: sid,
         roomId: room ? String(room.id) : null,
         roomName: room?.room_name,
         timeLabel: schedule.time_slot || 'Offline exam',

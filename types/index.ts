@@ -61,6 +61,10 @@ export interface ExamSchedule {
   examinationDateIso: string;
   batchCount: number;
   description?: string;
+  timeLabel?: string;
+  batchNumber?: string;
+  venue?: string;
+  roomId?: string;
 }
 
 export interface ExamSession {
@@ -144,6 +148,7 @@ export interface LobbySnapshot {
   session: ExamSession;
   status: ExamLifecycleStatus;
   examinationCode?: string;
+  wifiSsid?: string | null;
   qrValue: string;
   roomName?: string | null;
   roomId?: number | null;
@@ -174,6 +179,8 @@ export interface LobbySnapshot {
   is_owner?: boolean;
   remainingSeconds?: number | null;
   allow_late_entry?: boolean;
+  my_status?: LobbyStudentStatus;
+  registration_id?: number;
 }
 
 export interface SecurityViolation {

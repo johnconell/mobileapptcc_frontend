@@ -73,7 +73,9 @@ export async function assertCampusWifiForJoin(options?: {
   /** Raw scanned QR, so a peer QR is probed against the proctor phone. */
   scannedPayload?: string;
 }): Promise<CampusWifiGateResult> {
-  const wifiConnected = await isWifiConnected();
+  const netState = await Network.getNetworkStateAsync();
+  const wifiConnected = netState.type === Network.NetworkStateType.WIFI;
+
   const mismatchMessage =
     'You are connected to a different examination network. Please connect to the same Wi‑Fi network as the proctor and scan again.';
 
@@ -90,16 +92,26 @@ export async function assertCampusWifiForJoin(options?: {
   const peerTarget =
     (options?.scannedPayload ? parsePeerQr(options.scannedPayload) : null) ??
     (await PeerExamClient.getTarget());
+
   if (peerTarget) {
     const reachable = await PeerExamClient.ping(peerTarget);
-    return reachable
-      ? { ok: true, wifiConnected: true, serverReachable: true, message: null }
-      : {
-          ok: false,
-          wifiConnected: true,
-          serverReachable: false,
-          message: mismatchMessage,
-        };
+    if (!reachable) {
+      return {
+        ok: false,
+        wifiConnected: true,
+        serverReachable: false,
+        message: mismatchMessage,
+      };
+    }
+
+    // Ping succeeded! We are on the right network.
+    // SSID check is now secondary (informative only) to avoid blocking students
+    // on devices that cannot report SSID (Android 10+ needs location perms).
+    if (peerTarget.wifiSsid && netState.ssid && netState.ssid !== peerTarget.wifiSsid) {
+       if (__DEV__) console.warn(`[WIFI] SSID Mismatch: Expected ${peerTarget.wifiSsid}, got ${netState.ssid}. Allowing anyway because ping succeeded.`);
+    }
+
+    return { ok: true, wifiConnected: true, serverReachable: true, message: null };
   }
 
   const code = options?.examinationCode?.trim() ?? '';
@@ -113,6 +125,7 @@ export async function assertCampusWifiForJoin(options?: {
       const { OfflineStore } = await import('@/services/offlineStore');
       const opened = await OfflineStore.findOpenedRoomByCode(code);
       if (opened) skipServer = true;
+      if (!skipServer && await OfflineStore.isOfflineMode()) skipServer = true;
     } catch {
       // ignore
     }

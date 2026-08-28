@@ -3,6 +3,7 @@ import { apiRequest } from '@/services/api';
 import { OfflineExamRepository } from '@/services/offlineExamRepository';
 import { OfflineStore } from '@/services/offlineStore';
 import { PeerExamClient } from '@/services/peerExamClient';
+import { ExamPreloader } from '@/services/examPreloader';
 import { appStorage } from '@/services/storage';
 import type { Question } from '@/types';
 
@@ -13,13 +14,31 @@ import type { Question } from '@/types';
  */
 export const QuestionRepository = {
   async getQuestions(sessionId: string): Promise<Question[]> {
-    void sessionId;
-    // Peer mode: the questionnaire comes from the proctor phone's pack.
+    if (__DEV__) console.log("[LOBBY DEBUG] Fetching questions for session:", sessionId);
+
+    // Peer mode logic: Proctor phone is the server
     if (await PeerExamClient.isActive()) {
+      // 1. Try Proctor-LAN pre-loaded cache first
+      const isIntegrityValid = await ExamPreloader.verifyIntegrity();
+      if (isIntegrityValid) {
+        const local = await ExamPreloader.getPreloadedQuestions();
+        if (local.length > 0) return local;
+      }
+
+      // 2. Try the Global Offline Module (Downloaded from Home/Cloud)
+      if (await OfflineStore.hasPack()) {
+        if (__DEV__) console.log("[LOBBY DEBUG] Using questions from Global Offline Module.");
+        return OfflineExamRepository.getQuestions();
+      }
+
+      // 3. Fallback to network fetch if NO local module exists (LAN fetch from proctor)
+      if (__DEV__) console.log("[LOBBY DEBUG] No local cache. Requesting questions from Proctor...");
       const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
       const json = await PeerExamClient.request<{ questions: Question[] }>('/questions', {
         query: { participation_token: token ?? undefined },
+        timeoutMs: 30000, // 30s timeout for large question packs over LAN
       });
+      if (__DEV__) console.log("[LOBBY DEBUG] Received questions from Proctor. Count:", json.questions?.length);
       return json.questions || [];
     }
 
@@ -95,15 +114,20 @@ export const QuestionRepository = {
     if (await PeerExamClient.isActive()) {
       const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
       if (!token) throw new Error('Missing participation token.');
+
+      console.log('[OFFLINE] Submitting answers to Proctor...');
       await PeerExamClient.request('/submit', {
         method: 'POST',
         body: { participation_token: token, answers: payload.answers },
         timeoutMs: 15000,
       });
+
+      console.log('[OFFLINE] Submission confirmed. Safe to delete temporary data.');
       return { success: true, submittedAt: new Date().toISOString() };
     }
 
     if (await OfflineStore.isOfflineMode()) {
+      console.log('[OFFLINE] Saving submission to local SQLite (Offline Mode)...');
       const progressRaw = await appStorage.getItem(STORAGE_KEYS.studentProgress);
       const progress = progressRaw ? JSON.parse(progressRaw) : {};
       const scheduleId =

@@ -11,7 +11,11 @@ import { useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Button, Card, Header, Input, SkeletonDetail } from '@/components/ui';
+import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { Header } from '@/components/ui/Header';
+import { Input } from '@/components/ui/Input';
+import { SkeletonDetail } from '@/components/ui/Skeleton';
 import { LobbyRepository } from '@/repositories';
 import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 import { useLobbyStore, useStudentStore } from '@/stores';
@@ -94,11 +98,32 @@ export default function StudentConfirmationScreen() {
         ...selectedStudent,
         email: email.trim().toLowerCase(),
       };
-      setVerifiedStudent(verified);
+
       const lobby =
         examPasskey
           ? await LobbyRepository.joinWithPasskey(verified, scannedSessionId, examPasskey)
           : await LobbyRepository.joinStudent(verified, scannedSessionId);
+
+      // CRITICAL: Update the verified student with the EXACT registration_id from the server
+      const regId = lobby.registration_id;
+      if (regId) {
+        verified.registration_id = Number(regId);
+      } else {
+        // Fallback for full snapshots
+        const match = lobby.students?.find(s => s.studentId === verified.studentId);
+        if (match) verified.registration_id = Number(match.id);
+      }
+      setVerifiedStudent(verified);
+
+      if (__DEV__) {
+        try {
+          console.debug('[StudentConfirmation] joined lobby', {
+            sessionId: scannedSessionId,
+            registrationId: verified.registration_id,
+            students: lobby.students?.length ?? 0,
+          });
+        } catch {}
+      }
       setSnapshot(lobby);
       router.replace('/(student)/lobby');
     } catch (error) {

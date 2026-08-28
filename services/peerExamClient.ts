@@ -8,6 +8,7 @@ export type PeerTarget = {
   code: string;
   scheduleId: number | null;
   roomId: number | null;
+  wifiSsid: string | null;
 };
 
 let cached: PeerTarget | null | undefined;
@@ -28,6 +29,7 @@ export const PeerExamClient = {
       code: target.code,
       scheduleId: target.scheduleId,
       roomId: target.roomId,
+      wifiSsid: target.wifiSsid,
     };
     cached = value;
     await appStorage.setItem(STORAGE_KEYS.peerTarget, JSON.stringify(value));
@@ -57,6 +59,28 @@ export const PeerExamClient = {
     await appStorage.deleteItem(STORAGE_KEYS.peerTarget);
   },
 
+  /** Ultra-fast signal check to bypass standard polling overhead */
+  async getQuickStatus(token: string): Promise<{ s: string; ss: string } | null> {
+    const target = await this.getTarget();
+    if (!target) return null;
+    try {
+      const res = await withTimeout(
+        (signal) =>
+          fetch(`${baseUrl(target)}/status?participation_token=${token}`, {
+            headers: { Accept: 'application/json' },
+            signal,
+          }),
+        2500,
+      );
+      if (!res.ok) return null;
+      const text = await res.text();
+      const json = JSON.parse(text);
+      return json.data;
+    } catch {
+      return null;
+    }
+  },
+
   /** Reachability probe for the Wi‑Fi gate: is the proctor phone answering? */
   async ping(target?: PeerTarget | PeerQrTarget): Promise<boolean> {
     const resolved = (target as PeerTarget | undefined) ?? (await this.getTarget());
@@ -64,7 +88,7 @@ export const PeerExamClient = {
     try {
       const res = await withTimeout(
         (signal) =>
-          fetch(`${baseUrl(resolved)}/ping`, {
+          fetch(`${baseUrl(resolved)}/health`, { // Changed from /ping to /health
             headers: { Accept: 'application/json' },
             signal,
           }),
@@ -89,6 +113,11 @@ export const PeerExamClient = {
     if (!target) {
       throw new Error('Not connected to a proctor phone. Scan the proctor QR again.');
     }
+    if (__DEV__) {
+      try {
+        console.log("[LOBBY DEBUG] API URL:", `${baseUrl(target)}${path}`);
+      } catch {}
+    }
 
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(options.query ?? {})) {
@@ -101,6 +130,8 @@ export const PeerExamClient = {
 
     let res: Response;
     try {
+      if (__DEV__) console.log(`[LAN DEBUG] Sending request to ${baseUrl(target)}${path}`);
+
       res = await withTimeout(
         (signal) =>
           fetch(`${baseUrl(target)}${path}${qs}`, {
@@ -109,22 +140,35 @@ export const PeerExamClient = {
             body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
             signal,
           }),
-        options.timeoutMs ?? 8000,
+        options.timeoutMs ?? 5000, // Reduced default timeout for faster failure detection
       );
-    } catch {
+    } catch (err) {
+      if (__DEV__) console.error(`[LAN ERROR] Request failed: ${baseUrl(target)}${path}`, err);
       throw new Error(
         `Lost connection to the proctor phone (${target.host}). Stay on the same Wi‑Fi as the proctor and try again.`,
       );
     }
 
-    const json = (await res.json().catch(() => ({}))) as {
-      success?: boolean;
-      message?: string;
-      data?: T;
-    };
-    if (!res.ok || json.success === false) {
-      throw new Error(json.message || `Proctor phone rejected the request (${res.status}).`);
+    const text = await res.text();
+    let json: any = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch (err) {
+      if (__DEV__) console.error(`[LAN ERROR] JSON Parse failed from ${target.host}:`, text.slice(0, 100));
+      throw new Error(`Invalid response from proctor phone.`);
     }
+
+    if (!res.ok || !json || json.success === false) {
+      const msg = json?.message || `Request rejected (${res.status})`;
+      if (__DEV__) console.error(`[LAN ERROR] rejected:`, msg);
+      throw new Error(msg);
+    }
+
+    // Proctor server always wraps valid payloads in 'data'
+    if (json.data === undefined) {
+      return json as T;
+    }
+
     return json.data as T;
   },
 };

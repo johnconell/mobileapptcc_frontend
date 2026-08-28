@@ -79,6 +79,19 @@ export default function OfflinePrepareScreen() {
         onBack={() => safeBack(router, '/')}
       />
       <View style={styles.body}>
+        <Button
+          title={
+            progress
+              ? `Downloading… ${progress.percent}%`
+              : 'Download exam pack (needs internet)'
+          }
+          size="lg"
+          fullWidth
+          loading={busy && !progress}
+          disabled={Boolean(progress)}
+          onPress={() => void download()}
+        />
+
         <Card>
           <Text style={styles.title}>How it works</Text>
           <Text style={styles.bodyText}>
@@ -116,18 +129,6 @@ export default function OfflinePrepareScreen() {
           </SkeletonCard>
         ) : null}
 
-        <Button
-          title={
-            progress
-              ? `Downloading… ${progress.percent}%`
-              : 'Download exam pack (needs internet)'
-          }
-          size="lg"
-          fullWidth
-          loading={busy && !progress}
-          disabled={Boolean(progress)}
-          onPress={() => void download()}
-        />
         <Button
           title={`Sync results to Admin (${pending})`}
           variant="outline"

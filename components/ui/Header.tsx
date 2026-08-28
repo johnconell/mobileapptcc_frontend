@@ -8,6 +8,7 @@ interface HeaderProps {
   title: string;
   subtitle?: string;
   onBack?: () => void;
+  left?: React.ReactNode;
   right?: React.ReactNode;
   transparent?: boolean;
   /** Hide the left back placeholder for locked screens (kiosk). */
@@ -18,6 +19,7 @@ export function Header({
   title,
   subtitle,
   onBack,
+  left,
   right,
   transparent,
   hideBackSlot = false,
@@ -33,7 +35,9 @@ export function Header({
       ]}
     >
       <View style={styles.row}>
-        {onBack ? (
+        {left ? (
+          <View style={styles.left}>{left}</View>
+        ) : onBack ? (
           <Pressable
             accessibilityRole="button"
             onPress={onBack}
@@ -87,6 +91,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   backPlaceholder: { width: 40 },
+  left: { minWidth: 40, alignItems: 'flex-start' },
   center: { flex: 1, gap: 2 },
   title: { fontSize: 17, fontWeight: '700', color: colors.ink },
   subtitle: { fontSize: 12, color: colors.inkMuted, fontWeight: '500' },

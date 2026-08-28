@@ -26,6 +26,7 @@ export function useSessions(scheduleId?: string) {
     queryKey: QUERY_KEYS.sessions(scheduleId ?? ''),
     queryFn: () => ScheduleRepository.getSessionsBySchedule(scheduleId!),
     enabled: Boolean(scheduleId),
+    networkMode: 'always',
   });
 }
 
@@ -66,16 +67,23 @@ export function useQuestions(sessionId?: string) {
     queryKey: QUERY_KEYS.questions(sessionId),
     queryFn: () => QuestionRepository.getQuestions(sessionId!),
     enabled: Boolean(sessionId),
+    networkMode: 'always',
   });
 }
 
 export function useLobby(sessionId?: string, roomId?: string, enabled = true) {
   return useQuery({
     queryKey: QUERY_KEYS.lobby(sessionId, roomId),
-    queryFn: () => LobbyRepository.getLobby(sessionId, roomId),
-    refetchInterval: 2500,
+    queryFn: () => {
+      if (__DEV__) console.log("[LOBBY DEBUG] Polling Triggered for Session:", sessionId);
+      return LobbyRepository.getLobby(sessionId, roomId);
+    },
+    refetchInterval: 4000, // Reduced frequency for large LAN groups
+    refetchIntervalInBackground: true,
+    refetchOnReconnect: true,
     enabled: Boolean(sessionId) && enabled,
-    retry: 1,
+    retry: 3, // More retries for flaky LAN
+    networkMode: 'always', // Essential for Offline LAN polling
   });
 }
 

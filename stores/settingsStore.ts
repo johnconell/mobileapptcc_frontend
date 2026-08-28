@@ -5,15 +5,18 @@ import { appStorage } from '@/services/storage';
 interface SettingsState {
   keepAwakeDuringExam: boolean;
   reducedMotion: boolean;
+  allowUpdatesOnCellular: boolean;
   hydrated: boolean;
   setKeepAwakeDuringExam: (value: boolean) => void;
   setReducedMotion: (value: boolean) => void;
+  setAllowUpdatesOnCellular: (value: boolean) => void;
   hydrate: () => Promise<void>;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   keepAwakeDuringExam: true,
   reducedMotion: false,
+  allowUpdatesOnCellular: false,
   hydrated: false,
 
   setKeepAwakeDuringExam: (keepAwakeDuringExam) => {
@@ -26,6 +29,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     void persistSettings(get());
   },
 
+  setAllowUpdatesOnCellular: (allowUpdatesOnCellular) => {
+    set({ allowUpdatesOnCellular });
+    void persistSettings(get());
+  },
+
   hydrate: async () => {
     try {
       const raw = await appStorage.getItem(STORAGE_KEYS.settings);
@@ -34,6 +42,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         set({
           keepAwakeDuringExam: parsed.keepAwakeDuringExam ?? true,
           reducedMotion: parsed.reducedMotion ?? false,
+          allowUpdatesOnCellular: parsed.allowUpdatesOnCellular ?? false,
           hydrated: true,
         });
         return;
@@ -51,6 +60,7 @@ async function persistSettings(state: SettingsState) {
     JSON.stringify({
       keepAwakeDuringExam: state.keepAwakeDuringExam,
       reducedMotion: state.reducedMotion,
+      allowUpdatesOnCellular: state.allowUpdatesOnCellular,
     }),
   );
 }

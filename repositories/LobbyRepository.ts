@@ -1,5 +1,5 @@
 import { MAX_EXAM_VIOLATIONS, STORAGE_KEYS } from '@/constants';
-import { apiRequest } from '@/services/api';
+import { apiRequest, ApiError } from '@/services/api';
 import {
   extractExaminationCode,
   OfflineExamRepository,
@@ -47,10 +47,15 @@ function peerMatchesRequest(
   }
   if (sessionId != null && String(sessionId).trim() !== '') {
     const sid = String(sessionId).replace(/^offline-/, '');
-    const hostedSchedule = String(
-      hosted.session?.scheduleId ?? hosted.schedule?.id ?? '',
-    ).replace(/^offline-/, '');
-    if (hostedSchedule && hostedSchedule !== sid) return false;
+    const hostedScheduleId = String(hosted.session?.scheduleId ?? '').replace(/^offline-/, '');
+    const hostedScheduleGroupId = String(hosted.schedule?.id ?? '').replace(/^offline-/, '');
+
+    // session.id is usually "offline-{numericScheduleId}-r{roomId}"
+    const hostedNumericId = String(hosted.session?.id ?? '').replace(/^offline-/, '').split('-')[0];
+
+    if (sid !== hostedScheduleId && sid !== hostedScheduleGroupId && sid !== hostedNumericId) {
+      return false;
+    }
   }
   return true;
 }
@@ -116,8 +121,13 @@ export const LobbyRepository = {
     }
 
     try {
+      const netState = await import('expo-network').then((m) => m.getNetworkStateAsync());
+      const hostIp = await import('expo-network').then((m) => m.getIpAddressAsync());
+
       const body: Record<string, unknown> = {
         examination_schedule_id: Number(sessionId),
+        wifi_ssid: netState.type === 'WIFI' ? netState.ssid : null,
+        local_server_ip: hostIp && hostIp !== '0.0.0.0' ? hostIp : null,
       };
       if (questionBankId) body.question_bank_id = questionBankId;
       if (roomId) body.examination_room_id = Number(roomId);
@@ -224,20 +234,70 @@ export const LobbyRepository = {
   },
 
   async getLobby(sessionId?: string, roomId?: string): Promise<LobbySnapshot | null> {
+    if (__DEV__) console.debug('[LobbyRepository.getLobby] called', { sessionId, roomId });
+
     // Proctor phone hosting: it owns the lobby state, so read it directly.
     const hosted = await PeerExamServer.snapshot();
     if (hosted && peerMatchesRequest(hosted, sessionId, roomId)) {
+      if (__DEV__) console.debug('[LobbyRepository.getLobby] returning hosted peer snapshot', { status: hosted.status });
       return hosted;
     }
 
     // Student joined to a proctor phone: poll that phone.
     if (await PeerExamClient.isActive()) {
-      const participation = await appStorage.getItem(STORAGE_KEYS.participationToken);
-      if (participation) {
-        return PeerExamClient.request<LobbySnapshot>('/lobby', {
-          query: { participation_token: participation },
-        });
+      if (__DEV__) console.debug('[LobbyRepository.getLobby] PeerExamClient active — will poll proctor phone');
+      let participation = await appStorage.getItem(STORAGE_KEYS.participationToken);
+
+      // Defensive fallback: some joins may have saved progress but not the participation token.
+      if (!participation) {
+        try {
+          const raw = await appStorage.getItem(STORAGE_KEYS.studentProgress);
+          if (raw) {
+            const parsed = JSON.parse(raw) as any;
+            if (parsed?.participationToken) participation = parsed.participationToken;
+          }
+        } catch {
+          // ignore parse errors
+        }
       }
+
+      if (participation) {
+        if (__DEV__) console.debug('[LobbyRepository.getLobby] using participation token (snippet)', { participation: String(participation).slice(0, 8) });
+        try {
+          const snapshot = await PeerExamClient.request<LobbySnapshot>('/lobby', {
+            query: { participation_token: participation },
+            timeoutMs: 3500, // Slightly more aggressive timeout for lobby poll
+          });
+          if (__DEV__) console.log("[LOBBY DEBUG] Peer Server Response Status:", snapshot?.status);
+          return snapshot ?? null;
+        } catch (err) {
+          if (__DEV__) console.warn('[LOBBY DEBUG] Peer poll failed:', err);
+          throw err; // Let useQuery handle the error state
+        }
+      }
+
+      // FALLBACK: If no participation token yet, get basic lobby info via /resolve
+      const code = await getStoredCode();
+      if (code) {
+          try {
+              const resolved = await PeerExamClient.request<any>('/resolve', {
+                  method: 'POST',
+                  body: { code }
+              });
+              return {
+                  schedule: resolved.schedule,
+                  session: resolved.session,
+                  status: resolved.status || 'lobby_open',
+                  examinationCode: resolved.examinationCode,
+                  students: [],
+                  registeredCount: resolved.session?.registeredStudents ?? 0,
+                  connectedCount: 0,
+              } as unknown as LobbySnapshot;
+          } catch {
+              return null;
+          }
+      }
+      if (__DEV__) console.debug('[LobbyRepository.getLobby] PeerExamClient active but no participation token found');
     }
 
     if (await OfflineStore.isOfflineMode()) {
@@ -311,7 +371,8 @@ export const LobbyRepository = {
       return null;
     }
 
-    return this.fetchProctorLobby(sessionId, roomId);
+    const lobby = await this.fetchProctorLobby(sessionId, roomId);
+    return lobby ?? null;
   },
 
   async getLobbyByCode(rawCode: string): Promise<LobbySnapshot | null> {
@@ -420,68 +481,130 @@ export const LobbyRepository = {
   },
 
   async validatePasskey(passkey: string): Promise<{
-    student: StudentRecord;
+    classification: 'valid' | 'wrong_schedule';
+    message?: string;
+    student?: StudentRecord;
     schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
   }> {
     const code = (await getStoredCode()) || '';
     if (!code) throw new Error('Missing examination code. Scan QR again.');
 
     if (await PeerExamClient.isActive()) {
-      return PeerExamClient.request<{
-        student: StudentRecord;
+      const response = await PeerExamClient.request<{
+        classification?: 'valid' | 'wrong_schedule';
+        message?: string;
+        student?: StudentRecord;
         schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
       }>('/passkey', {
         method: 'POST',
         body: { code, passkey: passkey.trim().toUpperCase() },
       });
+      if (response.classification === 'wrong_schedule') {
+        return {
+          classification: 'wrong_schedule',
+          message: response.message || 'This examination key belongs to a different schedule.',
+          schedule: response.schedule,
+        };
+      }
+      if (__DEV__) {
+        console.debug('[LobbyRepository.validatePasskey] peer response', { classification: response.classification, hasStudent: Boolean(response.student), schedule: response.schedule });
+      }
+      if (!response.student) {
+        throw new Error(response.message || 'Invalid examination key.');
+      }
+      return {
+        classification: 'valid',
+        student: response.student,
+        schedule: response.schedule,
+        message: response.message,
+      };
     }
 
     if (await OfflineStore.isOfflineMode()) {
       const offline = await OfflineExamRepository.validatePasskey(code, passkey);
       if (!offline) throw new Error('Invalid examination key for this offline session.');
-      return offline;
-    }
-
-    const json = await apiRequest<{
-      success: boolean;
-      message?: string;
-      data?: {
-        student: StudentRecord & { hasGmail?: boolean; gmail?: string | null };
-        schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
+      if (offline.classification === 'wrong_schedule') {
+        return {
+          classification: 'wrong_schedule',
+          message: offline.message || 'This examination key belongs to a different examination schedule.',
+        };
+      }
+      if (!offline.student) {
+        throw new Error(offline.message || 'Invalid examination key for this offline session.');
+      }
+      return {
+        classification: 'valid',
+        student: offline.student,
+        schedule: offline.schedule,
+        message: offline.message,
       };
-    }>('/exam/passkey/validate', {
-      method: 'POST',
-      auth: false,
-      body: { code, passkey: passkey.trim().toUpperCase() },
-    });
-
-    if (!json.data?.student) {
-      throw new Error(json.message || 'Invalid examination key.');
     }
 
-    const s = json.data.student;
+    try {
+      const json = await apiRequest<{
+        success: boolean;
+        message?: string;
+        data?: {
+          student: StudentRecord & { hasGmail?: boolean; gmail?: string | null };
+          schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
+        };
+      }>('/exam/passkey/validate', {
+        method: 'POST',
+        auth: false,
+        body: { code, passkey: passkey.trim().toUpperCase() },
+      });
+
+      if (!json.data?.student) {
+        // Server may indicate the passkey belongs to a different schedule
+        const sched = json.data?.schedule ?? (json as any).schedule;
+        if (sched) {
+          return {
+            classification: 'wrong_schedule',
+            message: json.message || 'This examination key belongs to a different schedule.',
+            schedule: sched,
+          };
+        }
+        throw new Error(json.message || 'Invalid examination key.');
+      }
+
+      const s = json.data.student;
     const name = s.fullName || 'Student';
     const parts = name.trim().split(/\s+/);
-    return {
-      student: {
-        id: String(s.id),
-        studentId: s.studentId,
-        firstName: parts[0] || name,
-        middleName: '',
-        lastName: parts.slice(1).join(' ') || '',
-        fullName: name,
-        email: s.email || s.gmail || '',
-        programId: s.programCode || '',
-        programCode: s.programCode || '',
-        programName: s.programName || s.programCode || '',
-        sex: 'Male',
-        avatarInitials: s.avatarInitials || 'ST',
-        registration_id: s.registration_id,
-        selectionStatus: 'ready',
-        selectable: true,
-      },
-      schedule: json.data.schedule,
-    };
+      return {
+        classification: 'valid',
+        student: {
+          id: String(s.id),
+          studentId: s.studentId,
+          firstName: parts[0] || name,
+          middleName: '',
+          lastName: parts.slice(1).join(' ') || '',
+          fullName: name,
+          email: s.email || s.gmail || '',
+          programId: s.programCode || '',
+          programCode: s.programCode || '',
+          programName: s.programName || s.programCode || '',
+          sex: 'Male',
+          avatarInitials: s.avatarInitials || 'ST',
+          registration_id: s.registration_id,
+          selectionStatus: 'ready',
+          selectable: true,
+        },
+        schedule: json.data.schedule,
+      };
+    } catch (e) {
+      if (e instanceof ApiError && e.payload) {
+        const payload = e.payload as any;
+        const sched = payload?.data?.schedule ?? payload?.schedule;
+        if (sched) {
+          return {
+            classification: 'wrong_schedule',
+            message: payload?.message || 'This examination key belongs to a different schedule.',
+            schedule: sched,
+          };
+        }
+      }
+      throw e instanceof Error ? e : new Error(String(e));
+    }
   },
 
   async joinWithPasskey(
@@ -521,6 +644,9 @@ export const LobbyRepository = {
           peer: true,
         }),
       );
+      if (__DEV__) {
+        console.debug('[LobbyRepository.joinWithPasskey] peer joined', { registration_id: joined.registration_id, participation_snippet: String(joined.participation_token).slice(0, 8) });
+      }
       return joined.lobby;
     }
 
@@ -561,6 +687,9 @@ export const LobbyRepository = {
         participationToken: json.data.participation_token,
       }),
     );
+    if (__DEV__) {
+      console.debug('[LobbyRepository.joinWithPasskey] server joined', { registration_id: json.data.registration_id, participation_snippet: String(json.data.participation_token).slice(0, 8) });
+    }
 
     return json.data.lobby;
   },
@@ -683,26 +812,31 @@ export const LobbyRepository = {
   async closeLobby(sessionId: string, roomId?: string): Promise<void> {
     const sid = String(sessionId).replace(/^offline-/, '');
 
+    // 1. Peer server closure (local hosting)
     const peer = await PeerExamServer.snapshot();
     if (peer && peerMatchesRequest(peer, sessionId, roomId)) {
       if (peer.status === 'in_progress') {
         throw new Error('Examination has started. Use End Examination instead.');
       }
       await PeerExamServer.closeLobby();
-      return;
+      // If we're strictly in offline mode, we can stop here.
+      if (await OfflineStore.isOfflineMode()) {
+        await setStoredCode(null);
+        return;
+      }
     }
 
+    // 2. Central server closure (online)
     let examSessionId: number | null = null;
+    let lobbyStatus: string | null = null;
+
     if (!(await OfflineStore.isOfflineMode())) {
       try {
-        const qs = roomId
-          ? `?examination_room_id=${encodeURIComponent(roomId)}`
-          : '';
-        const bySchedule = await apiRequest<LobbyResponse>(
-          `/proctor/schedules/${sessionId}/lobby${qs}`,
-        );
+        const qs = roomId ? `?examination_room_id=${encodeURIComponent(roomId)}` : '';
+        const bySchedule = await apiRequest<LobbyResponse>(`/proctor/schedules/${sessionId}/lobby${qs}`);
         const lobby = bySchedule?.data;
-        if (lobby?.status === 'in_progress') {
+        lobbyStatus = lobby?.status ?? null;
+        if (lobbyStatus === 'in_progress') {
           throw new Error('Examination has started. Use End Examination instead.');
         }
         examSessionId = lobby?.session?.examSessionId ?? null;
@@ -710,12 +844,26 @@ export const LobbyRepository = {
         if (err instanceof Error && err.message.includes('End Examination')) {
           throw err;
         }
+        // If the server is unreachable or lobby not found on server, continue to clear local flags.
       }
     }
 
-    if (examSessionId) {
-      await apiRequest(`/proctor/sessions/${examSessionId}/close`, { method: 'POST' });
+    try {
+      if (examSessionId && lobbyStatus === 'lobby_open') {
+        await apiRequest(`/proctor/sessions/${examSessionId}/close`, { method: 'POST' });
+      } else if (!(await OfflineStore.isOfflineMode())) {
+        const qs = roomId ? `?examination_room_id=${encodeURIComponent(roomId)}` : '';
+        await apiRequest(`/proctor/schedules/${sessionId}/close${qs}`, { method: 'POST' });
+      }
+    } catch {
+      // Best-effort for server closure; local clearing below is more critical for UI state.
     }
+
+    if (roomId) {
+      await OfflineStore.clearOpenedRoom(sid, roomId);
+    }
+
+    await setStoredCode(null);
 
     if (roomId) {
       await OfflineStore.clearOpenedRoom(sid, roomId);
@@ -809,6 +957,18 @@ export const LobbyRepository = {
     return null;
   },
 
+  async removeStudent(studentId: string): Promise<LobbySnapshot | null> {
+    const peer = await PeerExamServer.snapshot();
+    if (peer) {
+      return PeerExamServer.removeStudent(studentId);
+    }
+    // studentId in lobby cards is registration id string.
+    await apiRequest(`/proctor/registrations/${studentId}/remove`, {
+      method: 'POST',
+    });
+    return null;
+  },
+
   async syncPendingCount(examSessionId?: string | number): Promise<{
     pending: number;
     configured: boolean;
@@ -837,6 +997,7 @@ export const LobbyRepository = {
       method: 'POST',
       body: examSessionId != null ? { exam_session_id: Number(examSessionId) } : {},
     });
+    if (json.success) console.log('[SYNC] Sync to cloud successful.');
     return {
       synced: json.data?.synced ?? 0,
       failed: json.data?.failed ?? 0,
@@ -933,10 +1094,7 @@ export const LobbyRepository = {
 
     if (await PeerExamClient.isActive()) {
       try {
-        await PeerExamClient.request('/heartbeat', {
-          method: 'POST',
-          body: { participation_token: token },
-        });
+        await PeerExamClient.getQuickStatus(token);
         return { ok: true };
       } catch (e) {
         return {
@@ -945,6 +1103,7 @@ export const LobbyRepository = {
         };
       }
     }
+    // ... rest of existing code
     try {
       await apiRequest('/exam/heartbeat', {
         method: 'POST',
@@ -981,6 +1140,19 @@ export const LobbyRepository = {
     }
     const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
     if (!token) return { ok: false, message: 'Missing participation token.' };
+
+    if (await PeerExamClient.isActive()) {
+        try {
+            await PeerExamClient.request('/reconnect', {
+                method: 'POST',
+                body: { participation_token: token, reconnect_code: code },
+            });
+            return { ok: true };
+        } catch (e) {
+            return { ok: false, message: e instanceof Error ? e.message : 'Reconnect failed.' };
+        }
+    }
+
     try {
       await apiRequest('/exam/reconnect', {
         method: 'POST',
@@ -1002,6 +1174,12 @@ export const LobbyRepository = {
   async allowStudentReconnect(
     registrationId: string,
   ): Promise<{ reconnectCode: string; expiresAt: string; studentName?: string }> {
+    const hosted = await PeerExamServer.snapshot();
+    if (hosted) {
+        const res = await PeerExamServer.allowReconnect(registrationId);
+        if (res) return res;
+    }
+
     const json = await apiRequest<{
       success: boolean;
       message?: string;

@@ -1,8 +1,14 @@
 import React, { useEffect, useMemo } from 'react';
-import { FlatList, Pressable, Text, View, StyleSheet } from 'react-native';
+import { Alert, FlatList, Pressable, Text, View, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { CheckCircle2, ChevronRight, DoorOpen, Users, UserRound } from 'lucide-react-native';
-import { Card, EmptyState, Header, SkeletonList, StatusChip } from '@/components/ui';
+import { CheckCircle2, ChevronRight, DoorOpen, Users, UserRound, Menu } from 'lucide-react-native';
+import { Card } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Header } from '@/components/ui/Header';
+import { SkeletonList } from '@/components/ui/Skeleton';
+import { StatusChip } from '@/components/ui/StatusChip';
+import { Button } from '@/components/ui/Button';
+import { useProctorDrawer } from './ProctorDrawer';
 import { useRooms, useSessions } from '@/hooks/useRepositories';
 import { AuthRepository } from '@/repositories';
 import { useProctorStore } from '@/stores';
@@ -54,6 +60,21 @@ export default function RoomsScreen() {
     sessionsQuery.data?.find((item) => item.id === sessionId) ??
     null;
 
+  const confirmLogout = () => {
+    Alert.alert('Are you sure you want to log out?', undefined, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Yes, Logout',
+        style: 'destructive',
+        onPress: async () => {
+          await AuthRepository.logout();
+          reset();
+          router.replace('/(proctor)/login');
+        },
+      },
+    ]);
+  };
+
   const rooms = roomsQuery.data ?? [];
   const batchDone = useMemo(
     () => rooms.length > 0 && rooms.every((r) => r.status === 'ended'),
@@ -62,11 +83,18 @@ export default function RoomsScreen() {
   const endedCount = rooms.filter((r) => r.status === 'ended').length;
 
   if (roomsQuery.isLoading) {
-    return (
+    const { toggleDrawer } = useProctorDrawer();
+
+  return (
       <View style={styles.screen}>
         <Header
           title="Examination Rooms"
           subtitle={session?.timeLabel ?? 'Loading…'}
+          left={
+            <Pressable onPress={toggleDrawer} style={styles.menuBtn}>
+                <Menu size={24} color={colors.ink} />
+            </Pressable>
+          }
           onBack={() =>
             safeBack(router, {
               pathname: '/(proctor)/sessions',
@@ -86,6 +114,14 @@ export default function RoomsScreen() {
       <Header
         title="Examination Rooms"
         subtitle={session?.timeLabel ?? 'Select a room'}
+        right={
+          <Button
+            title="Logout"
+            variant="ghost"
+            size="sm"
+            onPress={confirmLogout}
+          />
+        }
         onBack={() =>
           safeBack(router, {
             pathname: '/(proctor)/sessions',
@@ -217,4 +253,14 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   hint: { fontSize: 12, color: colors.inkMuted, fontWeight: '500' },
+  menuBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
 });

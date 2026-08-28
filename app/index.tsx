@@ -1,32 +1,82 @@
-import React, { useState } from 'react';
-import { Modal, Pressable, Text, View, StyleSheet } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { Modal, Pressable, Text, View, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
-import { Keyboard, QrCode, Shield } from 'lucide-react-native';
+import { Keyboard, QrCode, Shield, Download } from 'lucide-react-native';
 import { APP_NAME, SCHOOL_NAME } from '@/constants';
 import { colors, shadows } from '@/theme';
+import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { FloatingButton } from '@/components/ui/FloatingButton';
 import {
-  Card,
-  FloatingButton,
   Skeleton,
   SkeletonCard,
   SkeletonCircle,
   SkeletonText,
-} from '@/components/ui';
+} from '@/components/ui/Skeleton';
 import { SchoolLogo } from '@/features/student/SchoolLogo';
+import { AuthRepository } from '@/repositories';
+import * as Updates from 'expo-updates';
+import * as Network from 'expo-network';
+import { useSettingsStore } from '@/stores';
+import { VersionInfo } from '@/components/VersionInfo';
+import { ensureExamPackCached } from '@/services/ensureExamPack';
+import { OfflineStore } from '@/services/offlineStore';
 
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [joinOpen, setJoinOpen] = useState(false);
-  const [preparing] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [pack, setPack] = useState<any>(null);
+  const [downloadProgress, setDownloadProgress] = useState<{
+    percent: number;
+    label: string;
+  } | null>(null);
+
+  useEffect(() => {
+    void OfflineStore.getPackSummary().then(setPack);
+  }, []);
+
+  const downloadPack = async () => {
+    setPreparing(true);
+    setDownloadProgress({ percent: 0, label: 'Connecting…' });
+    try {
+      const result = await ensureExamPackCached({
+        force: true,
+        includeAuth: false, // Students don't need proctor accounts
+        onProgress: setDownloadProgress,
+      });
+      const summary = await OfflineStore.getPackSummary();
+      setPack(summary);
+      if (result.ok) {
+         Alert.alert('Ready for Exam', 'Examination data is now secured on this phone. You can now take the exam offline.');
+      } else {
+         Alert.alert('Download failed', result.message);
+      }
+    } finally {
+      setPreparing(false);
+      setDownloadProgress(null);
+    }
+  };
 
   // No Wi‑Fi / Hub check here — students open the scanner first.
   // Network matching is validated only AFTER a QR is scanned (or a code is submitted).
   const startTakeExam = () => {
     setJoinOpen(true);
   };
+
+  // If a proctor session exists on this phone, go straight to proctor schedules
+  useEffect(() => {
+    void (async () => {
+      const session = await AuthRepository.getSession();
+      if (session) {
+        // Ensure proctor sessions come back to the proctor portal rather than student index
+        router.replace('/(proctor)/schedules');
+      }
+    })();
+  }, [router]);
 
   if (preparing) {
     return (
@@ -61,6 +111,79 @@ export default function HomeScreen() {
           <Shield size={14} color={colors.primary} />
           <Text style={styles.proctorText}>Proctor</Text>
         </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Check for updates"
+          onPress={async () => {
+            try {
+              const allowOnCellular = useSettingsStore.getState().allowUpdatesOnCellular;
+              const setAllow = useSettingsStore.getState().setAllowUpdatesOnCellular;
+
+              const doFetch = async () => {
+                Alert.alert('Update', 'Checking for updates…');
+                const update = await Updates.checkForUpdateAsync();
+                if (!update.isAvailable) {
+                  Alert.alert('Update', 'No new update available');
+                  return;
+                }
+                Alert.alert('Update', 'Update available — downloading now');
+                await Updates.fetchUpdateAsync();
+                Alert.alert('Update', 'Update downloaded — reloading to apply', [
+                  { text: 'Reload now', onPress: () => void Updates.reloadAsync() },
+                ]);
+              };
+
+              Alert.alert('Update', 'Checking network…');
+              const net = await Network.getNetworkStateAsync();
+              if (!net.isConnected || !net.isInternetReachable) {
+                Alert.alert('No network', 'You must be online to check for updates.');
+                return;
+              }
+
+              const type = (net.type || '').toLowerCase();
+              if (type === 'wifi') {
+                await doFetch();
+                return;
+              }
+
+              if (type === 'cellular') {
+                if (allowOnCellular) {
+                  await doFetch();
+                  return;
+                }
+
+                Alert.alert(
+                  'Mobile data',
+                  'You are on mobile data. Downloading updates may use cellular data. Proceed?',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Proceed once', onPress: async () => void (await doFetch()) },
+                    {
+                      text: 'Always allow',
+                      onPress: async () => {
+                        setAllow(true);
+                        await doFetch();
+                      },
+                    },
+                  ],
+                );
+                return;
+              }
+
+              // Unknown connection type — default to prompting
+              Alert.alert(
+                'Update',
+                'Connected via an unknown network. Proceed with update?',
+                [{ text: 'Cancel' }, { text: 'Proceed', onPress: async () => void (await doFetch()) }],
+              );
+            } catch (err) {
+              Alert.alert('Update error', String(err));
+            }
+          }}
+          style={[styles.proctorBtn, styles.updateBtn]}
+        >
+          <Text style={[styles.proctorText, { color: colors.primary }]}>Update</Text>
+        </Pressable>
       </View>
 
       <View style={styles.content}>
@@ -72,15 +195,52 @@ export default function HomeScreen() {
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(100).springify()}>
-          <Card>
-            <Text style={styles.cardTitle}>Ready to begin?</Text>
+          <Card style={[styles.packCard, pack?.ready && styles.packCardReady]}>
+            <Text style={styles.cardTitle}>Offline Preparation</Text>
             <Text style={styles.cardBody}>
-              Connect to the campus exam Wi‑Fi first. Then tap Take Examination to
-              update this phone’s exam cache and join by QR or code. Mobile data
-              alone is not allowed.
+              {pack?.ready
+                ? "Examination module is secured on this phone. You are ready for the offline exam."
+                : "Download the questionnaire now so you are ready to start instantly when you enter the exam room."}
             </Text>
+
+            {downloadProgress ? (
+                <View style={styles.progressBlock}>
+                  <View style={styles.progressTrack}>
+                    <View
+                      style={[
+                        styles.progressFill,
+                        { width: `${Math.max(4, downloadProgress.percent)}%` },
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.progressLabel}>
+                    {downloadProgress.label} · {downloadProgress.percent}%
+                  </Text>
+                </View>
+              ) : null}
+
+            <Button
+                title={
+                  downloadProgress
+                    ? `Verifying… ${downloadProgress.percent}%`
+                    : pack?.ready
+                      ? 'Update Module'
+                      : 'Download Exam Module'
+                }
+                icon={<Download size={18} color={pack?.ready ? colors.primary : colors.white} />}
+                variant={pack?.ready && !downloadProgress ? 'outline' : 'primary'}
+                fullWidth
+                loading={preparing && !downloadProgress}
+                disabled={Boolean(downloadProgress)}
+                onPress={() => void downloadPack()}
+                style={{ marginTop: 8 }}
+              />
           </Card>
         </Animated.View>
+
+        <View style={{ marginTop: 8 }}>
+          <VersionInfo />
+        </View>
       </View>
 
       <View style={[styles.fabWrap, { paddingBottom: Math.max(insets.bottom, 20) }]}>
@@ -201,8 +361,23 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   tagline: { fontSize: 14, color: colors.inkMuted, fontWeight: '500' },
+  packCard: { borderColor: colors.border },
+  packCardReady: { borderColor: colors.success, borderWidth: 1.5 },
   cardTitle: { fontSize: 16, fontWeight: '700', color: colors.ink, marginBottom: 8 },
   cardBody: { fontSize: 14, lineHeight: 21, color: colors.inkSecondary },
+  progressBlock: { gap: 6, marginVertical: 8 },
+  progressTrack: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceMuted,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: colors.primary,
+  },
+  progressLabel: { fontSize: 12, fontWeight: '700', color: colors.inkSecondary },
   fabWrap: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -248,3 +423,11 @@ const styles = StyleSheet.create({
   cancel: { alignItems: 'center', paddingVertical: 10 },
   cancelText: { fontWeight: '700', color: colors.primary },
 });
+
+// small tweak styles for update button
+const extra = StyleSheet.create({
+  updateBtn: { marginLeft: 8, paddingHorizontal: 12 },
+});
+
+// merge into main styles to avoid adding new style object references in render
+Object.assign(styles, extra);

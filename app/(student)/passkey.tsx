@@ -11,9 +11,14 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { KeyRound } from 'lucide-react-native';
-import { Button, Card, Header, Input, SkeletonForm } from '@/components/ui';
+import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { Header } from '@/components/ui/Header';
+import { Input } from '@/components/ui/Input';
+import { SkeletonForm } from '@/components/ui/Skeleton';
 import { LobbyRepository } from '@/repositories';
 import { useStudentStore } from '@/stores';
+import { OfflineStore } from '@/services/offlineStore';
 import { colors } from '@/theme';
 
 const schema = z.object({
@@ -69,7 +74,41 @@ export default function StudentPasskeyScreen() {
     setError(null);
     try {
       const result = await LobbyRepository.validatePasskey(values.passkey.trim());
+      if (result.classification === 'wrong_schedule') {
+        const sched = result.schedule;
+        if (sched && (sched.exam_date || sched.time_slot || sched.title)) {
+          const parts = [] as string[];
+          if (sched.title) parts.push(sched.title);
+          if (sched.exam_date) parts.push(sched.exam_date);
+          if (sched.time_slot) parts.push(sched.time_slot);
+          setError(
+            `${result.message || 'This examination key belongs to another schedule.'}\nScheduled: ${parts.join(' · ')}`,
+          );
+        } else {
+          setError(result.message || 'This examination key belongs to a different schedule.');
+        }
+        return;
+      }
       setExamPasskey(values.passkey.trim().toUpperCase());
+      if (!result.student) {
+        throw new Error(result.message || 'Unable to continue with this examination key.');
+      }
+      // Prevent repeated attempts: check if this applicant already has a queued or submitted result
+      try {
+        const results = await OfflineStore.getResults();
+        const scheduleId = result.schedule?.id ? Number(result.schedule.id) : null;
+        const already = results.find((r) => {
+          const matchApplicant = String(r.applicant_code) === String(result.student?.studentId || result.student?.id);
+          const matchSchedule = scheduleId ? r.examination_schedule_id === scheduleId : false;
+          return matchApplicant && matchSchedule;
+        });
+        if (already) {
+          setError('Examination Already Completed\nYou have already taken this examination. Multiple attempts are not allowed.');
+          return;
+        }
+      } catch {
+        // ignore store errors — allow join and rely on server-side checks if uncertain
+      }
       setSelectedStudent(result.student);
       router.push('/(student)/confirmation');
     } catch (err) {

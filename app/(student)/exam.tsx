@@ -71,7 +71,7 @@ export default function ExamScreen() {
     void LobbyRepository.reportWifiDisconnect();
   }, []);
 
-  const { wifiLocked, unlockAfterReconnect } = useWifiExamGate({
+  const { wifiLocked, requiresPin, unlockAfterReconnect } = useWifiExamGate({
     enabled: securityEnabled && !offlineMode,
     onDisconnect: onWifiDisconnect,
   });
@@ -400,6 +400,7 @@ export default function ExamScreen() {
 
       <ExamWifiDisconnectOverlay
         visible={wifiLocked}
+        requiresPin={requiresPin}
         loading={reconnectLoading}
         error={reconnectError}
         onSubmitCode={handleReconnect}

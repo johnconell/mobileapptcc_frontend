@@ -3,19 +3,22 @@ import { FlatList, Modal, Pressable, Text, View, StyleSheet, Alert } from 'react
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
+import { useKeepAwake } from 'expo-keep-awake';
+import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { ConfirmationModal } from '@/components/ui/Dialog';
+import { Header } from '@/components/ui/Header';
+import { QrCodePanel } from '@/components/ui/QrCodePanel';
 import {
-  Button,
-  Card,
-  ConfirmationModal,
-  Header,
-  QrCodePanel,
   Skeleton,
   SkeletonCard,
   SkeletonList,
   SkeletonText,
-  StatusChip,
-  StatisticCard,
-} from '@/components/ui';
+} from '@/components/ui/Skeleton';
+import { StatusChip } from '@/components/ui/StatusChip';
+import { StatisticCard } from '@/components/ui/StatisticCard';
+import { Menu } from 'lucide-react-native';
+import { useProctorDrawer } from './ProctorDrawer';
 import { LobbyStudentCard } from '@/features/proctor/LobbyStudentCard';
 import { useLobby } from '@/hooks/useRepositories';
 import { LobbyRepository } from '@/repositories';
@@ -50,6 +53,7 @@ function formatRemaining(seconds: number | null | undefined) {
 }
 
 export default function ProctorLobbyScreen() {
+  useKeepAwake();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { sessionId, roomId, examSessionId } = useLocalSearchParams<{
@@ -81,6 +85,7 @@ export default function ProctorLobbyScreen() {
   const [reconnectExpiresAt, setReconnectExpiresAt] = useState<string | null>(null);
   const [peerHost, setPeerHost] = useState<string | null>(null);
   const [hosting, setHosting] = useState(PeerExamServer.info());
+  const [serverLastHeartbeat, setServerLastHeartbeat] = useState<number>(Date.now());
 
   const lobbyQuery = useLobby(
     ready && !openError ? sessionId : undefined,
@@ -152,15 +157,32 @@ export default function ProctorLobbyScreen() {
     };
   }, [sessionId, roomId, examSessionId, setSnapshot, queryClient]);
 
-  // Peer mode: push updates instantly when a student joins / answers / violates.
+  // Peer mode: push updates to UI, but throttled to prevent JS thread lockup during high-traffic heartbeats.
   useEffect(() => {
+    let lastRefresh = 0;
     return PeerExamServer.subscribe(() => {
+      const now = Date.now();
       setPeerHost(PeerExamServer.info().host);
-      void queryClient.invalidateQueries({
-        queryKey: QUERY_KEYS.lobby(sessionId, roomId),
-      });
+      setServerLastHeartbeat(now);
+
+      // Only trigger a full UI query invalidation at most once every 3 seconds.
+      if (now - lastRefresh > 3000) {
+        lastRefresh = now;
+        void queryClient.invalidateQueries({
+          queryKey: QUERY_KEYS.lobby(sessionId, roomId),
+        });
+      }
     });
   }, [queryClient, sessionId, roomId]);
+
+  // Periodically refresh the LAN IP address in case Wi‑Fi toggled or DHCP changed.
+  useEffect(() => {
+    if (!peerHost) return;
+    const id = setInterval(() => {
+      void PeerExamServer.refreshHostIp();
+    }, 10000);
+    return () => clearInterval(id);
+  }, [peerHost]);
 
   useEffect(() => {
     if (lobbyQuery.data) {
@@ -358,14 +380,21 @@ export default function ProctorLobbyScreen() {
     }
   };
 
+  const { toggleDrawer } = useProctorDrawer();
+
   return (
     <View style={styles.screen}>
       <Header
         title="Examination Lobby"
         subtitle={
-          lobby.session.roomName
+          lobby.session?.roomName
             ? `${lobby.session.roomName} · ${lobby.session.batchNumber}`
-            : lobby.session.batchNumber
+            : lobby.session?.batchNumber
+        }
+        left={
+            <Pressable onPress={toggleDrawer} style={styles.menuBtn}>
+                <Menu size={24} color={colors.ink} />
+            </Pressable>
         }
         onBack={goBack}
       />
@@ -379,17 +408,17 @@ export default function ProctorLobbyScreen() {
             <Card>
               <View style={styles.examHead}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.examName}>{lobby.schedule.name}</Text>
-                  <Text style={styles.line}>School Year: {lobby.schedule.schoolYear}</Text>
-                  <Text style={styles.line}>Date: {lobby.schedule.examinationDate}</Text>
-                  <Text style={styles.line}>Time: {lobby.session.timeLabel}</Text>
-                  <Text style={styles.line}>
-                    Room: {lobby.session.roomName || lobby.session.venue}
+                  <Text style={styles.examName}>{lobby.schedule?.name}</Text>
+                  <Text style={styles.infoLine}>School Year: {lobby.schedule?.schoolYear}</Text>
+                  <Text style={styles.infoLine}>Date: {lobby.schedule?.examinationDate}</Text>
+                  <Text style={styles.infoLine}>Time: {lobby.session?.timeLabel}</Text>
+                  <Text style={styles.infoLine}>
+                    Room: {lobby.session?.roomName || lobby.session?.venue}
                   </Text>
                   {lobby.proctor_name ? (
                     <Text style={styles.line}>Proctored by: {lobby.proctor_name}</Text>
                   ) : null}
-                  <Text style={styles.line}>Batch: {lobby.session.batchNumber}</Text>
+                  <Text style={styles.line}>Batch: {lobby.session?.batchNumber}</Text>
                   <Text style={styles.line}>
                     Total Registered Students: {lobby.registeredCount}
                   </Text>
@@ -401,11 +430,30 @@ export default function ProctorLobbyScreen() {
             <Card delay={40}>
               {peerHost ? (
                 <View style={styles.peerBanner}>
-                  <Text style={styles.peerTitle}>Hosting on this phone</Text>
-                  <Text style={styles.peerBody}>
-                    Students join over Wi‑Fi at {peerHost}. Keep this screen open —
-                    Laravel does not need to be running.
-                  </Text>
+                  <View style={styles.peerTitleRow}>
+                    <Text style={styles.peerTitle}>OFFLINE SERVER: RUNNING</Text>
+                    <View style={styles.liveIndicator}>
+                      <View style={[styles.liveDot, { backgroundColor: colors.success }]} />
+                      <Text style={styles.liveText}>LAN SERVER ONLINE</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.checklist}>
+                    <Text style={styles.checkItem}>✓ Exam modules downloaded</Text>
+                    <Text style={styles.checkItem}>✓ Questions & Choices ready</Text>
+                    <Text style={styles.checkItem}>✓ Student list available</Text>
+                    <Text style={styles.checkItem}>✓ Local API active on port {hosting.port}</Text>
+                  </View>
+
+                  <View style={styles.peerNetworkRow}>
+                    <Text style={styles.peerNetwork}>
+                      IP: {peerHost} · Network: {lobby.wifiSsid || 'Local Wi‑Fi'}
+                    </Text>
+                    <View style={styles.liveIndicator}>
+                      <View style={[styles.liveDot, { backgroundColor: colors.success }]} />
+                      <Text style={styles.liveText}>OFFLINE MODE ACTIVE</Text>
+                    </View>
+                  </View>
                 </View>
               ) : null}
               <QrCodePanel
@@ -414,7 +462,7 @@ export default function ProctorLobbyScreen() {
                   lobby.status === 'in_progress'
                     ? 'Examination in progress. New QR scans are blocked.'
                     : peerHost
-                      ? `Students scan this QR to reach THIS phone (${peerHost}). Same Wi‑Fi required — no Laravel.`
+                      ? `Students scan this QR to reach THIS phone (${peerHost})${lobby.wifiSsid ? ` on ${lobby.wifiSsid}` : ''}. Same Wi‑Fi required.`
                       : `Room-specific QR for ${lobby.roomName || lobby.session.roomName || lobby.session.venue}. Other rooms have different codes.`
                 }
               />
@@ -745,22 +793,66 @@ export default function ProctorLobbyScreen() {
         onCancel={() => setStartOpen(false)}
         onConfirm={async () => {
           if (!sessionId) return;
-          setBusy(true);
+          // Validate required data and LAN connectivity before starting the exam.
           try {
-            const snapshot = await LobbyRepository.startExamination(
-              sessionId,
-              roomId,
-            );
-            setSnapshot(snapshot);
-            await refresh();
-            setStartOpen(false);
-          } catch (error) {
-            Alert.alert(
-              'Unable to start',
-              error instanceof Error ? error.message : 'Please try again.',
-            );
-          } finally {
-            setBusy(false);
+            const { OfflineStore } = await import('@/services/offlineStore');
+            const pack = await OfflineStore.getPack();
+            const missing: string[] = [];
+            if (!pack) {
+              missing.push('Offline Exam Pack');
+            } else {
+              const hasQuestions = (pack.question_banks ?? []).some((b) => (b.subjects ?? []).some((s) => (s.questions ?? []).length > 0));
+              if (!hasQuestions) missing.push('Question Bank');
+
+              // Only block on critical missing data. Examination settings can use defaults.
+              const sid = lobby?.session?.scheduleId ?? null;
+              let scheduleExists = false;
+              if (sid && String(sid).startsWith('date-')) {
+                const d = String(sid).substring(5, 15);
+                const t = String(sid).substring(16).replace(/-/g, ' ');
+                scheduleExists = (pack.schedules ?? []).some((s) =>
+                  (s.exam_date || '') === d && (s.title || 'Entrance Examination') === t
+                );
+              } else if (sid) {
+                const sidClean = String(sid).replace(/^offline-/, '');
+                scheduleExists = (pack.schedules ?? []).some((s) => String(s.id) === sidClean);
+              }
+
+              if (!scheduleExists && sid) missing.push('Schedule');
+            }
+            if (missing.length) {
+              Alert.alert(
+                'System Update Required',
+                `The following items are outdated or missing:\n\n• ${missing.join('\n• ')}\n\nPlease synchronize before starting the examination.`,
+              );
+              return;
+            }
+
+            // Wi‑Fi / LAN validation
+            // If already hosting locally (peerHost is active), we don't need to reach the central server.
+            const { assertCampusWifiForJoin } = await import('@/services/campusWifiGate');
+            const wifi = await assertCampusWifiForJoin({ requireServer: !peerHost });
+            if (!wifi.ok) {
+              Alert.alert(
+                'Unable to start',
+                wifi.message ?? 'Please connect to the examination Wi‑Fi and try again.',
+              );
+              return;
+            }
+
+            setBusy(true);
+            try {
+              const snapshot = await LobbyRepository.startExamination(sessionId, roomId);
+              setSnapshot(snapshot);
+              await refresh();
+              setStartOpen(false);
+            } catch (error) {
+              Alert.alert('Unable to start', error instanceof Error ? error.message : 'Please try again.');
+            } finally {
+              setBusy(false);
+            }
+          } catch (err) {
+            Alert.alert('Unable to start', err instanceof Error ? err.message : 'Please try again.');
           }
         }}
       />
@@ -917,6 +1009,43 @@ export default function ProctorLobbyScreen() {
                     }}
                   />
                 ) : null}
+                  {(selected.status === 'waiting' || selected.status === 'connected' || selected.status === 'disconnected') ? (
+                    <Button
+                      title="Remove from Lobby"
+                      variant="danger"
+                      fullWidth
+                      loading={busy}
+                      onPress={async () => {
+                        Alert.alert(
+                          'Remove student?',
+                          'This removes the student from the lobby so they must re-scan or re-register to rejoin.',
+                          [
+                            { text: 'Cancel', style: 'cancel' },
+                            {
+                              text: 'Remove',
+                              style: 'destructive',
+                              onPress: async () => {
+                                setBusy(true);
+                                try {
+                                  await LobbyRepository.removeStudent(selected.id);
+                                  await refresh();
+                                  setSelected(null);
+                                  setReconnectCode(null);
+                                } catch (error) {
+                                  Alert.alert(
+                                    'Unable to remove',
+                                    error instanceof Error ? error.message : 'Please try again.',
+                                  );
+                                } finally {
+                                  setBusy(false);
+                                }
+                              },
+                            },
+                          ],
+                        );
+                      }}
+                    />
+                  ) : null}
                 {selected.status === 'warning' ||
                 selected.status === 'taking_exam' ||
                 selected.status === 'disconnected' ? (
@@ -971,6 +1100,7 @@ const styles = StyleSheet.create({
   examHead: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
   examName: { fontSize: 18, fontWeight: '700', color: colors.ink, marginBottom: 8 },
   line: { fontSize: 13, color: colors.inkSecondary, marginBottom: 4, fontWeight: '500' },
+  infoLine: { fontSize: 14, color: colors.ink, marginBottom: 4, fontWeight: '800' },
   codeBlock: {
     marginTop: 16,
     alignItems: 'center',
@@ -1000,7 +1130,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   peerBanner: {
-    gap: 4,
+    gap: 6,
     marginBottom: 12,
     padding: 12,
     borderRadius: 12,
@@ -1008,8 +1138,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.success,
   },
+  peerTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   peerTitle: { fontSize: 14, fontWeight: '800', color: colors.success },
   peerBody: { fontSize: 12, lineHeight: 18, color: colors.inkSecondary, fontWeight: '500' },
+  peerNetworkRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
+  peerNetwork: { fontSize: 11, fontWeight: '700', color: colors.success, textTransform: 'uppercase' },
+  checklist: { paddingVertical: 4, gap: 2 },
+  checkItem: { fontSize: 11, color: colors.success, fontWeight: '600' },
+  liveIndicator: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  liveDot: { width: 6, height: 6, borderRadius: 3 },
+  liveText: { fontSize: 9, fontWeight: '900', color: colors.success },
   monitorTitle: {
     fontSize: 15,
     fontWeight: '800',
@@ -1152,4 +1290,14 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   detailActions: { gap: 10, marginTop: 8 },
+  menuBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
 });

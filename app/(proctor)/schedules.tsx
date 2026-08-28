@@ -1,16 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { FlatList, Text, View, StyleSheet, Alert } from 'react-native';
+import { FlatList, Text, View, StyleSheet, Alert, Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
+import { Header } from '@/components/ui/Header';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Button } from '@/components/ui/Button';
 import {
-  Header,
-  EmptyState,
-  Button,
   Skeleton,
   SkeletonCard,
   SkeletonList,
   SkeletonText,
-} from '@/components/ui';
+} from '@/components/ui/Skeleton';
+import { Menu } from 'lucide-react-native';
+import { useProctorDrawer } from './ProctorDrawer';
 import { ScheduleCard } from '@/features/proctor/ScheduleCard';
 import { useSchedules } from '@/hooks/useRepositories';
 import { AuthRepository } from '@/repositories';
@@ -110,6 +112,21 @@ export default function SchedulesScreen() {
 
   const loadingSchedules = !profile || (schedulesQuery.isLoading && !schedulesQuery.data);
 
+  const confirmLogout = () => {
+    Alert.alert('Are you sure you want to log out?', undefined, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Yes, Logout',
+        style: 'destructive',
+        onPress: async () => {
+          await AuthRepository.logout();
+          reset();
+            router.replace('/');
+        },
+      },
+    ]);
+  };
+
   if (loadingSchedules) {
     return (
       <View style={styles.screen}>
@@ -126,6 +143,8 @@ export default function SchedulesScreen() {
     );
   }
 
+  const { toggleDrawer } = useProctorDrawer();
+
   return (
     <View style={styles.screen}>
       <Header
@@ -134,6 +153,19 @@ export default function SchedulesScreen() {
           profile.offlineSession
             ? `${profile.displayName} · Offline mode`
             : profile.displayName
+        }
+        left={
+          <Pressable onPress={toggleDrawer} style={styles.menuBtn}>
+             <Menu size={24} color={colors.ink} />
+          </Pressable>
+        }
+        right={
+          <Button
+            title="Logout"
+            variant="ghost"
+            size="sm"
+            onPress={confirmLogout}
+          />
         }
         onBack={async () => {
           await AuthRepository.logout();
@@ -251,4 +283,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   progressLabel: { fontSize: 12, fontWeight: '700', color: colors.inkSecondary },
+  menuBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
 });
