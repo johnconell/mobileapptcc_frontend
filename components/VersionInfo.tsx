@@ -54,7 +54,7 @@ export function VersionInfo() {
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Update Group</Text>
-            <Text style={styles.value} numberOfLines={1} ellipsizeMode="middle">{Updates.updateGroup || 'N/A'}</Text>
+            <Text style={styles.value} numberOfLines={1} ellipsizeMode="middle">{(Updates as any).updateGroup || 'N/A'}</Text>
           </View>
         </>
       ) : null}

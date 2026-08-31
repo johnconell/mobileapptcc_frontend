@@ -668,8 +668,30 @@ export const OfflineExamRepository = {
       );
     }
 
+    // FIX 2 & FIX 3: Filter and auto-repair any invalid schedule IDs before payload creation
+    const pack = await OfflineStore.getPack();
+    const validPending = pending.map((r) => {
+      let schedId = Number(r.examination_schedule_id);
+      if (!Number.isInteger(schedId) || schedId <= 0) {
+        if (pack) {
+          const { resolveNumericScheduleId } = require('@/services/peerExamServer');
+          schedId = resolveNumericScheduleId(r.examination_schedule_id, pack);
+        }
+      }
+      return {
+        ...r,
+        examination_schedule_id: schedId,
+      };
+    }).filter((r) => Number.isInteger(r.examination_schedule_id) && r.examination_schedule_id > 0);
+
+    if (!validPending.length) {
+      throw new Error('Sync Failed: Local queued results have invalid schedule IDs. Run "Recover Unsynced Results" to repair them.');
+    }
+
+    console.log(`[SYNC AUDIT START] Sending ${validPending.length} queued result(s) to cloud server...`);
+
     const payload = {
-      results: pending.map((r) => ({
+      results: validPending.map((r) => ({
         lan_registration_id: 0,
         client_local_id: r.local_id,
         applicant_code: r.applicant_code,
@@ -684,44 +706,120 @@ export const OfflineExamRepository = {
       })),
     };
 
-    const json = await cloudFetch<{
-      success: boolean;
-      message?: string;
-      data?: {
-        accepted_ids?: number[];
-        accepted_client_ids?: string[];
-        accepted_keys?: string[];
-        created?: number;
-        updated?: number;
-      };
-    }>('/sync/offline-results', {
-      method: 'POST',
-      body: payload,
-      token: syncToken,
-    });
+    let json: any = null;
+    try {
+      json = await cloudFetch<{
+        success: boolean;
+        message?: string;
+        data?: {
+          accepted_ids?: number[];
+          accepted_client_ids?: string[];
+          accepted_keys?: string[];
+          created?: number;
+          updated?: number;
+        };
+      }>('/sync/offline-results', {
+        method: 'POST',
+        body: payload,
+        token: syncToken,
+      });
+    } catch (error) {
+      console.error('[SYNC AUDIT ERROR] Network request failed:', error);
+      throw error;
+    }
 
-    const acceptedClient = new Set(json.data?.accepted_client_ids ?? []);
-    const acceptedKeys = new Set(json.data?.accepted_keys ?? []);
-    const syncedIds = pending
+    const acceptedClient = new Set(json?.data?.accepted_client_ids ?? []);
+    const acceptedKeys = new Set(json?.data?.accepted_keys ?? []);
+    const syncedIds = validPending
       .filter((p) => {
         if (acceptedClient.has(p.local_id)) return true;
         return acceptedKeys.has(`${p.applicant_code}|${p.examination_schedule_id}`);
       })
       .map((p) => p.local_id);
 
-    // Never mark the whole batch synced — skipped rows (unknown applicant/schedule) must retry.
-    if (syncedIds.length > 0) {
-      await OfflineStore.markSynced(syncedIds);
+    // FIX 6: Never claim success if 0 items were accepted by server!
+    if (syncedIds.length === 0 || json?.success === false) {
+      const serverMsg = json?.message || 'Server rejected all records in batch.';
+      const rejectedList = (json as any)?.data?.rejected;
+      const rejDetails = Array.isArray(rejectedList) && rejectedList.length > 0
+        ? ` Rejection Reasons: ${rejectedList.map((r: any) => `${r.applicant_code}: ${r.reason}`).join('; ')}`
+        : '';
+
+      console.error(`[SYNC AUDIT FAILURE] 0 records accepted. Server Message: ${serverMsg}.${rejDetails}`);
+      throw new Error(`Sync Failed: No results were accepted by the server. (${serverMsg})${rejDetails}`);
     }
 
-    const skipped = pending.length - syncedIds.length;
+    await OfflineStore.markSynced(syncedIds);
+
+    const skipped = validPending.length - syncedIds.length;
+    const auditMsg = skipped > 0
+      ? `Partial Sync: ${syncedIds.length} result(s) saved to Admin; ${skipped} record(s) rejected by server.`
+      : `Sync Complete: All ${syncedIds.length} result(s) successfully saved to Admin server.`;
+
+    console.log(`[SYNC AUDIT COMPLETE] ${auditMsg}`);
+
     return {
       synced: syncedIds.length,
-      message:
-        json.message ||
-        (skipped > 0
-          ? `Synced ${syncedIds.length} result(s); ${skipped} left pending (applicant/schedule not found on server).`
-          : `Synced ${syncedIds.length} result(s) to the administrator.`),
+      message: auditMsg,
+    };
+  },
+
+  /**
+   * FIX 9: RECOVERY TOOL — Scans OfflineStore, repairs corrupt schedule IDs using offline pack,
+   * resets sync flags for unsynced records, and resends.
+   */
+  async recoverAndResendUnsynced(): Promise<{
+    scanned: number;
+    repaired: number;
+    synced: number;
+    message: string;
+  }> {
+    console.log('[RECOVERY TOOL] Scanning OfflineStore for unsynced or corrupt results...');
+    const all = await OfflineStore.getResults();
+    const pack = await OfflineStore.getPack();
+    const { resolveNumericScheduleId } = require('@/services/peerExamServer');
+
+    let repaired = 0;
+    const fixedRows = all.map((row) => {
+      let schedId = Number(row.examination_schedule_id);
+      if (!Number.isInteger(schedId) || schedId <= 0) {
+        schedId = resolveNumericScheduleId(row.examination_schedule_id, pack);
+        if (schedId <= 0 && pack?.registrations && pack.applicants) {
+          const app = pack.applicants.find((a) => a.applicant_code === row.applicant_code);
+          if (app) {
+            const reg = pack.registrations.find((r) => Number(r.applicant_id) === Number(app.id));
+            if (reg && Number(reg.examination_schedule_id) > 0) {
+              schedId = Number(reg.examination_schedule_id);
+            }
+          }
+        }
+        if (schedId <= 0 && pack?.schedules?.length === 1 && Number(pack.schedules[0].id) > 0) {
+          schedId = Number(pack.schedules[0].id);
+        }
+
+        if (schedId > 0) {
+          repaired++;
+        }
+      }
+
+      return {
+        ...row,
+        examination_schedule_id: schedId > 0 ? schedId : row.examination_schedule_id,
+        synced: false, // Reset synced flag to force re-evaluation by sync worker
+      };
+    });
+
+    if (repaired > 0 || all.length > 0) {
+      await OfflineStore.saveResults(fixedRows);
+      console.log(`[RECOVERY TOOL] Repaired ${repaired} record(s) out of ${all.length} total record(s).`);
+    }
+
+    const syncRes = await this.syncQueuedToCloud();
+    return {
+      scanned: all.length,
+      repaired,
+      synced: syncRes.synced,
+      message: `Recovery Complete: ${repaired} record(s) repaired. ${syncRes.message}`,
     };
   },
 };

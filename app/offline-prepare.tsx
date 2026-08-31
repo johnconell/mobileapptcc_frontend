@@ -71,6 +71,22 @@ export default function OfflinePrepareScreen() {
     }
   };
 
+  const recover = async () => {
+    setBusy(true);
+    try {
+      const res = await OfflineExamRepository.recoverAndResendUnsynced();
+      await refresh();
+      Alert.alert('Recovery Result', res.message);
+    } catch (error) {
+      Alert.alert(
+        'Recovery Failed',
+        error instanceof Error ? error.message : 'Could not recover unsynced results.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <View style={styles.screen}>
       <Header
@@ -137,6 +153,13 @@ export default function OfflinePrepareScreen() {
           loading={busy}
           disabled={pending === 0}
           onPress={() => void sync()}
+        />
+        <Button
+          title="Recover Unsynced Results"
+          variant="ghost"
+          fullWidth
+          loading={busy}
+          onPress={() => void recover()}
         />
         <Button
           title="Continue to proctor login"

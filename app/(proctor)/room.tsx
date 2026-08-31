@@ -201,11 +201,13 @@ export default function RoomDetailScreen() {
         }
 
         // Validate Wi‑Fi / LAN server before changing any lobby state.
-        // For Proctors, if they have an offline pack, we allow opening the lobby
-        // even if the central server is unreachable (it will switch to local peer mode).
+        // Explicitly set isProctor: true so student peer targets are NEVER pinged for Proctor room actions.
         const { OfflineStore } = await import('@/services/offlineStore');
+        const { PeerExamClient } = await import('@/services/peerExamClient');
+        await PeerExamClient.clear(); // Clear any leftover student peer target on Proctor action
+
         const hasPack = await OfflineStore.hasPack();
-        const wifiCheck = await assertCampusWifiForJoin({ requireServer: !hasPack });
+        const wifiCheck = await assertCampusWifiForJoin({ requireServer: !hasPack, isProctor: true });
 
         if (!wifiCheck.ok) {
           // Present a clear, actionable message and DO NOT change room state.

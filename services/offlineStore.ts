@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
 import { Platform } from 'react-native';
 import { gcm } from '@noble/ciphers/aes.js';
@@ -460,10 +460,32 @@ export const OfflineStore = {
   },
 
   async saveResults(rows: OfflineQueuedResult[]): Promise<void> {
-    await writeJson(RESULTS_FILE, WEB_RESULTS_KEY, rows);
+    // FIX 2 & FIX 3: Filter out any corrupted records before serializing to disk
+    const validRows = rows.filter((r) => {
+      const validSched = Number.isInteger(Number(r.examination_schedule_id)) && Number(r.examination_schedule_id) > 0;
+      const validCode = Boolean(r.applicant_code && typeof r.applicant_code === 'string' && r.applicant_code.trim());
+      if (!validSched || !validCode) {
+        console.error('[OfflineStore] Discarding corrupted row from saveResults:', r);
+        return false;
+      }
+      return true;
+    });
+    await writeJson(RESULTS_FILE, WEB_RESULTS_KEY, validRows);
   },
 
   async queueResult(row: OfflineQueuedResult): Promise<void> {
+    // FIX 2 & FIX 3: Hard integrity validation before queueing
+    if (!row || !Number.isInteger(Number(row.examination_schedule_id)) || Number(row.examination_schedule_id) <= 0) {
+      const err = `[OfflineStore Integrity Failure] Refused to queue result with invalid examination_schedule_id: ${row?.examination_schedule_id}`;
+      console.error(err);
+      throw new Error(err);
+    }
+    if (!row.applicant_code || typeof row.applicant_code !== 'string' || !row.applicant_code.trim()) {
+      const err = `[OfflineStore Integrity Failure] Refused to queue result with missing applicant_code`;
+      console.error(err);
+      throw new Error(err);
+    }
+
     const rows = await this.getResults();
     const next = rows.filter(
       (r) =>

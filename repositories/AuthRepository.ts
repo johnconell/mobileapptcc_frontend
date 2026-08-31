@@ -1,6 +1,7 @@
 import { STORAGE_KEYS } from '@/constants';
 import { ApiError, apiRequest, getAuthApiBaseUrl } from '@/services/api';
 import { OfflineStore } from '@/services/offlineStore';
+import { PeerExamClient } from '@/services/peerExamClient';
 import { ProctorAuthCache } from '@/services/proctorAuthCache';
 import { appStorage } from '@/services/storage';
 import type { AuthResult, ProctorProfile } from '@/types';
@@ -31,6 +32,7 @@ async function persistSession(profile: ProctorProfile, token: string): Promise<A
   await appStorage.deleteItem(STORAGE_KEYS.participationToken);
   await appStorage.deleteItem(STORAGE_KEYS.examinationCode);
   await appStorage.deleteItem(STORAGE_KEYS.studentProgress);
+  await PeerExamClient.clear(); // Role transition: clear any student peer target on Proctor login
 
   return { success: true, profile: stored, token };
 }
@@ -178,6 +180,7 @@ export const AuthRepository = {
     } finally {
       await appStorage.deleteItem(STORAGE_KEYS.proctorSession);
       await appStorage.deleteItem(STORAGE_KEYS.proctorToken);
+      await PeerExamClient.clear();
     }
   },
 };

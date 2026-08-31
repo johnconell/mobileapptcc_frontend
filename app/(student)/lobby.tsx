@@ -170,6 +170,7 @@ function useLobbyController() {
 }
 
 export default function StudentLobbyScreen() {
+  const router = useRouter();
   const navigation = useNavigation();
   const controller = useLobbyController();
   const [hasError, setHasError] = useState(false);

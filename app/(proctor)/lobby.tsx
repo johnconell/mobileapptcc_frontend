@@ -579,9 +579,9 @@ export default function ProctorLobbyScreen() {
                   loading={busy}
                   disabled={busy || syncPending === 0}
                   onPress={async () => {
-                    const examSessionId = lobby.session?.examSessionId;
+                    const examSessionId = lobby.session?.examSessionId || lobby.session?.id;
                     if (!examSessionId) {
-                      Alert.alert('Unable to sync', 'Examination session not found.');
+                      Alert.alert('Unable to sync', 'No local or remote session identifier found.');
                       return;
                     }
                     setBusy(true);

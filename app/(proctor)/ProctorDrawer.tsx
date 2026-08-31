@@ -55,7 +55,7 @@ export default function ProctorDrawerProvider({ children }: { children: React.Re
 
   const navigate = (path: string) => {
     closeDrawer();
-    router.push(path);
+    router.push(path as any);
   };
 
   const doLogout = async () => {

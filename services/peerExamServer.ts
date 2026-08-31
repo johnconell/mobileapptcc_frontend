@@ -91,6 +91,8 @@ type PeerSessionState = {
   tokenMap: Record<string, number>; // Maps token -> registrationId for fast lookup
   violations: PeerViolation[];
   violationSeq: number;
+  wifiSsid?: string | null;
+  hostIp?: string | null;
 };
 
 type JsonResponse = {
@@ -710,6 +712,26 @@ function registerRoutes(mod: HttpServerModule) {
     const pack = await OfflineStore.getPack();
     if (!pack) return fail(500, 'Proctor phone has no exam pack.');
 
+    // FIX 2 & FIX 3: Verify schedule ID and applicant code integrity before processing
+    let numericScheduleId = Number(session.scheduleId);
+    if (!Number.isInteger(numericScheduleId) || numericScheduleId <= 0) {
+      // Re-resolve from pack
+      numericScheduleId = resolveNumericScheduleId(session.scheduleId, pack);
+      if (numericScheduleId > 0) {
+        session.scheduleId = numericScheduleId;
+      }
+    }
+
+    if (!Number.isInteger(numericScheduleId) || numericScheduleId <= 0) {
+      console.error(`[CRITICAL DATA INTEGRITY ERROR] Cannot process submission: session.scheduleId is invalid (${session.scheduleId}).`);
+      return fail(500, 'System Error: Invalid examination schedule identifier on proctor server.');
+    }
+
+    if (!student.applicantCode || student.applicantCode.trim() === '') {
+      console.error('[CRITICAL DATA INTEGRITY ERROR] Cannot process submission: missing student applicant code.');
+      return fail(422, 'Validation Error: Student code is required for submission.');
+    }
+
     const graded = grade(pack, student.answers);
     const now = new Date().toISOString();
     student.submittedAt = now;
@@ -718,16 +740,24 @@ function registerRoutes(mod: HttpServerModule) {
     if (student.status !== 'terminated') student.status = 'finished';
     if (!student.terminationReason) student.terminationReason = 'submitted';
 
-    await OfflineStore.queueResult({
-      local_id: `${student.applicantCode}-${session.scheduleId}-${Date.now()}`,
-      applicant_code: student.applicantCode,
-      examination_schedule_id: session.scheduleId,
+    const queuedRow = {
+      local_id: `${student.applicantCode.trim()}-${numericScheduleId}-${Date.now()}`,
+      applicant_code: student.applicantCode.trim(),
+      examination_schedule_id: numericScheduleId,
       applicant_name: student.fullName,
       attendance_status: 'present',
       ...graded,
       submitted_at: now,
       synced: false,
-    });
+    };
+
+    // FIX 2 & FIX 3: Hard integrity validation before queueing
+    if (!Number.isInteger(queuedRow.examination_schedule_id) || queuedRow.examination_schedule_id <= 0) {
+      console.error('[CRITICAL INTEGRITY ERROR] Refusing to queue result with non-positive schedule ID:', queuedRow);
+      return fail(500, 'Critical Integrity Failure: Refused to store result with invalid schedule ID.');
+    }
+
+    await OfflineStore.queueResult(queuedRow);
 
     invalidateSnapshot();
     await persist();
@@ -856,6 +886,67 @@ async function resolveHostIp(): Promise<string | null> {
   }
 }
 
+/**
+ * FIX 1 & FIX 3: Resolve real positive integer schedule ID from pack or string keys.
+ * Never allows NaN or scheduleId <= 0 to pass into peer sessions or queued results.
+ */
+export function resolveNumericScheduleId(
+  rawScheduleId: string | number,
+  pack: OfflinePack | null,
+): number {
+  if (!rawScheduleId) return 0;
+
+  const str = String(rawScheduleId).trim();
+  const stripped = str.replace(/^offline-/, '');
+
+  // 1. Direct positive integer (e.g. 12 or "12")
+  const directNum = Number(stripped);
+  if (Number.isInteger(directNum) && directNum > 0) {
+    if (!pack?.schedules?.length) return directNum;
+    const exists = pack.schedules.find((s) => Number(s.id) === directNum);
+    if (exists) return directNum;
+  }
+
+  if (!pack || !pack.schedules || !pack.schedules.length) {
+    return Number.isInteger(directNum) && directNum > 0 ? directNum : 0;
+  }
+
+  // 2. Composite date key: "date-YYYY-MM-DD-title-slug"
+  if (str.startsWith('date-')) {
+    const date = str.substring(5, 15); // "2026-08-25"
+    const titleSlug = str.substring(16).replace(/-/g, ' ').toLowerCase();
+
+    const match = pack.schedules.find((s) => {
+      const sDate = (s.exam_date || '').trim();
+      const sTitle = (s.title || 'Entrance Examination').trim().toLowerCase();
+      return sDate === date && (sTitle === titleSlug || titleSlug.includes(sTitle) || sTitle.includes(titleSlug));
+    });
+
+    if (match && Number.isInteger(Number(match.id)) && Number(match.id) > 0) {
+      return Number(match.id);
+    }
+
+    // Match by date alone if single schedule exists for that date
+    const dateMatches = pack.schedules.filter((s) => (s.exam_date || '').trim() === date);
+    if (dateMatches.length === 1 && Number.isInteger(Number(dateMatches[0].id)) && Number(dateMatches[0].id) > 0) {
+      return Number(dateMatches[0].id);
+    }
+  }
+
+  // 3. Fallback: match by schedule.id string in pack
+  const foundByStringId = pack.schedules.find((s) => String(s.id) === stripped);
+  if (foundByStringId && Number.isInteger(Number(foundByStringId.id)) && Number(foundByStringId.id) > 0) {
+    return Number(foundByStringId.id);
+  }
+
+  // 4. Single-schedule pack fallback
+  if (pack.schedules.length === 1 && Number.isInteger(Number(pack.schedules[0].id)) && Number(pack.schedules[0].id) > 0) {
+    return Number(pack.schedules[0].id);
+  }
+
+  return 0;
+}
+
 export const PeerExamServer = {
   isSupported: isPeerHostingSupported,
 
@@ -879,9 +970,13 @@ export const PeerExamServer = {
   async restore(): Promise<boolean> {
     if (!session) {
       const saved = await OfflineStore.getPeerSession<PeerSessionState>();
-      if (!saved || saved.status === 'ended') return false;
+      if (!saved) return false;
       session = saved;
     }
+
+    // Ended sessions are loaded into memory for viewing, but we don't
+    // restart the HTTP server for them.
+    if (session.status === 'ended') return true;
 
     // Encrypted state alone is not enough — restart HTTP so students can reconnect.
     const mod = loadHttpServer();
@@ -917,12 +1012,6 @@ export const PeerExamServer = {
       );
     }
 
-    const scheduleId = Number(String(input.scheduleId).replace(/^offline-/, ''));
-    const roomId =
-      input.roomId != null && String(input.roomId).trim() !== ''
-        ? Number(input.roomId)
-        : null;
-
     const pack: OfflinePack | null = await OfflineStore.getPack();
     if (!pack) {
       throw new Error(
@@ -930,9 +1019,22 @@ export const PeerExamServer = {
       );
     }
 
+    // FIX 1: Eliminate NaN Schedule IDs. Resolve real numeric ID from pack.
+    const scheduleId = resolveNumericScheduleId(input.scheduleId, pack);
+    if (!Number.isInteger(scheduleId) || scheduleId <= 0) {
+      throw new Error(
+        `CRITICAL INTEGRITY FAILURE: Unable to resolve a valid numeric examination schedule ID for "${input.scheduleId}". Examination cannot be started.`,
+      );
+    }
+
+    const roomId =
+      input.roomId != null && String(input.roomId).trim() !== ''
+        ? Number(input.roomId)
+        : null;
+
     hostIp = await resolveHostIp();
     const netState = await Network.getNetworkStateAsync();
-    const wifiSsid = netState.type === Network.NetworkStateType.WIFI ? netState.ssid : null;
+    const wifiSsid = netState.type === Network.NetworkStateType.WIFI ? (netState as any).ssid : null;
 
     if (!hostIp) {
       throw new Error(

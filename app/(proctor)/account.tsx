@@ -24,7 +24,7 @@ export default function AccountScreen() {
       const session = await AuthRepository.getSession();
       setProfile(session);
       setName(session?.displayName ?? '');
-      setEmail(session?.username ?? session?.email ?? '');
+      setEmail(session?.username ?? (session as any)?.email ?? '');
     })();
   }, []);
 

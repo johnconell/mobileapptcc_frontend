@@ -195,7 +195,7 @@ export default function HomeScreen() {
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(100).springify()}>
-          <Card style={[styles.packCard, pack?.ready && styles.packCardReady]}>
+          <Card style={StyleSheet.flatten([styles.packCard, pack?.ready ? styles.packCardReady : undefined])}>
             <Text style={styles.cardTitle}>Offline Preparation</Text>
             <Text style={styles.cardBody}>
               {pack?.ready
@@ -329,6 +329,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     ...shadows.soft,
   },
+  updateBtn: { marginLeft: 8, paddingHorizontal: 12 },
   proctorText: { fontSize: 12, fontWeight: '700', color: colors.primary },
   content: { flex: 1, paddingHorizontal: 20, gap: 20, justifyContent: 'center' },
   prepareSkeleton: {

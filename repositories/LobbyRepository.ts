@@ -126,7 +126,7 @@ export const LobbyRepository = {
 
       const body: Record<string, unknown> = {
         examination_schedule_id: Number(sessionId),
-        wifi_ssid: netState.type === 'WIFI' ? netState.ssid : null,
+        wifi_ssid: netState.type === 'WIFI' ? (netState as any).ssid : null,
         local_server_ip: hostIp && hostIp !== '0.0.0.0' ? hostIp : null,
       };
       if (questionBankId) body.question_bank_id = questionBankId;
@@ -185,21 +185,23 @@ export const LobbyRepository = {
     roomId?: string,
     examSessionId?: string,
   ): Promise<LobbySnapshot | null> {
-    // Hosting on this phone: restore encrypted session AND restart HTTP.
-    // Only reuse when the peer session matches the requested room/schedule.
+    // 1. LOCAL-FIRST: Always check the peer server cache first, especially for offline/ended.
+    // Restoration ensures memory is populated from the last encrypted session file.
     const restored = await PeerExamServer.restore();
     if (restored) {
       const hosted = await PeerExamServer.snapshot();
       if (hosted && peerMatchesRequest(hosted, sessionId, roomId)) {
+        if (__DEV__) console.debug('[LobbyRepository] Found matching local session', { status: hosted.status });
         return hosted;
       }
     }
 
+    // 2. OFFLINE GUARD: If we're strictly offline, we don't fallback to API.
     if (await OfflineStore.isOfflineMode()) {
-      // No live peer session yet — openLobby will start one.
       return null;
     }
 
+    // 3. CLOUD FALLBACK: If not found locally or matching failed, try the server.
     try {
       const qs = roomId
         ? `?examination_room_id=${encodeURIComponent(roomId)}`
@@ -973,6 +975,15 @@ export const LobbyRepository = {
     pending: number;
     configured: boolean;
   }> {
+    // For purely offline sessions, we check the local result outbox.
+    if (!examSessionId || String(examSessionId).startsWith('offline-')) {
+        const pending = await OfflineStore.pendingResults();
+        return {
+            pending: pending.length,
+            configured: true // Local sync is always "configured"
+        };
+    }
+
     const q = examSessionId != null ? `?exam_session_id=${examSessionId}` : '';
     const json = await apiRequest<{
       success: boolean;
@@ -989,6 +1000,13 @@ export const LobbyRepository = {
     failed: number;
     message: string;
   }> {
+    // Logic for purely offline results (Root Cause: Orphaned Offline Data)
+    if (!examSessionId || String(examSessionId).startsWith('offline-')) {
+        const { OfflineExamRepository } = await import('@/services/offlineExamRepository');
+        const res = await OfflineExamRepository.syncQueuedToCloud();
+        return { synced: res.synced, failed: 0, message: res.message };
+    }
+
     const json = await apiRequest<{
       success: boolean;
       message?: string;

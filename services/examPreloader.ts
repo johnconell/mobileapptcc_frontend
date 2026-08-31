@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
 import { STORAGE_KEYS } from '@/constants';
 import { appStorage } from '@/services/storage';

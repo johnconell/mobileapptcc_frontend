@@ -60,10 +60,11 @@ function isOfflinePackCode(code: string): boolean {
 }
 
 /**
- * Validate network AFTER a QR scan or examination-code submit:
+ * Validate network AFTER a QR scan or examination-code submit, or before Proctor room open:
  * 1) Must be on Wi‑Fi (not mobile data alone).
- * 2) Peer QR → ping the proctor phone on LAN.
- * 3) Live Hub codes → probe Laravel. Offline OFF-* codes skip the Hub probe.
+ * 2) Proctor actions: verify Wi-Fi is on; DO NOT check or ping student peer targets.
+ * 3) Student Peer QR → ping the proctor phone on LAN.
+ * 4) Live Hub codes → probe Laravel. Offline codes skip the Hub probe.
  */
 export async function assertCampusWifiForJoin(options?: {
   /** When verifying a typed code; OFF-* skips Hub probe. */
@@ -72,6 +73,8 @@ export async function assertCampusWifiForJoin(options?: {
   requireServer?: boolean;
   /** Raw scanned QR, so a peer QR is probed against the proctor phone. */
   scannedPayload?: string;
+  /** Set true for Proctor actions so student peer targets are NEVER pinged. */
+  isProctor?: boolean;
 }): Promise<CampusWifiGateResult> {
   const netState = await Network.getNetworkStateAsync();
   const wifiConnected = netState.type === Network.NetworkStateType.WIFI;
@@ -80,15 +83,29 @@ export async function assertCampusWifiForJoin(options?: {
     'You are connected to a different examination network. Please connect to the same Wi‑Fi network as the proctor and scan again.';
 
   if (!wifiConnected) {
+    const msg = options?.isProctor
+      ? 'This phone has no Wi‑Fi connection. Connect to the examination Wi‑Fi or turn on a mobile hotspot and try again.'
+      : mismatchMessage;
     return {
       ok: false,
       wifiConnected: false,
       serverReachable: null,
-      message: mismatchMessage,
+      message: msg,
     };
   }
 
-  // Peer mode: "matching the proctor" means reaching the proctor's phone, not Laravel.
+  // PROCTOR ROLE ISOLATION: A Proctor opening a room must NEVER ping a Student peer target!
+  if (options?.isProctor) {
+    if (__DEV__) console.log('[WIFI GATE] Proctor validation passed: Wi-Fi interface connected.');
+    return {
+      ok: true,
+      wifiConnected: true,
+      serverReachable: true,
+      message: null,
+    };
+  }
+
+  // Student Peer mode: "matching the proctor" means reaching the proctor's phone, not Laravel.
   const peerTarget =
     (options?.scannedPayload ? parsePeerQr(options.scannedPayload) : null) ??
     (await PeerExamClient.getTarget());
@@ -105,10 +122,9 @@ export async function assertCampusWifiForJoin(options?: {
     }
 
     // Ping succeeded! We are on the right network.
-    // SSID check is now secondary (informative only) to avoid blocking students
-    // on devices that cannot report SSID (Android 10+ needs location perms).
-    if (peerTarget.wifiSsid && netState.ssid && netState.ssid !== peerTarget.wifiSsid) {
-       if (__DEV__) console.warn(`[WIFI] SSID Mismatch: Expected ${peerTarget.wifiSsid}, got ${netState.ssid}. Allowing anyway because ping succeeded.`);
+    const currentSsid = (netState as any).ssid;
+    if (peerTarget.wifiSsid && currentSsid && currentSsid !== peerTarget.wifiSsid) {
+       if (__DEV__) console.warn(`[WIFI] SSID Mismatch: Expected ${peerTarget.wifiSsid}, got ${currentSsid}. Allowing anyway because ping succeeded.`);
     }
 
     return { ok: true, wifiConnected: true, serverReachable: true, message: null };
