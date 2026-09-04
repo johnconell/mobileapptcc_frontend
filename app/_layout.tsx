@@ -11,12 +11,17 @@ import { ensureExamPackCached } from '@/services/ensureExamPack';
 import { useSettingsStore } from '@/stores';
 import { colors } from '@/theme';
 
+import { startNetworkMonitoring } from '@/services/networkMonitor';
+
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
 export default function RootLayout() {
   const hydrate = useSettingsStore((s) => s.hydrate);
 
   useEffect(() => {
+    // Start automated network mode switching (detects Wi-Fi without internet dynamically)
+    const cleanupNetwork = startNetworkMonitoring();
+
     async function prepare() {
       await hydrateApiBaseUrl();
       await hydrate();
@@ -25,6 +30,10 @@ export default function RootLayout() {
       await SplashScreen.hideAsync();
     }
     void prepare();
+
+    return () => {
+      cleanupNetwork();
+    };
   }, [hydrate]);
 
   return (

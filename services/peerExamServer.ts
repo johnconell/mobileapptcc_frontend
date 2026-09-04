@@ -5,7 +5,7 @@ import {
   grade,
   OfflineExamRepository,
 } from '@/services/offlineExamRepository';
-import { OfflineStore, type OfflinePack } from '@/services/offlineStore';
+import { OfflineStore, computePackHash, type OfflinePack } from '@/services/offlineStore';
 import type {
   ExamTerminationReason,
   LobbySnapshot,
@@ -469,6 +469,18 @@ function registerRoutes(mod: HttpServerModule) {
     const passkey = String(body.passkey ?? '').trim().toUpperCase();
     if (!passkey) return fail(422, 'Enter your examination key.');
 
+    // FEATURE 2: Questionnaire / Question-Version Compatibility Check
+    const studentPackHash = String(body.student_pack_hash ?? '').trim();
+    const proctorPack = await OfflineStore.getPack();
+    const proctorPackHash = computePackHash(proctorPack);
+
+    if (studentPackHash && proctorPackHash !== 'no-pack' && studentPackHash !== proctorPackHash) {
+      return fail(
+        409,
+        'Your examination module is outdated or does not match the examination currently configured by the proctor. Please download the latest examination module before joining the lobby.',
+      );
+    }
+
     const validated = await OfflineExamRepository.validatePasskey(
       session.examCode,
       passkey,
@@ -498,6 +510,19 @@ function registerRoutes(mod: HttpServerModule) {
 
     const body = parseBody(request.body);
     const passkey = String(body.passkey ?? '').trim().toUpperCase();
+
+    // FEATURE 2: Authoritative LAN Questionnaire / Question-Version Compatibility Check
+    const studentPackHash = String(body.student_pack_hash ?? '').trim();
+    const proctorPack = await OfflineStore.getPack();
+    const proctorPackHash = computePackHash(proctorPack);
+
+    if (studentPackHash && proctorPackHash !== 'no-pack' && studentPackHash !== proctorPackHash) {
+      return fail(
+        409,
+        'Your examination module is outdated or does not match the examination currently configured by the proctor. Please download the latest examination module before joining the lobby.',
+      );
+    }
+
     const validated = await OfflineExamRepository.validatePasskey(
       session.examCode,
       passkey,

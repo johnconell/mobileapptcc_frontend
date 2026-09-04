@@ -4,7 +4,7 @@ import {
   extractExaminationCode,
   OfflineExamRepository,
 } from '@/services/offlineExamRepository';
-import { OfflineStore } from '@/services/offlineStore';
+import { OfflineStore, computePackHash } from '@/services/offlineStore';
 import { PeerExamClient } from '@/services/peerExamClient';
 import { parsePeerQr, PeerExamServer } from '@/services/peerExamServer';
 import { appStorage } from '@/services/storage';
@@ -492,6 +492,8 @@ export const LobbyRepository = {
     if (!code) throw new Error('Missing examination code. Scan QR again.');
 
     if (await PeerExamClient.isActive()) {
+      const studentPack = await OfflineStore.getPack();
+      const studentPackHash = computePackHash(studentPack);
       const response = await PeerExamClient.request<{
         classification?: 'valid' | 'wrong_schedule';
         message?: string;
@@ -499,7 +501,11 @@ export const LobbyRepository = {
         schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
       }>('/passkey', {
         method: 'POST',
-        body: { code, passkey: passkey.trim().toUpperCase() },
+        body: {
+          code,
+          passkey: passkey.trim().toUpperCase(),
+          student_pack_hash: studentPackHash,
+        },
       });
       if (response.classification === 'wrong_schedule') {
         return {
@@ -618,6 +624,8 @@ export const LobbyRepository = {
     if (!code) throw new Error('Missing examination code. Scan QR again.');
 
     if (await PeerExamClient.isActive()) {
+      const studentPack = await OfflineStore.getPack();
+      const studentPackHash = computePackHash(studentPack);
       const joined = await PeerExamClient.request<{
         registration_id: number;
         participation_token: string;
@@ -628,6 +636,7 @@ export const LobbyRepository = {
           code,
           passkey: passkey.trim().toUpperCase(),
           gmail: student.email || undefined,
+          student_pack_hash: studentPackHash,
         },
       });
 
