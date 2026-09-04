@@ -6,7 +6,9 @@ import { Header, Button, Card, Skeleton, SkeletonText } from '@/components/ui';
 import { CampusWifiBlockedCard } from '@/features/student/CampusWifiBlockedCard';
 import { useCampusWifiJoinGate } from '@/hooks/useCampusWifiJoinGate';
 import { LobbyRepository, ScheduleRepository } from '@/repositories';
-import { useStudentStore } from '@/stores';
+import { useStudentStore, useLobbyStore } from '@/stores';
+import { appStorage } from '@/services/storage';
+import { STORAGE_KEYS } from '@/constants';
 import { colors } from '@/theme';
 
 export default function ScanScreen() {
@@ -40,12 +42,25 @@ export default function ScanScreen() {
     }
 
     const resolved = await ScheduleRepository.resolveSessionFromQr(raw);
-    if (!resolved.valid || !resolved.session || !resolved.schedule) {
-      setError(resolved.message ?? 'Invalid QR Code.');
+    if (!resolved.valid || !resolved.session || !resolved.schedule || resolved.session.status === 'ended') {
+      setError(
+        resolved.message ||
+          (resolved.session?.status === 'ended'
+            ? 'This examination has already ended and is no longer available for applicants.'
+            : 'Invalid QR Code.'),
+      );
       setBusy(false);
       setScanning(true);
       return;
     }
+
+    // PROBLEM 2 FIX: Clear old student verification & participation tokens when scanning a new QR code
+    useStudentStore.getState().setVerifiedStudent(null);
+    useStudentStore.getState().setSelectedStudent(null);
+    useStudentStore.getState().setExamPasskey(null);
+    useLobbyStore.getState().setSnapshot(null);
+    await appStorage.deleteItem(STORAGE_KEYS.participationToken);
+    await appStorage.deleteItem(STORAGE_KEYS.studentProgress);
 
     setScannedSession(resolved.schedule.id, resolved.session.id);
     router.replace('/(student)/passkey');

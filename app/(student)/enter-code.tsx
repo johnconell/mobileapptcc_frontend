@@ -8,7 +8,9 @@ import { KeyRound } from 'lucide-react-native';
 import { Button, Card, Header, Input } from '@/components/ui';
 import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 import { LobbyRepository } from '@/repositories';
-import { useStudentStore } from '@/stores';
+import { useStudentStore, useLobbyStore } from '@/stores';
+import { appStorage } from '@/services/storage';
+import { STORAGE_KEYS } from '@/constants';
 import { colors } from '@/theme';
 
 const schema = z.object({
@@ -55,10 +57,24 @@ export default function EnterCodeScreen() {
     }
 
     const result = await LobbyRepository.verifyExaminationCode(values.code);
-    if (!result.valid || !result.session || !result.schedule) {
-      setError(result.message ?? 'Invalid examination code.');
+    if (!result.valid || !result.session || !result.schedule || result.session.status === 'ended') {
+      setError(
+        result.message ||
+          (result.session?.status === 'ended'
+            ? 'This examination has already ended and is no longer available for applicants.'
+            : 'Invalid examination code.'),
+      );
       return;
     }
+
+    // PROBLEM 2 FIX: Clear old student state when entering a new exam code
+    useStudentStore.getState().setVerifiedStudent(null);
+    useStudentStore.getState().setSelectedStudent(null);
+    useStudentStore.getState().setExamPasskey(null);
+    useLobbyStore.getState().setSnapshot(null);
+    await appStorage.deleteItem(STORAGE_KEYS.participationToken);
+    await appStorage.deleteItem(STORAGE_KEYS.studentProgress);
+
     setScannedSession(result.schedule.id, result.session.id);
     router.replace('/(student)/passkey');
   });

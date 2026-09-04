@@ -119,12 +119,22 @@ export default function ProctorLobbyScreen() {
       try {
         // Resume a peer session that survived an app kill, then load the lobby.
         await PeerExamServer.restore();
-        const snapshot = await LobbyRepository.fetchProctorLobby(
+        let snapshot = await LobbyRepository.fetchProctorLobby(
           sessionId,
           roomId,
           examSessionId,
         );
         if (cancelled) return;
+        if (!snapshot) {
+          const { OfflineStore } = await import('@/services/offlineStore');
+          if (await OfflineStore.hasPack()) {
+            try {
+              snapshot = await LobbyRepository.ensureLobby(sessionId, undefined, roomId);
+            } catch {
+              // ignore
+            }
+          }
+        }
         if (!snapshot) {
           setOpenError(
             'This room lobby is not available. Go back and open the lobby, or view results if the exam already ended.',

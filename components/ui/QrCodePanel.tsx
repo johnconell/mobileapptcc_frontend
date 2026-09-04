@@ -20,6 +20,8 @@ export function QrCodePanel({
         <QRCode
           value={value}
           size={size}
+          ecl="L"
+          quietZone={8}
           color={colors.ink}
           backgroundColor={colors.white}
         />

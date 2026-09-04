@@ -346,15 +346,13 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
  */
 export function peerQrPayload(state: PeerSessionState): string {
   return JSON.stringify({
-    v: 1,
     type: 'metcc_peer',
-    code: state.examCode,
-    examinationCode: state.examCode,
-    host: hostIp,
-    port: PEER_PORT,
-    schedule_id: state.scheduleId,
-    room_id: state.roomId,
-    wifi_ssid: state.wifiSsid,
+    c: state.examCode,
+    h: hostIp,
+    p: PEER_PORT,
+    s: state.scheduleId,
+    r: state.roomId,
+    w: state.wifiSsid,
   });
 }
 
@@ -374,18 +372,21 @@ export function parsePeerQr(raw: string): PeerQrTarget | null {
   try {
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
     if (parsed.type !== 'metcc_peer') return null;
-    const host = String(parsed.host ?? '').trim();
-    const code = String(parsed.examinationCode ?? parsed.code ?? '')
+    const host = String(parsed.h ?? parsed.host ?? '').trim();
+    const code = String(parsed.c ?? parsed.examinationCode ?? parsed.code ?? '')
       .trim()
       .toUpperCase();
     if (!host || !code) return null;
+    const scheduleId = parsed.s != null ? Number(parsed.s) : (parsed.schedule_id != null ? Number(parsed.schedule_id) : null);
+    const roomId = parsed.r != null ? Number(parsed.r) : (parsed.room_id != null ? Number(parsed.room_id) : null);
+    const wifiSsid = parsed.w ? String(parsed.w) : (parsed.wifi_ssid ? String(parsed.wifi_ssid) : null);
     return {
       host,
-      port: Number(parsed.port) || PEER_PORT,
+      port: Number(parsed.p ?? parsed.port) || PEER_PORT,
       code,
-      scheduleId: parsed.schedule_id != null ? Number(parsed.schedule_id) : null,
-      roomId: parsed.room_id != null ? Number(parsed.room_id) : null,
-      wifiSsid: parsed.wifi_ssid ? String(parsed.wifi_ssid) : null,
+      scheduleId,
+      roomId,
+      wifiSsid,
     };
   } catch {
     return null;
@@ -441,6 +442,9 @@ function registerRoutes(mod: HttpServerModule) {
 
   mod.route(p('/resolve'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    if (session.status === 'ended') {
+      return fail(409, 'This examination has already ended and is no longer available for applicants.');
+    }
     const body = parseBody(request.body);
     const code = String(body.code ?? '').trim().toUpperCase();
     if (code && code !== session.examCode) {
@@ -1073,17 +1077,10 @@ export const PeerExamServer = {
       session.roomId === roomId &&
       session.status !== 'ended';
 
-    // Peer host serves one room at a time. Require Close Lobby / End Examination
-    // before opening a different room so room status stays consistent.
-    if (
-      session &&
-      !reopening &&
-      session.status !== 'ended' &&
-      (session.scheduleId !== scheduleId || session.roomId !== roomId)
-    ) {
-      throw new Error(
-        'Close or end the current room lobby before opening another room.',
-      );
+    // FIX PROBLEM 2: Auto-reset old session when switching schedules/rooms so old QR codes and token maps are invalidated.
+    if (session && !reopening) {
+      console.log('[SERVER] Switching schedules/rooms. Resetting old server session state.');
+      await this.reset();
     }
 
     if (!reopening) {
