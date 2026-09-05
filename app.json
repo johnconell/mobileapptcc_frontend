@@ -4,7 +4,7 @@
     "slug": "mobileapptcc_frontend",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/tcc-logo.png",
     "scheme": "tcc-exam",
     "userInterfaceStyle": "light",
     "ios": {
@@ -14,9 +14,8 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#7A1F2B",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "foregroundImage": "./assets/tcc-logo.png",
+        "backgroundImage": "./assets/android-icon-background.png"
       },
       "package": "edu.tcc.entranceexam",
       "predictiveBackGestureEnabled": false,
