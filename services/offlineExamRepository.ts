@@ -86,19 +86,63 @@ async function cloudFetch<T>(
 }
 
 export function toChoiceRecord(
-  options: Record<string, string> | string[] | null | undefined,
+  options: any,
 ): Record<ChoiceKey, string> {
   const blank: Record<ChoiceKey, string> = { A: '', B: '', C: '', D: '' };
   if (!options) return blank;
-  if (Array.isArray(options)) {
-    options.slice(0, 4).forEach((text, i) => {
-      blank[String.fromCharCode(65 + i) as ChoiceKey] = String(text);
+
+  let opts = options;
+  if (typeof opts === 'string') {
+    try {
+      opts = JSON.parse(opts);
+    } catch {
+      return blank;
+    }
+  }
+
+  const extractText = (val: any): string => {
+    if (val == null) return '';
+    if (typeof val === 'string' || typeof val === 'number') return String(val).trim();
+    if (typeof val === 'object') {
+      return String(val.text ?? val.value ?? val.label ?? val.choice ?? val.option ?? '').trim();
+    }
+    return '';
+  };
+
+  if (Array.isArray(opts)) {
+    opts.forEach((item, i) => {
+      let key: ChoiceKey | null = null;
+      let text = '';
+
+      if (item && typeof item === 'object') {
+        const itemKey = String(item.key ?? item.label ?? item.choice ?? '').trim().toUpperCase();
+        if (['A', 'B', 'C', 'D'].includes(itemKey)) {
+          key = itemKey as ChoiceKey;
+        }
+        text = extractText(item);
+      } else {
+        text = extractText(item);
+      }
+
+      if (!key && i < 4) {
+        key = String.fromCharCode(65 + i) as ChoiceKey;
+      }
+
+      if (key && ['A', 'B', 'C', 'D'].includes(key)) {
+        blank[key] = text;
+      }
     });
     return blank;
   }
-  (['A', 'B', 'C', 'D'] as ChoiceKey[]).forEach((k) => {
-    blank[k] = String(options[k] ?? options[k.toLowerCase()] ?? '');
-  });
+
+  if (typeof opts === 'object') {
+    (['A', 'B', 'C', 'D'] as ChoiceKey[]).forEach((k) => {
+      const rawVal = opts[k] ?? opts[k.toLowerCase()];
+      blank[k] = extractText(rawVal);
+    });
+    return blank;
+  }
+
   return blank;
 }
 
@@ -610,12 +654,24 @@ export const OfflineExamRepository = {
     };
   },
 
-  async resolveOfflineCode(code: string) {
+  async resolveOfflineCode(code: string): Promise<{
+    valid: boolean;
+    message?: string;
+    schedule?: any;
+    session?: any;
+    examinationCode?: string;
+  } | null> {
     const extracted = extractExaminationCode(code);
 
     // Prefer explicitly opened rooms (normal codes like K7M2P9QX).
     const opened = await OfflineStore.findOpenedRoomByCode(extracted);
     if (opened) {
+      if (opened.status === 'ended') {
+        return {
+          valid: false,
+          message: 'This examination has already ended and is no longer available for applicants.',
+        };
+      }
       return this.resolveScheduleRoom(opened.scheduleId, opened.roomId, opened.code);
     }
 

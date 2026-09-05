@@ -70,6 +70,7 @@ export interface ExamSchedule {
 export interface ExamSession {
   id: string;
   scheduleId: string;
+  status?: 'idle' | ExamLifecycleStatus | string;
   examSessionId?: number;
   roomId?: string | null;
   roomName?: string | null;

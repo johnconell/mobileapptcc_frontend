@@ -56,7 +56,13 @@ export function QuestionCard({
                 selectable={!secure}
                 {...(secure ? ({ contextMenuHidden: true } as object) : null)}
               >
-                {String(question.choices[key] ?? '')}
+                {(() => {
+                  const choiceVal = question.choices?.[key];
+                  if (choiceVal && typeof choiceVal === 'object') {
+                    return (choiceVal as any).text ?? (choiceVal as any).value ?? (choiceVal as any).label ?? String(choiceVal);
+                  }
+                  return String(choiceVal ?? '');
+                })()}
               </Text>
             </Pressable>
           );

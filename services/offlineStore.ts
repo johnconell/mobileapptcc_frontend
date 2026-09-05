@@ -266,6 +266,42 @@ async function deleteIfExists(path: string, webKey: string): Promise<void> {
   }
 }
 
+/**
+ * Compute a deterministic content fingerprint / hash for an OfflinePack.
+ * Used for offline LAN compatibility checking between Proctor and Student devices.
+ *
+ * NOTE: MUST NOT include `exported_at` timestamp so that packs downloaded at
+ * different times by Proctor and Student with identical questions produce the SAME hash.
+ */
+export function computePackHash(pack: OfflinePack | null): string {
+  if (!pack) return 'no-pack';
+
+  const sigs: string[] = [];
+  for (const bank of pack.question_banks ?? []) {
+    if (bank.is_active === false) continue;
+    for (const subject of bank.subjects ?? []) {
+      for (const q of subject.questions ?? []) {
+        if (q.is_selected_for_exam === false) continue;
+        if (q.status && q.status !== 'active') continue;
+        sigs.push(`${q.id}:${q.stem}:${q.correct_answer}:${JSON.stringify(q.options ?? {})}`);
+      }
+    }
+  }
+
+  const settings = pack.examination_settings;
+  const settingsSig = settings
+    ? `${settings.duration_minutes ?? 90}:${settings.shuffle_questions ?? 1}:${settings.shuffle_categories ?? 0}:${settings.shuffle_both ?? 0}`
+    : 'default-settings';
+
+  const raw = `${pack.pack_version || 1}-${settingsSig}-${sigs.sort().join('|')}`;
+
+  let hash = 5381;
+  for (let i = 0; i < raw.length; i++) {
+    hash = (hash * 33) ^ raw.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(16);
+}
+
 export const OfflineStore = {
   // In-memory pack avoids AES decrypt + JSON.parse on every navigation (was 3–6 min).
   _packCache: null as OfflinePack | null,
