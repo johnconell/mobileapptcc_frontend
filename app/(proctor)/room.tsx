@@ -1,18 +1,18 @@
 import React, { useMemo, useState } from 'react';
-import { Text, View, StyleSheet, Alert, Pressable } from 'react-native';
+import { Text, View, StyleSheet, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { DoorOpen, Users, UserRound, Menu } from 'lucide-react-native';
+import { DoorOpen, Users, UserRound } from 'lucide-react-native';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Header } from '@/components/ui/Header';
 import { SkeletonDetail } from '@/components/ui/Skeleton';
 import { StatusChip } from '@/components/ui/StatusChip';
-import { useProctorDrawer } from './ProctorDrawer';
-import { useRooms, useSessions } from '@/hooks/useRepositories';
+import { useRooms, useSchedules, useSessions } from '@/hooks/useRepositories';
 import { AuthRepository, LobbyRepository } from '@/repositories';
 import { QUERY_KEYS, STATUS_LABELS } from '@/constants';
 import { useProctorStore } from '@/stores';
+import { Breadcrumbs } from '@/components/ui/Breadcrumbs';
 import { colors } from '@/theme';
 import { safeBack } from '@/utils';
 import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
@@ -39,11 +39,14 @@ function roomAccent(status: string) {
 export default function RoomDetailScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { sessionId, roomId } = useLocalSearchParams<{
+  const { sessionId, roomId, scheduleId } = useLocalSearchParams<{
     sessionId: string;
     roomId: string;
+    scheduleId?: string;
   }>();
   const selectedSession = useProctorStore((s) => s.selectedSession);
+  const selectedSchedule = useProctorStore((s) => s.selectedSchedule);
+  const schedulesQuery = useSchedules();
   const reset = useProctorStore((s) => s.reset);
   const sessionsQuery = useSessions(selectedSession?.scheduleId);
   const roomsQuery = useRooms(sessionId, Boolean(sessionId));
@@ -60,21 +63,14 @@ export default function RoomDetailScreen() {
   );
 
   if (roomsQuery.isLoading && !room) {
-    const { toggleDrawer } = useProctorDrawer();
-
-  return (
+    return (
       <View style={styles.screen}>
         <Header
           title="Room"
           subtitle={session?.timeLabel ?? 'Loading…'}
-          left={
-            <Pressable onPress={toggleDrawer} style={styles.menuBtn}>
-                <Menu size={24} color={colors.ink} />
-            </Pressable>
-          }
           onBack={() =>
             safeBack(router, {
-              pathname: '/(proctor)/rooms',
+              pathname: '/(proctor)/rooms' as any,
               params: { sessionId: sessionId ?? '' },
             })
           }
@@ -91,7 +87,7 @@ export default function RoomDetailScreen() {
           title="Room"
           onBack={() =>
             safeBack(router, {
-              pathname: '/(proctor)/rooms',
+              pathname: '/(proctor)/rooms' as any,
               params: { sessionId: sessionId ?? '' },
             })
           }
@@ -102,7 +98,7 @@ export default function RoomDetailScreen() {
             title="Back to rooms"
             onPress={() =>
               router.replace({
-                pathname: '/(proctor)/rooms',
+                pathname: '/(proctor)/rooms' as any,
                 params: { sessionId: sessionId ?? '' },
               })
             }
@@ -141,7 +137,7 @@ export default function RoomDetailScreen() {
       ...(room.examSessionId != null ? { examSessionId: String(room.examSessionId) } : {}),
     }).toString();
 
-    const targetRoute = `/lobby?${query}`;
+    const targetRoute = `/(proctor)/lobby?${query}`;
     console.log('RoomDetailScreen: Enter Lobby pressed', {
       sessionId,
       roomId,
@@ -254,7 +250,7 @@ export default function RoomDetailScreen() {
                   onPress: async () => {
                     await AuthRepository.logout();
                     reset();
-                    router.replace('/');
+                    router.replace({ pathname: '/', params: { stay: '1', from: 'logout' } } as any);
                   },
                 },
               ]);
@@ -263,10 +259,25 @@ export default function RoomDetailScreen() {
         }
         onBack={() =>
           safeBack(router, {
-            pathname: '/(proctor)/rooms',
-            params: { sessionId: sessionId ?? '' },
+            pathname: '/(proctor)/rooms' as any,
+            params: { sessionId: sessionId ?? '', scheduleId: scheduleId ?? '' },
           })
         }
+      />
+
+      <Breadcrumbs
+        segments={[
+          { label: 'Examination', onPress: () => router.replace('/(proctor)/examination' as any) },
+          {
+            label: (selectedSchedule ?? schedulesQuery.data?.find((s) => s.id === (scheduleId ?? session?.scheduleId)))?.name ?? 'Schedule',
+            onPress: () => router.replace('/(proctor)/examination' as any),
+          },
+          {
+            label: session?.timeLabel ?? 'Time Slot',
+            onPress: () => safeBack(router, { pathname: '/(proctor)/rooms', params: { sessionId: sessionId ?? '', scheduleId: scheduleId ?? '' } } as any),
+          },
+          { label: room.roomName },
+        ]}
       />
 
       <View style={styles.content}>

@@ -4,6 +4,10 @@ import { OfflineStore } from '@/services/offlineStore';
 import { PeerExamClient } from '@/services/peerExamClient';
 import { ProctorAuthCache } from '@/services/proctorAuthCache';
 import { appStorage } from '@/services/storage';
+import { useProctorStore } from '@/stores/proctorStore';
+import { useStudentStore } from '@/stores/studentStore';
+import { useExamStore } from '@/stores/examStore';
+import { useLobbyStore } from '@/stores/lobbyStore';
 import type { AuthResult, ProctorProfile } from '@/types';
 
 type LoginResponse = {
@@ -123,11 +127,26 @@ export const AuthRepository = {
     }
   },
 
+  /**
+   * Fast synchronous-like storage check for app initialization.
+   * Returns immediately without attempting any network requests (/proctor/me).
+   */
+  async getCachedSessionFast(): Promise<ProctorProfile | null> {
+    try {
+      const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
+      const raw = await appStorage.getItem(STORAGE_KEYS.proctorSession);
+      if (!token || !raw || !token.trim() || !raw.trim()) return null;
+      return { ...(JSON.parse(raw) as ProctorProfile), token };
+    } catch {
+      return null;
+    }
+  },
+
   async getSession(): Promise<ProctorProfile | null> {
     try {
       const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
       const raw = await appStorage.getItem(STORAGE_KEYS.proctorSession);
-      if (!token || !raw) return null;
+      if (!token || !raw || !token.trim() || !raw.trim()) return null;
 
       const cached = { ...(JSON.parse(raw) as ProctorProfile), token };
 
@@ -170,17 +189,51 @@ export const AuthRepository = {
   async logout(): Promise<void> {
     try {
       const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
+
+      // 1. Immediately delete all local credentials from storage FIRST
+      await Promise.allSettled([
+        appStorage.setItem(STORAGE_KEYS.proctorSession, ''),
+        appStorage.setItem(STORAGE_KEYS.proctorToken, ''),
+        appStorage.deleteItem(STORAGE_KEYS.proctorSession),
+        appStorage.deleteItem(STORAGE_KEYS.proctorToken),
+        appStorage.deleteItem('tcc.proctor.login_logs'),
+        appStorage.deleteItem(STORAGE_KEYS.participationToken),
+        appStorage.deleteItem(STORAGE_KEYS.examinationCode),
+        appStorage.deleteItem(STORAGE_KEYS.studentProgress),
+        appStorage.deleteItem(STORAGE_KEYS.examCheckpoint),
+        appStorage.deleteItem('tcc.student.preload.ready'),
+        PeerExamClient.clear(),
+      ]);
+
+      // 2. Wipe all in-memory stores immediately
+      useProctorStore.getState().reset();
+      useStudentStore.getState().reset();
+      useExamStore.getState().reset();
+      useLobbyStore.getState().reset();
+
+      // 3. Best-effort server invalidate with a 1000ms max race timeout (never hangs offline/LAN)
       if (token && !token.startsWith('offline-local-')) {
-        await apiRequest('/proctor/logout', {
-          method: 'POST',
-          token,
-          baseUrl: getAuthApiBaseUrl(),
-        }).catch(() => undefined);
+        try {
+          const timer = new Promise((resolve) => setTimeout(resolve, 1000));
+          await Promise.race([
+            apiRequest('/proctor/logout', {
+              method: 'POST',
+              token,
+              baseUrl: getAuthApiBaseUrl(),
+            }).catch(() => undefined),
+            timer,
+          ]);
+        } catch {
+          // ignore network failure
+        }
       }
-    } finally {
-      await appStorage.deleteItem(STORAGE_KEYS.proctorSession);
-      await appStorage.deleteItem(STORAGE_KEYS.proctorToken);
-      await PeerExamClient.clear();
+    } catch {
+      await appStorage.deleteItem(STORAGE_KEYS.proctorSession).catch(() => undefined);
+      await appStorage.deleteItem(STORAGE_KEYS.proctorToken).catch(() => undefined);
+      useProctorStore.getState().reset();
+      useStudentStore.getState().reset();
+      useExamStore.getState().reset();
+      useLobbyStore.getState().reset();
     }
   },
 };

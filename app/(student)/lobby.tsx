@@ -9,11 +9,12 @@ import { LobbyWaitingAnimation } from '@/features/lobby/LobbyWaitingAnimation';
 import { useLobby } from '@/hooks/useRepositories';
 import { appStorage } from '@/services/storage';
 import { STORAGE_KEYS } from '@/constants';
-import { QuestionRepository, LobbyRepository } from '@/repositories';
+import { QuestionRepository, LobbyRepository, StudentRepository } from '@/repositories';
 import { useExamStore, useLobbyStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
 import { PeerExamClient } from '@/services/peerExamClient';
 import { OfflineStore } from '@/services/offlineStore';
+import { ExamPreloader } from '@/services/examPreloader';
 
 /**
  * DETERMINISTIC LOBBY STATES
@@ -96,8 +97,18 @@ function useLobbyController() {
         hasEntered.current = true;
         try {
             console.log('[LOBBY_CTL] INITIALIZING_EXAMINATION');
-            const questions = await QuestionRepository.getQuestions(scannedSessionId!);
-            if (!questions.length) throw new Error('No questions found in module');
+
+            // 1. Fast path: check preloaded questions from lobby waiting phase
+            let questions = await ExamPreloader.getPreloadedQuestions();
+
+            // 2. If not preloaded yet, fetch from repository (with resilient retry)
+            if (!questions || !questions.length) {
+              questions = await QuestionRepository.getQuestions(scannedSessionId!);
+            }
+
+            if (!questions || !questions.length) {
+              throw new Error('No questions found in examination module.');
+            }
 
             setSessionId(scannedSessionId!);
             setQuestions(questions);
@@ -109,7 +120,11 @@ function useLobbyController() {
             console.error('[LOBBY_CTL] ENTRY_CRASH:', err);
             hasEntered.current = false;
             setState('DASHBOARD');
-            Alert.alert('Load Failure', 'Could not open examination. Ensure modules were downloaded at the start.');
+            const detail = err instanceof Error ? err.message : 'Stay connected to the examination Wi‑Fi and try again.';
+            Alert.alert(
+              'Load Failure',
+              `Could not open examination.\n\n${detail}`,
+            );
         }
     };
     void go();
@@ -149,6 +164,24 @@ function useLobbyController() {
             setVerifiedStudent(verified);
             setSnapshot(lobby);
             setLastSuccessAt(Date.now());
+
+            // PRELOAD QUESTIONS IN BACKGROUND WHILE WAITING FOR PROCTOR TO START
+            // PRELOAD QUESTIONS IN BACKGROUND IF NOT ALREADY READY
+            void (async () => {
+              try {
+                await ExamPreloader.preloadQuestions(scannedSessionId!);
+                console.log('[LOBBY_CTL] Preload successful in background.');
+                const isReady = await ExamPreloader.isReady();
+                if (!isReady) {
+                  await ExamPreloader.preloadQuestions(scannedSessionId!);
+                  console.log('[LOBBY_CTL] Preload successful in background.');
+                } else {
+                  console.log('[LOBBY_CTL] Package already preloaded and verified.');
+                }
+              } catch (preloadErr) {
+                console.warn('[LOBBY_CTL] Background preload warning:', preloadErr);
+              }
+            })();
         } catch (e) {
             console.warn("Lobby handshake delay...", e);
             hasJoined.current = false;
@@ -193,12 +226,47 @@ export default function StudentLobbyScreen() {
 
   const { lobbyData, currentStudent, isStale } = controller;
 
+  const handleExit = () => {
+    Alert.alert(
+      'Exit Examination',
+      'Are you sure you want to leave the examination lobby and return to the main landing page?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Exit',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const studentId = currentStudent?.id;
+              if (studentId) {
+                await StudentRepository.cancelRegistration(String(studentId)).catch(() => undefined);
+              }
+              await Promise.allSettled([
+                appStorage.deleteItem(STORAGE_KEYS.participationToken),
+                appStorage.deleteItem(STORAGE_KEYS.examinationCode),
+                appStorage.deleteItem(STORAGE_KEYS.studentProgress),
+                appStorage.deleteItem(STORAGE_KEYS.examCheckpoint),
+                appStorage.deleteItem('tcc.student.preload.ready'),
+                PeerExamClient.clear(),
+              ]);
+              useStudentStore.getState().reset();
+              useExamStore.getState().reset();
+              useLobbyStore.getState().reset();
+            } finally {
+              router.replace('/');
+            }
+          },
+        },
+      ],
+    );
+  };
+
   return (
     <View style={styles.screen}>
       <Header
         title={lobbyData?.schedule?.name || "Entrance Examination"}
         subtitle={isStale ? "Syncing Connection..." : "Secure Student Dashboard"}
-        onBack={undefined}
+        onBack={handleExit}
       />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
@@ -271,10 +339,10 @@ export default function StudentLobbyScreen() {
         </View>
 
         <Button
-          title="Exit Dashboard"
+          title="Exit Examination"
           variant="outline"
           size="sm"
-          onPress={() => router.replace('/')}
+          onPress={handleExit}
           style={styles.exitBtn}
         />
       </ScrollView>

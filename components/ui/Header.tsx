@@ -3,6 +3,7 @@ import { Pressable, Text, View, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChevronLeft } from 'lucide-react-native';
 import { colors } from '@/theme';
+import { useAppTheme } from '@/hooks/useAppTheme';
 
 interface HeaderProps {
   title: string;
@@ -25,13 +26,14 @@ export function Header({
   hideBackSlot = false,
 }: HeaderProps) {
   const insets = useSafeAreaInsets();
+  const { colors: themeColors, scaleFont, fontMultiplier } = useAppTheme();
 
   return (
     <View
       style={[
         styles.wrap,
         { paddingTop: insets.top + 8 },
-        !transparent && styles.solid,
+        !transparent && [styles.solid, { backgroundColor: themeColors.background, borderBottomColor: themeColors.cardBorder }],
       ]}
     >
       <View style={styles.row}>
@@ -41,20 +43,28 @@ export function Header({
           <Pressable
             accessibilityRole="button"
             onPress={onBack}
-            style={styles.back}
+            style={[styles.back, { backgroundColor: themeColors.card, borderColor: themeColors.cardBorder }]}
             hitSlop={10}
           >
-            <ChevronLeft size={22} color={colors.ink} />
+            <ChevronLeft size={22} color={themeColors.textPrimary} />
           </Pressable>
         ) : hideBackSlot ? null : (
           <View style={styles.backPlaceholder} />
         )}
         <View style={styles.center}>
-          <Text style={styles.title} numberOfLines={1}>
+          <Text
+            style={[styles.title, { color: themeColors.textPrimary, fontSize: scaleFont(17) }]}
+            numberOfLines={1}
+            maxFontSizeMultiplier={fontMultiplier * 1.2}
+          >
             {title}
           </Text>
           {subtitle ? (
-            <Text style={styles.subtitle} numberOfLines={1}>
+            <Text
+              style={[styles.subtitle, { color: themeColors.textSecondary, fontSize: scaleFont(12) }]}
+              numberOfLines={1}
+              maxFontSizeMultiplier={fontMultiplier * 1.2}
+            >
               {subtitle}
             </Text>
           ) : null}
@@ -92,8 +102,8 @@ const styles = StyleSheet.create({
   },
   backPlaceholder: { width: 40 },
   left: { minWidth: 40, alignItems: 'flex-start' },
-  center: { flex: 1, gap: 2 },
-  title: { fontSize: 17, fontWeight: '700', color: colors.ink },
-  subtitle: { fontSize: 12, color: colors.inkMuted, fontWeight: '500' },
+  center: { flex: 1, gap: 2, minWidth: 0 },
+  title: { fontSize: 17, fontWeight: '700', color: colors.ink, flexShrink: 1 },
+  subtitle: { fontSize: 12, color: colors.inkMuted, fontWeight: '500', flexShrink: 1 },
   right: { minWidth: 40, alignItems: 'flex-end' },
 });

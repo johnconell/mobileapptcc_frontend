@@ -6,8 +6,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  BackHandler,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Shield } from 'lucide-react-native';
@@ -38,12 +39,23 @@ import { VersionInfo } from '@/components/VersionInfo';
 
 export default function ProctorLoginScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ from?: string }>();
   const setProfile = useProctorStore((s) => s.setProfile);
   const [formError, setFormError] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [prepareLabel, setPrepareLabel] = useState('Please wait…');
   const [booting, setBooting] = useState(true);
   const [authCacheReady, setAuthCacheReady] = useState(false);
+
+  // Hardware back returns cleanly to landing page
+  useEffect(() => {
+    const handleBack = () => {
+      router.replace({ pathname: '/', params: { stay: '1', from: 'login' } } as any);
+      return true;
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', handleBack);
+    return () => sub.remove();
+  }, [router]);
 
   const {
     control,
@@ -65,8 +77,8 @@ export default function ProctorLoginScreen() {
         );
         return;
       }
-      setPrepareLabel('Opening offline schedules…');
-      router.replace('/(proctor)/schedules');
+      setPrepareLabel('Opening dashboard…');
+      router.replace('/(proctor)/dashboard' as any);
       return;
     }
 
@@ -77,8 +89,8 @@ export default function ProctorLoginScreen() {
       setFormError(pack.message);
       return;
     }
-    setPrepareLabel('Opening schedules…');
-    router.replace('/(proctor)/schedules');
+    setPrepareLabel('Opening dashboard…');
+    router.replace('/(proctor)/dashboard' as any);
   };
 
   useEffect(() => {
@@ -86,21 +98,6 @@ export default function ProctorLoginScreen() {
       await hydrateApiBaseUrl();
       if (hasLanApiOverride() && getCloudApiBaseUrl()) {
         await clearLanApiUrl();
-      }
-      const session = await AuthRepository.getSession();
-      if (session) {
-        setProfile(session);
-        setBooting(false);
-        setPreparing(true);
-        if (session.offlineSession) {
-          setPrepareLabel('Opening offline schedules…');
-          router.replace('/(proctor)/schedules');
-          return;
-        }
-        setPrepareLabel('Please wait — updating exam cache and schedules…');
-        await ensureExamPackCached({ force: true, includeAuth: true });
-        router.replace('/(proctor)/schedules');
-        return;
       }
 
       // While online on the login screen: pre-download exam pack + proctor accounts
@@ -113,7 +110,7 @@ export default function ProctorLoginScreen() {
       setAuthCacheReady(await ProctorAuthCache.hasAccounts());
       setBooting(false);
     })();
-  }, [setProfile, router]);
+  }, []);
 
   const onSubmit = handleSubmit(async (values) => {
     setFormError(null);
@@ -143,7 +140,9 @@ export default function ProctorLoginScreen() {
       <Header
         title="Proctor Login"
         subtitle="Online or offline (after first cache)"
-        onBack={() => router.replace('/')}
+        onBack={() => {
+          router.replace({ pathname: '/', params: { stay: '1', from: 'login' } } as any);
+        }}
       />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Card>

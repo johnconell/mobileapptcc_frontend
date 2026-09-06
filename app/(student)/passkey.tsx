@@ -19,6 +19,7 @@ import { SkeletonForm } from '@/components/ui/Skeleton';
 import { LobbyRepository } from '@/repositories';
 import { useStudentStore } from '@/stores';
 import { OfflineStore } from '@/services/offlineStore';
+import { appStorage } from '@/services/storage';
 import { colors } from '@/theme';
 
 const schema = z.object({
@@ -89,7 +90,9 @@ export default function StudentPasskeyScreen() {
         }
         return;
       }
-      setExamPasskey(values.passkey.trim().toUpperCase());
+      const upperKey = values.passkey.trim().toUpperCase();
+      setExamPasskey(upperKey);
+      await appStorage.setItem('tcc.student.exam.passkey', upperKey);
       if (!result.student) {
         throw new Error(result.message || 'Unable to continue with this examination key.');
       }

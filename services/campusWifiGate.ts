@@ -81,11 +81,13 @@ export async function assertCampusWifiForJoin(options?: {
 
   const mismatchMessage =
     'You are connected to a different examination network. Please connect to the same Wi‑Fi network as the proctor and scan again.';
+  const officialWifiMessage =
+    'You must connect to the official examination Wi-Fi network before joining this examination.';
 
   if (!wifiConnected) {
     const msg = options?.isProctor
       ? 'This phone has no Wi‑Fi connection. Connect to the examination Wi‑Fi or turn on a mobile hotspot and try again.'
-      : mismatchMessage;
+      : officialWifiMessage;
     return {
       ok: false,
       wifiConnected: false,
@@ -105,26 +107,68 @@ export async function assertCampusWifiForJoin(options?: {
     };
   }
 
-  // Student Peer mode: "matching the proctor" means reaching the proctor's phone, not Laravel.
+  // Student Peer mode: "matching the proctor" means reaching the proctor's phone on the same Wi-Fi LAN.
   const peerTarget =
     (options?.scannedPayload ? parsePeerQr(options.scannedPayload) : null) ??
     (await PeerExamClient.getTarget());
 
   if (peerTarget) {
+    // 1. Strict SSID validation: If both SSIDs are known, require exact match
+    const currentSsid = (netState as any).ssid;
+    const cleanExpected = (peerTarget.wifiSsid || '').replace(/^"|"$/g, '').trim();
+    const cleanCurrent = (currentSsid || '').replace(/^"|"$/g, '').trim();
+
+    if (
+      cleanExpected &&
+      cleanCurrent &&
+      cleanCurrent !== '<unknown ssid>' &&
+      cleanCurrent.toLowerCase() !== cleanExpected.toLowerCase()
+    ) {
+      return {
+        ok: false,
+        wifiConnected: true,
+        serverReachable: false,
+        message: `${officialWifiMessage}\n\nConnected to '${cleanCurrent}'. Required official network: '${cleanExpected}'.`,
+      };
+    }
+
+    // 2. Strict Subnet validation: Student and Proctor host must share local LAN prefix
+    const deviceIp = await Network.getIpAddressAsync().catch(() => null);
+    if (
+      deviceIp &&
+      peerTarget.host &&
+      !peerTarget.host.startsWith('127.') &&
+      !peerTarget.host.startsWith('localhost')
+    ) {
+      const devParts = deviceIp.split('.');
+      const hostParts = peerTarget.host.split('.');
+      if (devParts.length === 4 && hostParts.length === 4) {
+        // Standard private IP check: /24 for 192.168.x.x, /16 for others
+        const isClassC = devParts[0] === '192' && devParts[1] === '168';
+        const subnetMatch = isClassC
+          ? devParts[0] === hostParts[0] && devParts[1] === hostParts[1] && devParts[2] === hostParts[2]
+          : devParts[0] === hostParts[0] && devParts[1] === hostParts[1];
+
+        if (!subnetMatch) {
+          return {
+            ok: false,
+            wifiConnected: true,
+            serverReachable: false,
+            message: `${officialWifiMessage}\n\nCross-network connection detected (Your IP: ${deviceIp}, Proctor: ${peerTarget.host}).`,
+          };
+        }
+      }
+    }
+
+    // 3. Direct LAN Reachability Probe (ping proctor phone)
     const reachable = await PeerExamClient.ping(peerTarget);
     if (!reachable) {
       return {
         ok: false,
         wifiConnected: true,
         serverReachable: false,
-        message: mismatchMessage,
+        message: `${officialWifiMessage}\n\nCannot reach the proctor examination session at ${peerTarget.host}.`,
       };
-    }
-
-    // Ping succeeded! We are on the right network.
-    const currentSsid = (netState as any).ssid;
-    if (peerTarget.wifiSsid && currentSsid && currentSsid !== peerTarget.wifiSsid) {
-       if (__DEV__) console.warn(`[WIFI] SSID Mismatch: Expected ${peerTarget.wifiSsid}, got ${currentSsid}. Allowing anyway because ping succeeded.`);
     }
 
     return { ok: true, wifiConnected: true, serverReachable: true, message: null };
@@ -147,7 +191,7 @@ export async function assertCampusWifiForJoin(options?: {
     }
   }
 
-  if (skipServer) {
+  if (skipServer || options?.requireServer === false) {
     return {
       ok: true,
       wifiConnected: true,
@@ -158,18 +202,11 @@ export async function assertCampusWifiForJoin(options?: {
 
   const serverReachable = await probeExamServerReachable();
   if (!serverReachable) {
-    const host = (() => {
-      try {
-        return new URL(getApiBaseUrl()).host;
-      } catch {
-        return getApiBaseUrl();
-      }
-    })();
     return {
       ok: false,
       wifiConnected: true,
       serverReachable: false,
-      message: `${mismatchMessage}\n\n(Cannot reach exam server ${host}.)`,
+      message: officialWifiMessage,
     };
   }
 

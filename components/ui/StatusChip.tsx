@@ -32,7 +32,13 @@ export function StatusChip({ label, status, tone }: StatusChipProps) {
   return (
     <View style={[styles.chip, toneStyles[resolvedTone]]}>
       <View style={[styles.dot, { backgroundColor: textColors[resolvedTone] }]} />
-      <Text style={[styles.text, { color: textColors[resolvedTone] }]}>{text}</Text>
+      <Text
+        style={[styles.text, { color: textColors[resolvedTone] }]}
+        numberOfLines={1}
+        maxFontSizeMultiplier={1.2}
+      >
+        {text}
+      </Text>
     </View>
   );
 }

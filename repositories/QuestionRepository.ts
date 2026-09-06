@@ -32,14 +32,38 @@ export const QuestionRepository = {
       }
 
       // 3. Fallback to network fetch if NO local module exists (LAN fetch from proctor)
-      if (__DEV__) console.log("[LOBBY DEBUG] No local cache. Requesting questions from Proctor...");
+      if (__DEV__) console.log("[LOBBY DEBUG] Requesting questions from Proctor with resilient retry...");
       const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
-      const json = await PeerExamClient.request<{ questions: Question[] }>('/questions', {
-        query: { participation_token: token ?? undefined },
-        timeoutMs: 30000, // 30s timeout for large question packs over LAN
-      });
-      if (__DEV__) console.log("[LOBBY DEBUG] Received questions from Proctor. Count:", json.questions?.length);
-      return json.questions || [];
+      let json: { questions: Question[] } | null = null;
+      let lastErr: unknown = null;
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          if (__DEV__) console.log(`[LOBBY DEBUG] Fetch attempt ${attempt}/3...`);
+          json = await PeerExamClient.request<{ questions: Question[] }>('/questions', {
+            query: { participation_token: token ?? undefined },
+            timeoutMs: 25000,
+          });
+          if (json?.questions?.length) {
+            break;
+          }
+        } catch (err) {
+          lastErr = err;
+          if (__DEV__) console.warn(`[LOBBY DEBUG] Question fetch attempt ${attempt} failed:`, err);
+          if (attempt < 3) {
+            await new Promise((res) => setTimeout(res, 1200 * attempt));
+          }
+        }
+      }
+
+      if (!json?.questions?.length) {
+        throw lastErr instanceof Error
+          ? lastErr
+          : new Error('Proctor server did not return questions for this examination.');
+      }
+
+      if (__DEV__) console.log("[LOBBY DEBUG] Received questions from Proctor. Count:", json.questions.length);
+      return json.questions;
     }
 
     if (await OfflineStore.isOfflineMode()) {

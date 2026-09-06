@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Modal, Pressable, Text, View, StyleSheet, Alert, ActivityIndicator } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { Keyboard, QrCode, Shield, Download } from 'lucide-react-native';
@@ -19,21 +19,61 @@ import { SchoolLogo } from '@/features/student/SchoolLogo';
 import { AuthRepository } from '@/repositories';
 import * as Updates from 'expo-updates';
 import * as Network from 'expo-network';
-import { useSettingsStore } from '@/stores';
+import { useSettingsStore, useProctorStore } from '@/stores';
 import { VersionInfo } from '@/components/VersionInfo';
 import { ensureExamPackCached } from '@/services/ensureExamPack';
 import { OfflineStore } from '@/services/offlineStore';
 
+/** Tracks whether the application process was just cold launched from OS */
+let isAppColdBoot = true;
+
 export default function HomeScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ stay?: string; from?: string }>();
   const insets = useSafeAreaInsets();
   const [joinOpen, setJoinOpen] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
   const [preparing, setPreparing] = useState(false);
   const [pack, setPack] = useState<any>(null);
   const [downloadProgress, setDownloadProgress] = useState<{
     percent: number;
     label: string;
   } | null>(null);
+
+  // If a proctor session exists on this phone on initial cold launch, go straight to proctor dashboard.
+  // When a user deliberately navigates here (e.g. after logout, back from login, or mode toggle),
+  // stay on the landing page so applicants can scan QR code!
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        if (!isAppColdBoot || params.stay === '1' || params.from === 'login' || params.from === 'logout') {
+          isAppColdBoot = false;
+          if (active) {
+            setCheckingAuth(false);
+          }
+          return;
+        }
+
+        isAppColdBoot = false;
+        const session = await AuthRepository.getCachedSessionFast();
+        if (session && active) {
+          useProctorStore.getState().setProfile(session);
+          router.replace('/(proctor)/dashboard' as any);
+          return;
+        }
+      } catch (err) {
+        console.warn('Fast session check error:', err);
+      } finally {
+        if (active) {
+          setCheckingAuth(false);
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [router, params.stay, params.from]);
 
   useEffect(() => {
     void OfflineStore.getPackSummary().then(setPack);
@@ -67,16 +107,13 @@ export default function HomeScreen() {
     setJoinOpen(true);
   };
 
-  // If a proctor session exists on this phone, go straight to proctor schedules
-  useEffect(() => {
-    void (async () => {
-      const session = await AuthRepository.getSession();
-      if (session) {
-        // Ensure proctor sessions come back to the proctor portal rather than student index
-        router.replace('/(proctor)/schedules');
-      }
-    })();
-  }, [router]);
+  if (checkingAuth) {
+    return (
+      <View style={[styles.screen, { alignItems: 'center', justifyContent: 'center' }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
 
   if (preparing) {
     return (

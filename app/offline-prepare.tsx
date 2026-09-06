@@ -91,8 +91,8 @@ export default function OfflinePrepareScreen() {
     <View style={styles.screen}>
       <Header
         title="Offline exam cache"
-        subtitle="No room PC required"
-        onBack={() => safeBack(router, '/')}
+        subtitle="Synchronize with Admin"
+        onBack={() => (router.canGoBack() ? router.back() : router.replace('/(proctor)/dashboard' as any))}
       />
       <View style={styles.body}>
         <Button
@@ -160,12 +160,6 @@ export default function OfflinePrepareScreen() {
           fullWidth
           loading={busy}
           onPress={() => void recover()}
-        />
-        <Button
-          title="Continue to proctor login"
-          variant="ghost"
-          fullWidth
-          onPress={() => router.push('/(proctor)/login')}
         />
       </View>
     </View>

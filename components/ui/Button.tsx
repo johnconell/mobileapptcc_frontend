@@ -77,7 +77,11 @@ export function Button({
       ) : (
         <>
           {icon}
-          <Text style={[styles.label, labelStyles[variant], size === 'sm' && styles.labelSm]}>
+          <Text
+            style={[styles.label, labelStyles[variant], size === 'sm' && styles.labelSm]}
+            numberOfLines={1}
+            maxFontSizeMultiplier={1.15}
+          >
             {title}
           </Text>
         </>
@@ -105,7 +109,7 @@ const styles = StyleSheet.create({
 });
 
 const sizeStyles = StyleSheet.create({
-  sm: { paddingVertical: 8, paddingHorizontal: 12, minHeight: 36 },
+  sm: { paddingVertical: 7, paddingHorizontal: 14, minHeight: 36 },
   md: { paddingVertical: 12, paddingHorizontal: 18, minHeight: 48 },
   lg: { paddingVertical: 16, paddingHorizontal: 24, minHeight: 56 },
 });

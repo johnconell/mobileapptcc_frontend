@@ -1,26 +1,18 @@
 import React from 'react';
-import { View, StyleSheet, Text, Pressable } from 'react-native';
+import { View, StyleSheet, Text } from 'react-native';
 import { Header } from '@/components/ui/Header';
 import { Card } from '@/components/ui/Card';
 import { useRouter } from 'expo-router';
-import { Menu } from 'lucide-react-native';
-import { useProctorDrawer } from './ProctorDrawer';
 import { colors } from '@/theme';
 
 export default function NotificationsScreen() {
   const router = useRouter();
-  const { toggleDrawer } = useProctorDrawer();
 
   return (
     <View style={styles.screen}>
       <Header
         title="Notifications"
         subtitle="Module updates & alerts"
-        left={
-            <Pressable onPress={toggleDrawer} style={styles.menuBtn}>
-                <Menu size={24} color={colors.ink} />
-            </Pressable>
-        }
         onBack={() => router.back()}
       />
       <View style={styles.content}>
@@ -46,14 +38,4 @@ const styles = StyleSheet.create({
   content: { padding: 20, gap: 12 },
   itemTitle: { fontSize: 16, fontWeight: '800', color: colors.ink },
   itemBody: { fontSize: 13, color: colors.inkSecondary },
-  menuBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
 });

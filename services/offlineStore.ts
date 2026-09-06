@@ -130,7 +130,7 @@ async function getOrCreatePackKey(): Promise<Uint8Array> {
   return key;
 }
 
-async function encryptJson(payload: unknown): Promise<string> {
+export async function encryptJson(payload: unknown): Promise<string> {
   const key = await getOrCreatePackKey();
   const iv = new Uint8Array(await Crypto.getRandomBytesAsync(12));
   const plaintext = new TextEncoder().encode(JSON.stringify(payload));
@@ -145,7 +145,7 @@ async function encryptJson(payload: unknown): Promise<string> {
   return JSON.stringify(blob);
 }
 
-async function decryptJson<T>(raw: string): Promise<T | null> {
+export async function decryptJson<T>(raw: string): Promise<T | null> {
   try {
     const parsed = JSON.parse(raw) as EncryptedBlob | OfflinePack;
     if (
@@ -266,14 +266,36 @@ async function deleteIfExists(path: string, webKey: string): Promise<void> {
   }
 }
 
+/** Convert date / timestamp string into canonical local YYYY-MM-DD */
+export function toLocalDateString(input?: string | Date | null): string {
+  if (!input) {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
+  const d = typeof input === 'string' ? new Date(input) : input;
+  if (isNaN(d.getTime())) {
+    if (typeof input === 'string' && /^\d{4}-\d{2}-\d{2}/.test(input)) {
+      return input.slice(0, 10);
+    }
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 /**
  * Compute a deterministic content fingerprint / hash for an OfflinePack.
  * Used for offline LAN compatibility checking between Proctor and Student devices.
  *
  * NOTE: MUST NOT include `exported_at` timestamp so that packs downloaded at
  * different times by Proctor and Student with identical questions produce the SAME hash.
+ * Deterministic string representation of an OfflinePack for cryptographic hashing.
+ * Sorts all keys, questions, options, and schedules to guarantee identical hashes.
  */
-export function computePackHash(pack: OfflinePack | null): string {
+export function normalizePackForHashing(pack: OfflinePack | null): string {
   if (!pack) return 'no-pack';
 
   const sigs: string[] = [];
@@ -283,18 +305,56 @@ export function computePackHash(pack: OfflinePack | null): string {
       for (const q of subject.questions ?? []) {
         if (q.is_selected_for_exam === false) continue;
         if (q.status && q.status !== 'active') continue;
-        sigs.push(`${q.id}:${q.stem}:${q.correct_answer}:${JSON.stringify(q.options ?? {})}`);
+
+        let optionsStr = '';
+        if (q.options && typeof q.options === 'object') {
+          if (Array.isArray(q.options)) {
+            optionsStr = q.options.map(String).join(';');
+          } else {
+            const sortedKeys = Object.keys(q.options).sort();
+            optionsStr = sortedKeys
+              .map((k) => `${k}:${(q.options as Record<string, string>)[k]}`)
+              .join(';');
+          }
+        }
+
+        sigs.push(`${q.id}:${(q.stem || '').trim()}:${(q.correct_answer || '').trim()}:${optionsStr}`);
       }
     }
   }
 
   const settings = pack.examination_settings;
   const settingsSig = settings
-    ? `${settings.duration_minutes ?? 90}:${settings.shuffle_questions ?? 1}:${settings.shuffle_categories ?? 0}:${settings.shuffle_both ?? 0}`
+    ? `${settings.duration_minutes ?? 90}:${Boolean(settings.shuffle_questions)}:${Boolean(settings.shuffle_categories)}:${Boolean(settings.shuffle_both)}`
     : 'default-settings';
 
   const raw = `${pack.pack_version || 1}-${settingsSig}-${sigs.sort().join('|')}`;
+  const scheduleSig = (pack.schedules ?? [])
+    .map((s) => `${s.id}:${s.exam_date || ''}`)
+    .sort()
+    .join(';');
 
+  return `${pack.pack_version || 1}-${scheduleSig}-${settingsSig}-${sigs.sort().join('|')}`;
+}
+
+/** Cryptographic SHA-256 hash of OfflinePack */
+export async function computePackHashAsync(pack: OfflinePack | null): Promise<string> {
+  if (!pack) return 'no-pack';
+  const raw = normalizePackForHashing(pack);
+  try {
+    return await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, raw);
+  } catch {
+    return computePackHash(pack);
+  }
+}
+
+/**
+ * Compute a deterministic content fingerprint / hash for an OfflinePack.
+ * Used for offline LAN compatibility checking between Proctor and Student devices.
+ */
+export function computePackHash(pack: OfflinePack | null): string {
+  if (!pack) return 'no-pack';
+  const raw = normalizePackForHashing(pack);
   let hash = 5381;
   for (let i = 0; i < raw.length; i++) {
     hash = (hash * 33) ^ raw.charCodeAt(i);
@@ -317,6 +377,47 @@ export const OfflineStore = {
     await deleteIfExists(PACK_FILE, WEB_PACK_KEY);
     await appStorage.setItem(STORAGE_KEYS.offlinePackReady, '1');
     await appStorage.setItem(STORAGE_KEYS.offlinePackAt, new Date().toISOString());
+    const nowIso = new Date().toISOString();
+    await appStorage.setItem(STORAGE_KEYS.offlinePackAt, nowIso);
+    try {
+      const sha256 = await computePackHashAsync(pack);
+      await appStorage.setItem('tcc.offline.pack.sha256', sha256);
+    } catch {
+      // ignore
+    }
+  },
+
+  /** Layer 3: Tamper Detection & Integrity Verification */
+  async verifyPackIntegrity(): Promise<{ valid: boolean; error?: string; sha256?: string; pack?: OfflinePack }> {
+    const pack = await this.getPack();
+    if (!pack) {
+      return { valid: false, error: 'No examination package found on this device.' };
+    }
+
+    const hasQuestions = (pack.question_banks ?? []).some((b) =>
+      (b.subjects ?? []).some((s) => (s.questions ?? []).length > 0),
+    );
+    if (!hasQuestions) {
+      return { valid: false, error: 'Examination package has empty or missing question bank.' };
+    }
+
+    if (!pack.schedules?.length) {
+      return { valid: false, error: 'Examination package has no active schedules.' };
+    }
+
+    const currentSha256 = await computePackHashAsync(pack);
+    const storedSha256 = await appStorage.getItem('tcc.offline.pack.sha256');
+
+    if (storedSha256 && storedSha256 !== currentSha256) {
+      console.error('[SECURITY VIOLATION] Package tampering detected! Stored hash does not match current content.');
+      return {
+        valid: false,
+        error: 'Security Violation: Examination package tampering detected. Integrity check failed.',
+        sha256: currentSha256,
+      };
+    }
+
+    return { valid: true, sha256: currentSha256, pack };
   },
 
   async getPack(): Promise<OfflinePack | null> {
@@ -466,6 +567,33 @@ export const OfflineStore = {
       students: pack.applicants?.length ?? 0,
       questions,
       passkeys: (pack.registrations ?? []).filter((r) => Boolean(r.exam_passkey)).length,
+    };
+  },
+
+  /**
+   * Check whether the exam pack was downloaded TODAY (local date YYYY-MM-DD).
+   * Proctors are required to download the pack daily to include rescheduled applicants.
+   */
+  async isPackDownloadedToday(): Promise<{
+    downloadedToday: boolean;
+    packDate: string | null;
+    today: string;
+  }> {
+    const has = await this.hasPack();
+    const today = toLocalDateString();
+    if (!has) {
+      return { downloadedToday: false, packDate: null, today };
+    }
+
+    const at = await appStorage.getItem(STORAGE_KEYS.offlinePackAt);
+    const pack = await this.getPack();
+    const timestamp = at || pack?.exported_at || null;
+    const packDate = timestamp ? toLocalDateString(timestamp) : null;
+
+    return {
+      downloadedToday: Boolean(packDate && packDate === today),
+      packDate,
+      today,
     };
   },
 

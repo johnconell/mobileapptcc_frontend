@@ -140,7 +140,6 @@ export const ScheduleRepository = {
       );
       return toMobileSchedules(json.data || []);
     } catch {
-      // Fall back to phone cache when the network is unavailable.
       if (await OfflineStore.hasPack()) {
         await OfflineStore.setOfflineMode(true);
         return OfflineExamRepository.getCachedSchedules();

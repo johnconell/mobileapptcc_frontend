@@ -26,3 +26,4 @@ export { QuestionCard } from './QuestionCard';
 export { ExamBottomNavigation } from './ExamBottomNavigation';
 export { SelectField } from './SelectField';
 export { QrCodePanel } from './QrCodePanel';
+export { Breadcrumbs } from './Breadcrumbs';

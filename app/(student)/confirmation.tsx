@@ -18,6 +18,8 @@ import { Input } from '@/components/ui/Input';
 import { SkeletonDetail } from '@/components/ui/Skeleton';
 import { LobbyRepository } from '@/repositories';
 import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
+import { ExamPreloader } from '@/services/examPreloader';
+import { appStorage } from '@/services/storage';
 import { useLobbyStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
 
@@ -46,6 +48,7 @@ export default function StudentConfirmationScreen() {
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
   const [joinError, setJoinError] = React.useState<string | null>(null);
   const [joining, setJoining] = React.useState(false);
+  const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
 
   // Already has Gmail from import — confirm identity only; do not ask again.
   const hasGmail = Boolean(selectedStudent?.email?.trim());
@@ -87,6 +90,7 @@ export default function StudentConfirmationScreen() {
     setJoinError(null);
     setJoining(true);
     try {
+      setStatusMessage('Validating Wi-Fi isolation...');
       const gate = await assertCampusWifiForJoin({
         requireServer: !String(scannedSessionId).startsWith('offline-'),
       });
@@ -94,14 +98,35 @@ export default function StudentConfirmationScreen() {
         setJoinError(gate.message ?? 'Campus Wi‑Fi required to join.');
         return;
       }
+
+      // STEP 11, 12, 13: Download & verify complete examination package BEFORE entering lobby
+      setStatusMessage('Downloading & verifying exam module...');
+      const effectivePasskey =
+        examPasskey || (await appStorage.getItem('tcc.student.exam.passkey')) || '';
+
+      try {
+        await ExamPreloader.downloadAndVerifyExamPackage({
+          sessionId: String(scannedSessionId),
+          passkey: effectivePasskey,
+        });
+      } catch (err) {
+        setJoinError(
+          err instanceof Error
+            ? err.message
+            : 'Could not download examination package. Connect to the official examination Wi-Fi and try again.',
+        );
+        return;
+      }
+
+      setStatusMessage('Registering ready status with proctor...');
       const verified = {
         ...selectedStudent,
         email: email.trim().toLowerCase(),
       };
 
       const lobby =
-        examPasskey
-          ? await LobbyRepository.joinWithPasskey(verified, scannedSessionId, examPasskey)
+        effectivePasskey
+          ? await LobbyRepository.joinWithPasskey(verified, scannedSessionId, effectivePasskey)
           : await LobbyRepository.joinStudent(verified, scannedSessionId);
 
       // CRITICAL: Update the verified student with the EXACT registration_id from the server
@@ -130,6 +155,7 @@ export default function StudentConfirmationScreen() {
       setJoinError(error instanceof Error ? error.message : 'Unable to join examination.');
     } finally {
       setJoining(false);
+      setStatusMessage(null);
     }
   };
 
@@ -187,6 +213,10 @@ export default function StudentConfirmationScreen() {
               )}
             />
           )}
+
+          {statusMessage && joining ? (
+            <Text style={styles.statusMessage}>{statusMessage}</Text>
+          ) : null}
 
           {joinError ? <Text style={styles.error}>{joinError}</Text> : null}
 
@@ -253,6 +283,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#B42318',
     fontWeight: '600',
+  },
+  statusMessage: {
+    marginTop: 8,
+    fontSize: 13,
+    color: colors.primary,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   actions: { flexDirection: 'row', gap: 10, marginTop: 18 },
   btn: { flex: 1 },

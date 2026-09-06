@@ -49,8 +49,14 @@ export function getAuthApiBaseUrl(): string {
 
 /** Call once on app start so SecureStore override is applied. */
 export async function hydrateApiBaseUrl(): Promise<string> {
-  const stored = await appStorage.getItem(STORAGE_KEYS.lanApiUrl);
-  lanApiOverride = stored && stored.trim() ? normalizeBase(stored) : null;
+  const fromEnv = process.env.EXPO_PUBLIC_API_URL?.trim() || DEFAULT_API_URL;
+  if (fromEnv.startsWith('https://')) {
+    await appStorage.deleteItem(STORAGE_KEYS.lanApiUrl);
+    lanApiOverride = null;
+  } else {
+    const stored = await appStorage.getItem(STORAGE_KEYS.lanApiUrl);
+    lanApiOverride = stored && stored.trim() ? normalizeBase(stored) : null;
+  }
   return getApiBaseUrl();
 }
 

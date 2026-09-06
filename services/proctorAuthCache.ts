@@ -109,4 +109,32 @@ export const ProctorAuthCache = {
     const ok = await bcrypt.compare(password, hash);
     return ok ? match : null;
   },
+
+  async updatePassword(emailOrUsername: string, newPassword: string): Promise<boolean> {
+    const needle = emailOrUsername.trim().toLowerCase();
+    if (!needle || !newPassword) return false;
+    const accounts = await this.list();
+    const idx = accounts.findIndex(
+      (a) =>
+        a.email === needle ||
+        a.email.split('@')[0] === needle ||
+        String(a.name).toLowerCase() === needle,
+    );
+    const salt = await bcrypt.genSalt(10);
+    const hash = await bcrypt.hash(newPassword, salt);
+    if (idx >= 0) {
+      accounts[idx].password_hash = hash;
+      await writeAuth(accounts);
+      return true;
+    } else {
+      accounts.push({
+        id: Date.now(),
+        name: emailOrUsername,
+        email: needle,
+        password_hash: hash,
+      });
+      await writeAuth(accounts);
+      return true;
+    }
+  },
 };

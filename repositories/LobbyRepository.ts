@@ -4,7 +4,7 @@ import {
   extractExaminationCode,
   OfflineExamRepository,
 } from '@/services/offlineExamRepository';
-import { OfflineStore, computePackHash } from '@/services/offlineStore';
+import { OfflineStore, computePackHash, computePackHashAsync } from '@/services/offlineStore';
 import { PeerExamClient } from '@/services/peerExamClient';
 import { parsePeerQr, PeerExamServer } from '@/services/peerExamServer';
 import { appStorage } from '@/services/storage';
@@ -407,6 +407,7 @@ export const LobbyRepository = {
   async verifyExaminationCode(rawCode: string): Promise<ExamCodeValidation> {
     // Peer QR: the proctor phone is the exam server. Its LAN address travels in
     // the QR, so no Laravel and no pack on this phone are needed.
+    const isPeerPayload = rawCode.trim().startsWith('{') && rawCode.includes('"metcc_peer"');
     const peer = parsePeerQr(rawCode);
     if (peer) {
       await PeerExamClient.setTarget(peer);
@@ -427,26 +428,55 @@ export const LobbyRepository = {
       };
     }
 
+    if (isPeerPayload) {
+      throw new Error('Invalid or unreadable Proctor examination QR. Please scan again.');
+    }
+
     const code = extractExaminationCode(rawCode);
+
+    // If there is an active peer target, resolve via PeerExamClient
+    if (await PeerExamClient.isActive()) {
+      try {
+        const resolved = await PeerExamClient.request<{
+          schedule: ExamCodeValidation['schedule'];
+          session: ExamCodeValidation['session'];
+          examinationCode: string;
+        }>('/resolve', { method: 'POST', body: { code } });
+
+        await setStoredCode(resolved.examinationCode || code);
+        return {
+          valid: true,
+          message: 'Connected to the proctor phone.',
+          schedule: resolved.schedule,
+          session: resolved.session,
+          examinationCode: resolved.examinationCode || code,
+        };
+      } catch (err) {
+        console.warn('[LobbyRepository] Peer resolve failed:', err);
+      }
+    }
 
     // A stale peer target must not hijack a plain code entered later.
     await PeerExamClient.clear();
 
-    // Offline-first: cached pack on this phone (no room PC / no internet).
-    const offline = await OfflineExamRepository.resolveOfflineCode(code);
-    if (offline) {
-      const canonical = offline.examinationCode || code;
-      await setStoredCode(canonical);
-      await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, offline.schedule.id);
-      await appStorage.setItem(STORAGE_KEYS.offlineExamCode, canonical);
-      await OfflineStore.setOfflineMode(true);
-      return {
-        valid: true,
-        message: offline.message,
-        schedule: offline.schedule as ExamCodeValidation['schedule'],
-        session: offline.session as ExamCodeValidation['session'],
-        examinationCode: canonical,
-      };
+    // Only Proctor role can resolve offline codes locally without LAN peer server
+    const isProctorUser = Boolean(await appStorage.getItem(STORAGE_KEYS.proctorToken));
+    if (isProctorUser) {
+      const offline = await OfflineExamRepository.resolveOfflineCode(code);
+      if (offline) {
+        const canonical = offline.examinationCode || code;
+        await setStoredCode(canonical);
+        await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, offline.schedule.id);
+        await appStorage.setItem(STORAGE_KEYS.offlineExamCode, canonical);
+        await OfflineStore.setOfflineMode(true);
+        return {
+          valid: true,
+          message: offline.message,
+          schedule: offline.schedule as ExamCodeValidation['schedule'],
+          session: offline.session as ExamCodeValidation['session'],
+          examinationCode: canonical,
+        };
+      }
     }
 
     const json = await apiRequest<{
@@ -492,8 +522,6 @@ export const LobbyRepository = {
     if (!code) throw new Error('Missing examination code. Scan QR again.');
 
     if (await PeerExamClient.isActive()) {
-      const studentPack = await OfflineStore.getPack();
-      const studentPackHash = computePackHash(studentPack);
       const response = await PeerExamClient.request<{
         classification?: 'valid' | 'wrong_schedule';
         message?: string;
@@ -504,7 +532,6 @@ export const LobbyRepository = {
         body: {
           code,
           passkey: passkey.trim().toUpperCase(),
-          student_pack_hash: studentPackHash,
         },
       });
       if (response.classification === 'wrong_schedule') {
@@ -624,8 +651,7 @@ export const LobbyRepository = {
     if (!code) throw new Error('Missing examination code. Scan QR again.');
 
     if (await PeerExamClient.isActive()) {
-      const studentPack = await OfflineStore.getPack();
-      const studentPackHash = computePackHash(studentPack);
+      const preloadedHash = (await appStorage.getItem('tcc.student.preload.sha256')) || '';
       const joined = await PeerExamClient.request<{
         registration_id: number;
         participation_token: string;
@@ -636,7 +662,9 @@ export const LobbyRepository = {
           code,
           passkey: passkey.trim().toUpperCase(),
           gmail: student.email || undefined,
-          student_pack_hash: studentPackHash,
+          student_pack_hash: preloadedHash,
+          package_hash: preloadedHash,
+          is_ready: Boolean(preloadedHash),
         },
       });
 

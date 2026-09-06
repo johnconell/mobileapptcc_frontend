@@ -153,9 +153,21 @@ export function selectedQuestions(pack: OfflinePack): Array<{
   correct_answer: string;
   category?: string;
 }> {
-  const bank =
-    pack.question_banks.find((b) => b.is_active) ?? pack.question_banks[0];
+  if (!pack.question_banks || !pack.question_banks.length) return [];
+
+  // 1. Try to find the bank explicitly marked active that has questions
+  let bank = pack.question_banks.find(
+    (b) => Boolean(b.is_active) && (b.subjects ?? []).some((s) => (s.questions ?? []).length > 0),
+  );
+
+  // 2. Fallback: find any bank with questions
+  if (!bank) {
+    bank =
+      pack.question_banks.find((b) => (b.subjects ?? []).some((s) => (s.questions ?? []).length > 0)) ??
+      pack.question_banks[0];
+  }
   if (!bank) return [];
+
   const rows: Array<{
     id: number;
     stem: string;
@@ -163,6 +175,7 @@ export function selectedQuestions(pack: OfflinePack): Array<{
     correct_answer: string;
     category?: string;
   }> = [];
+
   for (const subject of bank.subjects ?? []) {
     for (const q of subject.questions ?? []) {
       if (q.is_selected_for_exam === false) continue;
@@ -176,6 +189,23 @@ export function selectedQuestions(pack: OfflinePack): Array<{
       });
     }
   }
+
+  // 3. Fallback: if no questions had is_selected_for_exam explicitly true, include active questions
+  if (rows.length === 0) {
+    for (const subject of bank.subjects ?? []) {
+      for (const q of subject.questions ?? []) {
+        if (q.status && q.status !== 'active') continue;
+        rows.push({
+          id: q.id,
+          stem: q.stem,
+          options: q.options,
+          correct_answer: q.correct_answer,
+          category: subject.name,
+        });
+      }
+    }
+  }
+
   return rows;
 }
 

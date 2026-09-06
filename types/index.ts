@@ -142,6 +142,7 @@ export interface LobbyStudent {
   /** Proctor-only: 6-digit PIN shown after disconnect. */
   reconnectCode?: string | null;
   reconnectCodeExpiresAt?: string | null;
+  isReady?: boolean;
 }
 
 export interface LobbySnapshot {
@@ -157,6 +158,8 @@ export interface LobbySnapshot {
   connectedCount: number;
   notYetConnectedCount: number;
   waitingCount: number;
+  readyCount?: number;
+  notReadyCount?: number;
   takingCount: number;
   disconnectedCount?: number;
   finishedCount: number;

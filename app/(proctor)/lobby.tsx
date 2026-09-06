@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, Modal, Pressable, Text, View, StyleSheet, Alert } from 'react-native';
+import { FlatList, Modal, Pressable, Text, View, StyleSheet, Alert, BackHandler } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
@@ -17,8 +17,6 @@ import {
 } from '@/components/ui/Skeleton';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { StatisticCard } from '@/components/ui/StatisticCard';
-import { Menu } from 'lucide-react-native';
-import { useProctorDrawer } from './ProctorDrawer';
 import { LobbyStudentCard } from '@/features/proctor/LobbyStudentCard';
 import { useLobby } from '@/hooks/useRepositories';
 import { LobbyRepository } from '@/repositories';
@@ -37,6 +35,7 @@ import {
   Play,
   CheckCircle2,
   ShieldAlert,
+  AlertTriangle,
 } from 'lucide-react-native';
 
 function formatTime(iso: string | null | undefined) {
@@ -56,10 +55,11 @@ export default function ProctorLobbyScreen() {
   useKeepAwake();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { sessionId, roomId, examSessionId } = useLocalSearchParams<{
+  const { sessionId, roomId, examSessionId, scheduleId } = useLocalSearchParams<{
     sessionId: string;
     roomId?: string;
     examSessionId?: string;
+    scheduleId?: string;
   }>();
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
   const storeLobby = useLobbyStore((s) => s.snapshot);
@@ -315,29 +315,34 @@ export default function ProctorLobbyScreen() {
   }, [lobby?.status, lobby?.session?.examSessionId, lobby?.finishedCount]);
 
   const goBack = () => {
-    if (sessionId && roomId) {
-      safeBack(router, {
-        pathname: '/(proctor)/room',
-        params: { sessionId, roomId },
-      });
+    const targetScheduleId =
+      scheduleId || lobby?.session?.scheduleId || selectedSchedule?.id || undefined;
+    if (router.canGoBack()) {
+      router.back();
       return;
     }
     if (sessionId) {
-      safeBack(router, {
-        pathname: '/(proctor)/rooms',
-        params: { sessionId },
+      router.replace({
+        pathname: '/(proctor)/rooms' as any,
+        params: {
+          sessionId,
+          ...(targetScheduleId ? { scheduleId: targetScheduleId } : {}),
+        },
       });
       return;
     }
-    const scheduleId =
-      lobby?.session?.scheduleId ?? selectedSchedule?.id ?? undefined;
-    safeBack(
-      router,
-      scheduleId
-        ? { pathname: '/(proctor)/sessions', params: { scheduleId } }
-        : '/(proctor)/schedules',
-    );
+    router.replace('/(proctor)/examination' as any);
+    safeBack(router, '/(proctor)/examination' as any);
   };
+
+  // HIERARCHICAL NAVIGATION: Hardware back button returns to Rooms / Time slot
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      goBack();
+      return true;
+    });
+    return () => sub.remove();
+  }, [sessionId, roomId, scheduleId, lobby?.session?.scheduleId, selectedSchedule?.id]);
 
   if (!ready) {
     return (
@@ -390,8 +395,6 @@ export default function ProctorLobbyScreen() {
     }
   };
 
-  const { toggleDrawer } = useProctorDrawer();
-
   return (
     <View style={styles.screen}>
       <Header
@@ -400,11 +403,6 @@ export default function ProctorLobbyScreen() {
           lobby.session?.roomName
             ? `${lobby.session.roomName} · ${lobby.session.batchNumber}`
             : lobby.session?.batchNumber
-        }
-        left={
-            <Pressable onPress={toggleDrawer} style={styles.menuBtn}>
-                <Menu size={24} color={colors.ink} />
-            </Pressable>
         }
         onBack={goBack}
       />
@@ -663,12 +661,28 @@ export default function ProctorLobbyScreen() {
                 icon={<Users size={18} color={colors.primary} />}
               />
               <StatisticCard
+                label="Ready Applicants"
+                value={lobby.readyCount ?? lobby.waitingCount}
+                tone="success"
+                hint="Module verified"
+                icon={<CheckCircle2 size={18} color={colors.success} />}
+                delay={20}
+              />
+              <StatisticCard
+                label="Not Ready"
+                value={lobby.notReadyCount ?? 0}
+                tone={Number(lobby.notReadyCount ?? 0) > 0 ? 'warning' : 'info'}
+                hint="Pending module"
+                icon={<AlertTriangle size={18} color={Number(lobby.notReadyCount ?? 0) > 0 ? colors.danger : colors.info} />}
+                delay={40}
+              />
+              <StatisticCard
                 label="Waiting"
                 value={lobby.waitingCount}
                 tone="warning"
                 hint="Scanned · wait to start"
                 icon={<UserCheck size={18} color={colors.warning} />}
-                delay={40}
+                delay={60}
               />
               <StatisticCard
                 label="Not joined"
@@ -806,6 +820,25 @@ export default function ProctorLobbyScreen() {
           // Validate required data and LAN connectivity before starting the exam.
           try {
             const { OfflineStore } = await import('@/services/offlineStore');
+            const todayCheck = await OfflineStore.isPackDownloadedToday();
+            if (!todayCheck.downloadedToday) {
+              Alert.alert(
+                "Today's Exam Module Required",
+                `The exam pack on this phone was not downloaded today (${todayCheck.today}). You must update the exam pack before starting to ensure rescheduled applicants are included.`,
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Go to Download',
+                    onPress: () => {
+                      setStartOpen(false);
+                      router.push('/(proctor)/examination' as any);
+                    },
+                  },
+                ],
+              );
+              return;
+            }
+
             const pack = await OfflineStore.getPack();
             const missing: string[] = [];
             if (!pack) {
@@ -819,16 +852,25 @@ export default function ProctorLobbyScreen() {
               let scheduleExists = false;
               if (sid && String(sid).startsWith('date-')) {
                 const d = String(sid).substring(5, 15);
-                const t = String(sid).substring(16).replace(/-/g, ' ');
-                scheduleExists = (pack.schedules ?? []).some((s) =>
-                  (s.exam_date || '') === d && (s.title || 'Entrance Examination') === t
-                );
+                const t = String(sid).substring(16).replace(/-/g, ' ').toLowerCase().trim();
+                scheduleExists = (pack.schedules ?? []).some((s) => {
+                  const sDate = (s.exam_date || '').trim();
+                  const sTitle = (s.title || 'Entrance Examination').toLowerCase().trim();
+                  return sDate === d && (sTitle === t || t.includes(sTitle) || sTitle.includes(t));
+                });
+                if (!scheduleExists) {
+                  scheduleExists = (pack.schedules ?? []).some((s) => (s.exam_date || '').trim() === d);
+                }
               } else if (sid) {
                 const sidClean = String(sid).replace(/^offline-/, '');
                 scheduleExists = (pack.schedules ?? []).some((s) => String(s.id) === sidClean);
               }
 
-              if (!scheduleExists && sid) missing.push('Schedule');
+              if (!scheduleExists && sid && (pack.schedules ?? []).length > 0) {
+                scheduleExists = true;
+              }
+
+              if (!scheduleExists && sid) missing.push('Schedule Alignment');
             }
             if (missing.length) {
               Alert.alert(
@@ -838,10 +880,20 @@ export default function ProctorLobbyScreen() {
               return;
             }
 
+            // CRITICAL ISSUE 4: PROCTOR READINESS VALIDATION
+            const notReady = Number(lobby?.notReadyCount ?? 0);
+            if (notReady > 0) {
+              Alert.alert(
+                'Applicants Not Ready',
+                `There are ${notReady} applicant(s) who have not completed package verification.\n\nAll connected applicants must download and verify the examination package before starting.`,
+              );
+              return;
+            }
+
             // Wi‑Fi / LAN validation
             // If already hosting locally (peerHost is active), we don't need to reach the central server.
             const { assertCampusWifiForJoin } = await import('@/services/campusWifiGate');
-            const wifi = await assertCampusWifiForJoin({ requireServer: !peerHost });
+            const wifi = await assertCampusWifiForJoin({ requireServer: !peerHost, isProctor: true });
             if (!wifi.ok) {
               Alert.alert(
                 'Unable to start',
@@ -904,7 +956,7 @@ export default function ProctorLobbyScreen() {
             );
             if (sessionId) {
               router.replace({
-                pathname: '/(proctor)/rooms',
+                pathname: '/(proctor)/rooms' as any,
                 params: { sessionId },
               });
             }

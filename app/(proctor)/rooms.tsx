@@ -1,109 +1,258 @@
-import React, { useEffect, useMemo } from 'react';
-import { Alert, FlatList, Pressable, Text, View, StyleSheet } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import {
+  FlatList,
+  Text,
+  View,
+  StyleSheet,
+  Pressable,
+  Modal,
+  Alert,
+  BackHandler,
+} from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { CheckCircle2, ChevronRight, DoorOpen, Users, UserRound, Menu } from 'lucide-react-native';
-import { Card } from '@/components/ui/Card';
-import { EmptyState } from '@/components/ui/EmptyState';
-import { Header } from '@/components/ui/Header';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  DoorOpen,
+  Users,
+  ChevronRight,
+  Layers,
+} from 'lucide-react-native';
+import { Header, Card, Button, EmptyState, StatusChip, Breadcrumbs } from '@/components/ui';
 import { SkeletonList } from '@/components/ui/Skeleton';
-import { StatusChip } from '@/components/ui/StatusChip';
-import { Button } from '@/components/ui/Button';
-import { useProctorDrawer } from './ProctorDrawer';
-import { useRooms, useSessions } from '@/hooks/useRepositories';
-import { AuthRepository } from '@/repositories';
+import { useRooms, useSchedules, useSessions } from '@/hooks/useRepositories';
+import { LobbyRepository } from '@/repositories';
+import { QUERY_KEYS } from '@/constants';
 import { useProctorStore } from '@/stores';
-import { STATUS_LABELS } from '@/constants';
-import { colors } from '@/theme';
+import { colors, shadows } from '@/theme';
 import { safeBack } from '@/utils';
+import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 import type { ExamRoom } from '@/types';
 
-function statusLabel(status: string) {
-  if (status === 'idle') return 'Closed';
-  return STATUS_LABELS[status as keyof typeof STATUS_LABELS] ?? status;
-}
-
-function statusTone(status: string): 'default' | 'success' | 'warning' | 'danger' | 'info' | 'primary' {
-  if (status === 'lobby_open') return 'warning';
-  if (status === 'in_progress') return 'success';
+function roomTone(status: string): 'success' | 'warning' | 'danger' | 'default' {
+  if (status === 'lobby_open' || status === 'in_progress') return 'success';
   if (status === 'ended') return 'danger';
   return 'default';
 }
 
-function roomAccent(status: string) {
-  if (status === 'lobby_open') return colors.warning;
-  if (status === 'in_progress') return colors.success;
-  if (status === 'ended') return colors.danger;
-  return colors.inkMuted;
+function roomStatusLabel(status: string): string {
+  if (status === 'lobby_open') return 'Lobby Open';
+  if (status === 'in_progress') return 'In Progress';
+  if (status === 'ended') return 'Ended';
+  return 'Closed / Idle';
 }
 
 export default function RoomsScreen() {
   const router = useRouter();
-  const { sessionId } = useLocalSearchParams<{ sessionId: string }>();
-  const selectedSession = useProctorStore((s) => s.selectedSession);
-  const reset = useProctorStore((s) => s.reset);
-  const sessionsQuery = useSessions(selectedSession?.scheduleId);
-  const roomsQuery = useRooms(sessionId, Boolean(sessionId));
+  const queryClient = useQueryClient();
+  const { sessionId, scheduleId } = useLocalSearchParams<{
+    sessionId?: string;
+    scheduleId?: string;
+  }>();
 
-  useEffect(() => {
-    if (!roomsQuery.isError) return;
-    const err = roomsQuery.error as { status?: number } | null;
-    if (err?.status === 401 || err?.status === 403) {
-      void AuthRepository.logout().then(() => {
-        reset();
-        router.replace('/(proctor)/login');
-      });
-    }
-  }, [roomsQuery.isError, roomsQuery.error, reset, router]);
+  const selectedSession = useProctorStore((s) => s.selectedSession);
+  const selectedSchedule = useProctorStore((s) => s.selectedSchedule);
+  const schedulesQuery = useSchedules();
+  const sessionsQuery = useSessions(scheduleId);
+  const roomsQuery = useRooms(sessionId);
+
+  const [selectedRoom, setSelectedRoom] = useState<ExamRoom | null>(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const session =
     selectedSession ??
     sessionsQuery.data?.find((item) => item.id === sessionId) ??
     null;
 
-  const confirmLogout = () => {
-    Alert.alert('Are you sure you want to log out?', undefined, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Yes, Logout',
-        style: 'destructive',
-        onPress: async () => {
-          await AuthRepository.logout();
-          reset();
-          router.replace('/(proctor)/login');
-        },
-      },
-    ]);
+  const schedule =
+    selectedSchedule ??
+    schedulesQuery.data?.find((item) => item.id === (scheduleId ?? session?.scheduleId)) ??
+    null;
+
+  const scheduleName =
+    schedule?.name.replace(/Entrance\s+Examination/gi, '').trim() ||
+    schedule?.name ||
+    'Morning Schedule';
+
+  const sessionLabel = session?.timeLabel ?? 'Time Slot';
+
+  // STEP 3: Dynamic route-aware breadcrumbs: Examination > Morning Schedule > 9:30 AM - 10:30 AM
+  const breadcrumbs = [
+    {
+      label: 'Examination',
+      onPress: () => router.replace('/(proctor)/examination' as any),
+    },
+    {
+      label: scheduleName,
+      onPress: () => router.replace('/(proctor)/examination' as any),
+    },
+    {
+      label: sessionLabel,
+    },
+  ];
+
+  // HIERARCHICAL NAVIGATION: Android hardware back button returns to Examination tab
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      safeBack(router, '/(proctor)/examination' as any);
+      return true;
+    });
+    return () => sub.remove();
+  }, [router]);
+
+  /**
+   * STEP 6 & 7: Comprehensive Validation and Direct Navigation to Existing Lobby
+   */
+  const handleOpenRoom = async () => {
+    if (!selectedRoom || !sessionId) {
+      Alert.alert('Unable to Open Room', 'Missing room or session identification.');
+      return;
+    }
+
+    const isEnded = selectedRoom.status === 'ended';
+    const isOpen = selectedRoom.status === 'lobby_open' || selectedRoom.status === 'in_progress';
+
+    // Query parameters for the existing lobby
+    const query = new URLSearchParams({
+      sessionId,
+      roomId: selectedRoom.id,
+      scheduleId: scheduleId ?? '',
+      roomName: selectedRoom.roomName,
+      roomCode: selectedRoom.examinationCode ?? '',
+      roomStatus: selectedRoom.status,
+      ...(selectedRoom.examSessionId != null ? { examSessionId: String(selectedRoom.examSessionId) } : {}),
+    }).toString();
+
+    const targetRoute = `/(proctor)/lobby?${query}`;
+
+    // Ended room: view-only mode for results and sync (no new lobby required)
+    if (isEnded && !isOpen) {
+      setModalVisible(false);
+      router.push(targetRoute as any);
+      return;
+    }
+
+    setBusy(true);
+    try {
+      // 1. Verify Schedule & Time slot exist
+      if (!session) {
+        Alert.alert('Validation Error', 'The selected examination time slot could not be found.');
+        return;
+      }
+
+      // 2. Verify Examination Pack was downloaded TODAY (required for rescheduled applicants)
+      const { OfflineStore } = await import('@/services/offlineStore');
+      const todayCheck = await OfflineStore.isPackDownloadedToday();
+      if (!todayCheck.downloadedToday) {
+        Alert.alert(
+          "Download Today's Exam Module",
+          `You must download today's latest examination module and passkeys before opening an examination room.\n\nThis ensures that any applicants who were rescheduled to today (${todayCheck.today}) are included in the roster.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Go to Download',
+              onPress: () => {
+                setModalVisible(false);
+                router.push('/(proctor)/examination' as any);
+              },
+            },
+          ],
+        );
+        return;
+      }
+
+      const pack = await OfflineStore.getPack();
+      const missing: string[] = [];
+
+      if (!pack) {
+        missing.push('Offline Exam Pack');
+      } else {
+        // Verify question bank has questions
+        const hasQuestions = (pack.question_banks ?? []).some((b) =>
+          (b.subjects ?? []).some((s) => (s.questions ?? []).length > 0),
+        );
+        if (!hasQuestions) missing.push('Question Bank / Exam Items');
+
+        // Verify schedule exists in pack
+        const sid = session?.scheduleId ?? null;
+        let scheduleExists = false;
+        if (sid && String(sid).startsWith('date-')) {
+          const d = String(sid).substring(5, 15);
+          const t = String(sid).substring(16).replace(/-/g, ' ').toLowerCase().trim();
+          scheduleExists = (pack.schedules ?? []).some((s) => {
+            const sDate = (s.exam_date || '').trim();
+            const sTitle = (s.title || 'Entrance Examination').toLowerCase().trim();
+            return sDate === d && (sTitle === t || t.includes(sTitle) || sTitle.includes(t));
+          });
+          if (!scheduleExists) {
+            scheduleExists = (pack.schedules ?? []).some((s) => (s.exam_date || '').trim() === d);
+          }
+        } else if (sid) {
+          const sidClean = String(sid).replace(/^offline-/, '');
+          scheduleExists = (pack.schedules ?? []).some((s) => String(s.id) === sidClean);
+        }
+        if (!scheduleExists && sid && (pack.schedules ?? []).length > 0) {
+          // If schedule exists in pack, consider it aligned
+          scheduleExists = true;
+        }
+        if (!scheduleExists && sid) missing.push('Schedule Alignment');
+      }
+
+      if (missing.length > 0) {
+        Alert.alert(
+          'System Update Required',
+          `The following items are outdated or missing:\n\n• ${missing.join('\n• ')}\n\nPlease synchronize the examination pack before opening the room.`,
+        );
+        return;
+      }
+
+      // 3. Verify Wi-Fi / Campus LAN Network
+      const { PeerExamClient } = await import('@/services/peerExamClient');
+      await PeerExamClient.clear(); // Clear leftover peer client targets
+
+      const hasPack = await OfflineStore.hasPack();
+      const wifiCheck = await assertCampusWifiForJoin({ requireServer: !hasPack, isProctor: true });
+
+      if (!wifiCheck.ok) {
+        Alert.alert(
+          'Unable to Open Room',
+          wifiCheck.message ?? 'This phone has no Wi‑Fi connection. Connect to the examination Wi‑Fi or enable hotspot and try again.',
+        );
+        return;
+      }
+
+      // 4. Initialize / Ensure Lobby via LobbyRepository
+      const snapshot = await LobbyRepository.ensureLobby(sessionId, undefined, selectedRoom.id);
+      console.log('Room opened successfully via LobbyRepository:', snapshot);
+
+      // 5. Invalidate rooms query so cached room status updates immediately
+      await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.rooms(sessionId) });
+
+      // 6. Navigate directly to the EXISTING Examination Lobby
+      setModalVisible(false);
+      router.push(targetRoute as any);
+    } catch (error) {
+      console.error('Failed to open room lobby:', error);
+      Alert.alert(
+        'Unable to Open Room',
+        error instanceof Error ? error.message : 'Please check your connection and try again.',
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const rooms = roomsQuery.data ?? [];
-  const batchDone = useMemo(
-    () => rooms.length > 0 && rooms.every((r) => r.status === 'ended'),
-    [rooms],
-  );
-  const endedCount = rooms.filter((r) => r.status === 'ended').length;
-
   if (roomsQuery.isLoading) {
-    const { toggleDrawer } = useProctorDrawer();
-
-  return (
+    return (
       <View style={styles.screen}>
         <Header
-          title="Examination Rooms"
-          subtitle={session?.timeLabel ?? 'Loading…'}
-          left={
-            <Pressable onPress={toggleDrawer} style={styles.menuBtn}>
-                <Menu size={24} color={colors.ink} />
-            </Pressable>
-          }
-          onBack={() =>
-            safeBack(router, {
-              pathname: '/(proctor)/sessions',
-              params: { scheduleId: session?.scheduleId ?? '' },
-            })
-          }
+          title="Select Examination Room"
+          subtitle={session?.timeLabel ?? 'Loading rooms…'}
+          onBack={() => safeBack(router, '/(proctor)/examination' as any)}
         />
+        <Breadcrumbs segments={breadcrumbs} />
         <View style={styles.list}>
-          <SkeletonList rows={5} showAvatar={false} />
+          <SkeletonList rows={4} showAvatar={false} />
         </View>
       </View>
     );
@@ -112,155 +261,302 @@ export default function RoomsScreen() {
   return (
     <View style={styles.screen}>
       <Header
-        title="Examination Rooms"
-        subtitle={session?.timeLabel ?? 'Select a room'}
-        right={
-          <Button
-            title="Logout"
-            variant="ghost"
-            size="sm"
-            onPress={confirmLogout}
-          />
-        }
-        onBack={() =>
-          safeBack(router, {
-            pathname: '/(proctor)/sessions',
-            params: { scheduleId: session?.scheduleId ?? '' },
-          })
-        }
+        title="Select Examination Room"
+        subtitle={session ? `${session.timeLabel} · ${session.venue}` : 'Available Rooms'}
+        onBack={() => safeBack(router, '/(proctor)/examination' as any)}
       />
+
+      {/* STEP 3: DYNAMIC BREADCRUMBS */}
+      <Breadcrumbs segments={breadcrumbs} />
+
+      {/* STEP 4: ROOM SELECTION LIST */}
       <FlatList
-        data={rooms}
+        data={roomsQuery.data ?? []}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View style={styles.headerBlock}>
-            {batchDone ? (
-              <View style={styles.batchDoneBanner}>
-                <CheckCircle2 size={22} color={colors.success} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.batchDoneTitle}>Batch complete</Text>
-                  <Text style={styles.batchDoneBody}>
-                    All rooms in this session have finished the examination.
-                  </Text>
-                </View>
-              </View>
-            ) : (
-              <Text style={styles.intro}>
-                Each room has its own random letter+number code and QR. Progress:{' '}
-                {endedCount}/{rooms.length} rooms done.
-              </Text>
-            )}
+            <Text style={styles.intro} maxFontSizeMultiplier={1.2}>
+              Available Rooms for this time slot. Tap any room to open the examination room modal and initialize the lobby.
+            </Text>
           </View>
         }
-        ListEmptyComponent={<EmptyState title="No rooms found" />}
-        renderItem={({ item, index }) => (
-          <RoomCard
-            room={item}
-            delay={index * 60}
-            onPress={() => {
-              router.push({
-                pathname: '/(proctor)/room',
-                params: { sessionId: sessionId!, roomId: item.id },
-              });
-            }}
+        ListEmptyComponent={
+          <EmptyState
+            title="No examination rooms available"
+            description="There are no rooms assigned to this schedule and time slot."
           />
-        )}
+        }
+        renderItem={({ item, index }) => {
+          const isOpen = item.status === 'lobby_open' || item.status === 'in_progress';
+          return (
+            <Pressable
+              onPress={() => {
+                setSelectedRoom(item);
+                setModalVisible(true);
+              }}
+            >
+              <Card delay={index * 60} style={styles.roomCard}>
+                <View style={styles.row}>
+                  <View
+                    style={[
+                      styles.iconWrap,
+                      { backgroundColor: isOpen ? '#E6F4EA' : '#F1F5F9' },
+                    ]}
+                  >
+                    <DoorOpen size={24} color={isOpen ? '#28A745' : '#64748B'} />
+                  </View>
+
+                  <View style={styles.meta}>
+                    <Text style={styles.roomName} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                      {item.roomName}
+                    </Text>
+
+                    <View style={styles.infoRow}>
+                      <Users size={14} color="#64748B" />
+                      <Text style={styles.capacity} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                        Capacity: {item.capacity} Applicants
+                      </Text>
+                    </View>
+
+                    <View style={styles.infoRow}>
+                      <Layers size={14} color="#0055A4" />
+                      <Text style={styles.applicants} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                        Current Applicants: {item.connectedCount ?? 0}
+                      </Text>
+                    </View>
+
+                    <View style={styles.badgeRow}>
+                      <StatusChip
+                        label={roomStatusLabel(item.status)}
+                        tone={roomTone(item.status)}
+                      />
+                    </View>
+                  </View>
+
+                  <ChevronRight size={22} color={colors.inkMuted} style={{ flexShrink: 0 }} />
+                </View>
+              </Card>
+            </Pressable>
+          );
+        }}
       />
+
+      {/* STEP 5: OPEN EXAMINATION ROOM MODAL */}
+      <Modal
+        transparent
+        visible={modalVisible}
+        animationType="fade"
+        onRequestClose={() => !busy && setModalVisible(false)}
+      >
+        <View style={styles.overlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => !busy && setModalVisible(false)}
+          />
+
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <View style={styles.modalIconWrap}>
+                <DoorOpen size={24} color="#003366" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalTitle} maxFontSizeMultiplier={1.2}>
+                  Open Examination Room
+                </Text>
+                <Text style={styles.modalSubtitle} maxFontSizeMultiplier={1.15}>
+                  Confirm room details to launch the lobby
+                </Text>
+              </View>
+            </View>
+
+            {/* DETAIL TABLE */}
+            <View style={styles.detailTable}>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Room</Text>
+                <Text style={styles.detailValueBold} maxFontSizeMultiplier={1.2}>
+                  {selectedRoom?.roomName || 'Room A'}
+                </Text>
+              </View>
+
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Schedule</Text>
+                <Text style={styles.detailValue} maxFontSizeMultiplier={1.15}>
+                  {scheduleName}
+                </Text>
+              </View>
+
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Time</Text>
+                <Text style={styles.detailValue} maxFontSizeMultiplier={1.15}>
+                  {session?.timeLabel || '9:30 AM - 10:30 AM'}
+                </Text>
+              </View>
+
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Capacity</Text>
+                <Text style={styles.detailValue} maxFontSizeMultiplier={1.15}>
+                  {selectedRoom?.capacity ?? 60} Applicants
+                </Text>
+              </View>
+
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Status</Text>
+                <StatusChip
+                  label={roomStatusLabel(selectedRoom?.status || 'idle')}
+                  tone={roomTone(selectedRoom?.status || 'idle')}
+                />
+              </View>
+            </View>
+
+            <Text style={styles.modalNotice} maxFontSizeMultiplier={1.15}>
+              Opening this room will generate the examination QR code, start the local Wi-Fi peer server, and allow examinees to enter the lobby.
+            </Text>
+
+            {/* MODAL ACTIONS: [Cancel] [Open Room] */}
+            <View style={styles.modalActions}>
+              <Button
+                title="Cancel"
+                variant="outline"
+                disabled={busy}
+                onPress={() => setModalVisible(false)}
+                style={{ flex: 1 }}
+              />
+              <Button
+                title={
+                  selectedRoom?.status === 'lobby_open' || selectedRoom?.status === 'in_progress'
+                    ? 'Enter Lobby'
+                    : selectedRoom?.status === 'ended'
+                      ? 'View Results'
+                      : 'Open Room'
+                }
+                variant="primary"
+                loading={busy}
+                onPress={handleOpenRoom}
+                style={{
+                  ...styles.openButton,
+                  backgroundColor:
+                    selectedRoom?.status === 'ended' ? '#003366' : '#28A745',
+                }}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
-function RoomCard({
-  room,
-  onPress,
-  delay = 0,
-}: {
-  room: ExamRoom;
-  onPress: () => void;
-  delay?: number;
-}) {
-  const accent = roomAccent(room.status);
-
-  return (
-    <Pressable onPress={onPress}>
-      <Card delay={delay} style={{ ...styles.card, borderColor: accent }}>
-        <View style={[styles.accent, { backgroundColor: accent }]} />
-        <View style={styles.row}>
-          <View style={styles.meta}>
-            <View style={styles.titleRow}>
-              <DoorOpen size={18} color={accent} />
-              <Text style={styles.roomName}>{room.roomName}</Text>
-            </View>
-            <StatusChip label={statusLabel(room.status)} tone={statusTone(room.status)} />
-            <View style={styles.line}>
-              <Users size={14} color={colors.primary} />
-              <Text style={styles.lineText}>
-                Capacity {room.capacity}
-                {room.connectedCount > 0 ? ` · ${room.connectedCount} connected` : ''}
-              </Text>
-            </View>
-            {room.examinationCode ? (
-              <Text style={styles.codeLine}>Code: {room.examinationCode}</Text>
-            ) : room.status === 'ended' ? (
-              <Text style={styles.hint}>Examination finished</Text>
-            ) : (
-              <Text style={styles.hint}>No code yet — open this room’s lobby</Text>
-            )}
-            {room.proctorName ? (
-              <View style={styles.line}>
-                <UserRound size={14} color={colors.primary} />
-                <Text style={styles.lineText}>Proctored by: {room.proctorName}</Text>
-              </View>
-            ) : null}
-          </View>
-          <ChevronRight size={22} color={colors.inkMuted} />
-        </View>
-      </Card>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.background },
-  list: { padding: 20, gap: 12, paddingBottom: 40 },
-  headerBlock: { marginBottom: 4, gap: 10 },
-  intro: { fontSize: 14, color: colors.inkSecondary, lineHeight: 21 },
-  batchDoneBanner: {
+  screen: { flex: 1, backgroundColor: '#F5F7FA' },
+  list: { padding: 16, gap: 12, paddingBottom: 40 },
+  headerBlock: { marginBottom: 4 },
+  intro: { fontSize: 13, lineHeight: 20, color: '#64748B', fontWeight: '500' },
+  roomCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    ...shadows.card,
+  },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  iconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  meta: { flex: 1, gap: 4 },
+  roomName: { fontSize: 17, fontWeight: '800', color: '#003366' },
+  infoRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  capacity: { fontSize: 13, fontWeight: '600', color: '#64748B' },
+  applicants: { fontSize: 13, fontWeight: '700', color: '#0055A4' },
+  badgeRow: { flexDirection: 'row', marginTop: 4 },
+
+  // MODAL STYLING
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 16,
+    ...shadows.card,
+  },
+  modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    padding: 14,
-    borderRadius: 14,
-    backgroundColor: '#DCFCE7',
-    borderWidth: 1,
-    borderColor: '#86EFAC',
   },
-  batchDoneTitle: { fontSize: 15, fontWeight: '800', color: colors.success },
-  batchDoneBody: { fontSize: 13, color: colors.inkSecondary, fontWeight: '500', marginTop: 2 },
-  card: { padding: 0, overflow: 'hidden', borderWidth: 1.5 },
-  accent: { height: 5, width: '100%' },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16 },
-  meta: { flex: 1, gap: 8 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  roomName: { fontSize: 17, fontWeight: '700', color: colors.ink },
-  line: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  lineText: { fontSize: 13, color: colors.inkSecondary, fontWeight: '500', flex: 1 },
-  codeLine: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: colors.primary,
-    letterSpacing: 1,
-  },
-  hint: { fontSize: 12, color: colors.inkMuted, fontWeight: '500' },
-  menuBtn: {
-    width: 40,
-    height: 40,
+  modalIconWrap: {
+    width: 44,
+    height: 44,
     borderRadius: 12,
+    backgroundColor: '#EBF3FE',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.surface,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#003366',
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  detailTable: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 14,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#E2E8F0',
+    gap: 10,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  detailLabel: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  detailValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  detailValueBold: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#003366',
+  },
+  modalNotice: {
+    fontSize: 12,
+    color: '#64748B',
+    lineHeight: 18,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 4,
+  },
+  openButton: {
+    flex: 1,
   },
 });

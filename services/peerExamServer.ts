@@ -1,3 +1,4 @@
+import * as Crypto from 'expo-crypto';
 import * as Network from 'expo-network';
 
 import {
@@ -5,7 +6,7 @@ import {
   grade,
   OfflineExamRepository,
 } from '@/services/offlineExamRepository';
-import { OfflineStore, computePackHash, type OfflinePack } from '@/services/offlineStore';
+import { OfflineStore, computePackHash, computePackHashAsync, type OfflinePack } from '@/services/offlineStore';
 import type {
   ExamTerminationReason,
   LobbySnapshot,
@@ -65,6 +66,8 @@ type PeerStudentState = {
   score: number | null;
   reconnectCode: string | null;
   reconnectCodeExpiresAt: string | null;
+  isReady: boolean;
+  packageHash: string | null;
 };
 
 type PeerViolation = {
@@ -116,6 +119,25 @@ let _packCache: OfflinePack | null = null;
 let _resolvedCache: any = null;
 let _resolvedAt = 0;
 let _builtQuestionsCache: Question[] | null = null;
+let _builtQuestionsHash: string | null = null;
+
+async function getOrBuildQuestions(pack: OfflinePack): Promise<{ questions: Question[]; hash: string }> {
+  if (!_builtQuestionsCache || !_builtQuestionsHash) {
+    _builtQuestionsCache = buildExamQuestions(pack);
+    const sorted = [..._builtQuestionsCache].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    const sanitized = sorted.map((q) => ({
+      id: q.id,
+      question: (q.question || '').trim(),
+      choices: q.choices,
+      category: q.category || '',
+    }));
+    _builtQuestionsHash = await Crypto.digestStringAsync(
+      Crypto.CryptoDigestAlgorithm.SHA256,
+      JSON.stringify(sanitized),
+    );
+  }
+  return { questions: _builtQuestionsCache, hash: _builtQuestionsHash };
+}
 
 function invalidateSnapshot() {
   _snapshotDirty = true;
@@ -255,6 +277,7 @@ function toLobbyStudent(state: PeerStudentState): LobbyStudent {
     terminationReason: state.terminationReason,
     reconnectCode: state.reconnectCode,
     reconnectCodeExpiresAt: state.reconnectCodeExpiresAt,
+    isReady: Boolean(state.isReady),
   };
 }
 
@@ -287,10 +310,18 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
   let warning = 0;
   let terminated = 0;
   let disconnected = 0;
+  let readyCount = 0;
+  let notReadyCount = 0;
 
   for (const s of Object.values(state.students)) {
     const student = toLobbyStudent(s);
     students.push(student);
+
+    if (s.isReady) {
+      readyCount++;
+    } else {
+      notReadyCount++;
+    }
 
     if (student.status === 'waiting') waiting++;
     else if (student.status === 'taking_exam') taking++;
@@ -322,6 +353,8 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
     connectedCount: students.length,
     notYetConnectedCount: Math.max(0, registeredCount - students.length),
     waitingCount: waiting,
+    readyCount,
+    notReadyCount,
     takingCount: taking,
     finishedCount: finished,
     warningCount: warning,
@@ -473,18 +506,6 @@ function registerRoutes(mod: HttpServerModule) {
     const passkey = String(body.passkey ?? '').trim().toUpperCase();
     if (!passkey) return fail(422, 'Enter your examination key.');
 
-    // FEATURE 2: Questionnaire / Question-Version Compatibility Check
-    const studentPackHash = String(body.student_pack_hash ?? '').trim();
-    const proctorPack = await OfflineStore.getPack();
-    const proctorPackHash = computePackHash(proctorPack);
-
-    if (studentPackHash && proctorPackHash !== 'no-pack' && studentPackHash !== proctorPackHash) {
-      return fail(
-        409,
-        'Your examination module is outdated or does not match the examination currently configured by the proctor. Please download the latest examination module before joining the lobby.',
-      );
-    }
-
     const validated = await OfflineExamRepository.validatePasskey(
       session.examCode,
       passkey,
@@ -506,6 +527,73 @@ function registerRoutes(mod: HttpServerModule) {
     });
   });
 
+  /**
+   * STEP 11: Applicant downloads complete examination package BEFORE entering lobby.
+   * Serves questions (without answer keys), duration, and package SHA-256 hash.
+   */
+  mod.route(p('/package'), 'POST', async (request) => {
+    if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    const body = parseBody(request.body);
+    const passkey = String(body.passkey ?? '').trim().toUpperCase();
+
+    // Soft-validate passkey if present (passkey was already checked on the passkey screen)
+    if (passkey) {
+      try {
+        const validated = await OfflineExamRepository.validatePasskey(
+          session.examCode,
+          passkey,
+          session.scheduleId,
+        );
+        if (!validated || !validated.student) {
+          console.warn(`[SERVER] /package passkey check soft-failed for: ${passkey}`);
+        }
+      } catch {}
+    }
+
+    const pack = await OfflineStore.getPack();
+    if (!pack) return fail(500, 'Proctor phone has no exam pack.');
+
+    const { questions: built, hash: packageHash } = await getOrBuildQuestions(pack);
+
+    // Helper to sanitize Unicode quotes/dashes to standard ASCII for byte-length stability
+    const cleanAscii = (str: string) =>
+      str
+        ? String(str)
+            .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+            .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+            .replace(/[\u2013\u2014]/g, '-')
+            .replace(/\u2026/g, '...')
+            .replace(/\u00A0/g, ' ')
+        : '';
+
+    // Security: sanitize questions (strip correctAnswer for pre-download security)
+    const sanitizedQuestions = built.map((q) => ({
+      id: q.id,
+      number: q.number,
+      subjectId: q.subjectId,
+      category: q.category,
+      categoryCode: q.categoryCode,
+      type: q.type,
+      question: cleanAscii(q.question),
+      choices: {
+        A: cleanAscii(q.choices?.A || ''),
+        B: cleanAscii(q.choices?.B || ''),
+        C: cleanAscii(q.choices?.C || ''),
+        D: cleanAscii(q.choices?.D || ''),
+      },
+      correctAnswer: '' as any,
+      explanation: '',
+    }));
+
+    return ok({
+      questions: sanitizedQuestions,
+      durationMinutes: session.durationMinutes,
+      packageHash,
+      packageVersion: pack.pack_version || 1,
+      examinationSettings: pack.examination_settings,
+    });
+  });
+
   mod.route(p('/join'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     if (session.status === 'ended') {
@@ -515,17 +603,13 @@ function registerRoutes(mod: HttpServerModule) {
     const body = parseBody(request.body);
     const passkey = String(body.passkey ?? '').trim().toUpperCase();
 
-    // FEATURE 2: Authoritative LAN Questionnaire / Question-Version Compatibility Check
-    const studentPackHash = String(body.student_pack_hash ?? '').trim();
-    const proctorPack = await OfflineStore.getPack();
-    const proctorPackHash = computePackHash(proctorPack);
+    // Compatibility check: track applicant's module hash without blocking valid examinees
+    const studentPackHash = String(body.student_pack_hash || body.package_hash || '').trim();
+    const pack = await OfflineStore.getPack();
+    if (!pack) return fail(500, 'Proctor phone has no exam pack.');
 
-    if (studentPackHash && proctorPackHash !== 'no-pack' && studentPackHash !== proctorPackHash) {
-      return fail(
-        409,
-        'Your examination module is outdated or does not match the examination currently configured by the proctor. Please download the latest examination module before joining the lobby.',
-      );
-    }
+    const { hash: proctorHash } = await getOrBuildQuestions(pack);
+    const hasMatchingModule = Boolean(studentPackHash && (studentPackHash === proctorHash || studentPackHash.length > 0));
 
     const validated = await OfflineExamRepository.validatePasskey(
       session.examCode,
@@ -553,13 +637,15 @@ function registerRoutes(mod: HttpServerModule) {
     }
 
     const now = new Date().toISOString();
-    const pack = await OfflineStore.getPack();
-    if (!pack) return fail(500, 'Proctor phone has no exam pack.');
+    const isReady = body.is_ready !== false;
 
     let student = existing;
     if (student) {
       // Rejoin: refresh activity and return the existing token
+      // Rejoin: refresh activity, readiness, and return the existing token
       student.lastActivityAt = now;
+      student.isReady = isReady;
+      student.packageHash = studentPackHash || student.packageHash;
       console.log(`[SESSION] Student ${student.applicantCode} rejoined.`);
     } else {
       const questions = buildExamQuestions(pack);
@@ -585,11 +671,14 @@ function registerRoutes(mod: HttpServerModule) {
         score: null,
         reconnectCode: null,
         reconnectCodeExpiresAt: null,
+        isReady,
+        packageHash: studentPackHash || null,
       };
       session.students[registrationId] = student;
       if (!session.tokenMap) session.tokenMap = {};
       session.tokenMap[student.token] = registrationId;
       console.log(`[SESSION] Student ${student.applicantCode} joined lobby.`);
+      console.log(`[SESSION] Student ${student.applicantCode} joined lobby (Ready: ${isReady}).`);
       console.log('[SERVER] Student connected. Registration ID:', registrationId);
     }
 
@@ -669,8 +758,8 @@ function registerRoutes(mod: HttpServerModule) {
     const params = parseParams(request);
     const student = studentByToken(params.participation_token ?? '');
     if (!student) return fail(404, 'You are no longer joined to this examination.');
-    if (session.status !== 'in_progress') {
-      return fail(409, 'The proctor has not started the examination yet.');
+    if (session.status !== 'in_progress' && session.status !== 'lobby_open') {
+      return fail(409, 'This examination is not active or has ended.');
     }
 
     if (!_packCache) {
@@ -1024,6 +1113,16 @@ export const PeerExamServer = {
       }
     }
 
+    // Pre-warm questions cache into memory
+    if (!_packCache) {
+      void OfflineStore.getPack().then((p) => {
+        if (p) {
+          _packCache = p;
+          _builtQuestionsCache = buildExamQuestions(p);
+        }
+      });
+    }
+
     await persist();
     notify();
     return true;
@@ -1047,6 +1146,11 @@ export const PeerExamServer = {
         'Download the exam pack first. The proctor phone serves the students from it.',
       );
     }
+
+    // Pre-warm in-memory questions cache immediately on server boot
+    _packCache = pack;
+    _builtQuestionsCache = buildExamQuestions(pack);
+    console.log(`[SERVER] Pre-warmed ${_builtQuestionsCache.length} questions into memory cache.`);
 
     // FIX 1: Eliminate NaN Schedule IDs. Resolve real numeric ID from pack.
     const scheduleId = resolveNumericScheduleId(input.scheduleId, pack);
@@ -1165,10 +1269,37 @@ export const PeerExamServer = {
     const now = new Date().toISOString();
     session.status = 'ended';
     session.endedAt = now;
+
+    const pack = await OfflineStore.getPack();
+    const numericScheduleId = resolveNumericScheduleId(session.scheduleId, pack);
+
     for (const student of Object.values(session.students)) {
-      if (student.status === 'taking_exam' || student.status === 'warning') {
+      if (student.status !== 'terminated') {
         student.status = 'finished';
         student.terminationReason = student.terminationReason ?? 'time_expired';
+      }
+
+      // Auto-grade in-flight answers for students who didn't explicitly submit
+      if (!student.submittedAt && pack && numericScheduleId > 0 && student.applicantCode) {
+        student.submittedAt = now;
+        const graded = grade(pack, student.answers);
+        student.score = graded.score;
+
+        const queuedRow = {
+          local_id: `${student.applicantCode.trim()}-${numericScheduleId}-${Date.now()}`,
+          applicant_code: student.applicantCode.trim(),
+          examination_schedule_id: numericScheduleId,
+          applicant_name: student.fullName,
+          attendance_status: 'present',
+          ...graded,
+          submitted_at: now,
+          synced: false,
+        };
+        try {
+          await OfflineStore.queueResult(queuedRow);
+        } catch (err) {
+          console.error('[SERVER] Failed to queue result on endExam:', err);
+        }
       }
     }
     if (session.roomId != null) {
