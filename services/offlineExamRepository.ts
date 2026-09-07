@@ -534,38 +534,61 @@ export const OfflineExamRepository = {
     const name = (a.name || '').trim() || 'Student';
     const parts = name.trim().split(/\s+/);
     const schedule = pack.schedules.find((s) => Number(s.id) === scheduleId);
+
+    const studentRecord: StudentRecord = {
+      id: String(a.id),
+      studentId: a.applicant_code || String(a.id),
+      firstName: parts[0] || name,
+      middleName: '',
+      lastName: parts.slice(1).join(' ') || '',
+      fullName: name,
+      email: a.gmail || a.email || '',
+      programId: a.course_applied || '',
+      programCode: a.course_applied || '',
+      programName: a.course_applied || '',
+      sex: 'Male' as const,
+      avatarInitials: name
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((p) => p[0] || '')
+        .join('')
+        .toUpperCase(),
+      registration_id: reg.id,
+      selectionStatus: 'ready' as const,
+      selectable: true,
+    };
+
+    const scheduleObj = schedule
+      ? {
+          id: schedule.id,
+          title: schedule.title,
+          exam_date: schedule.exam_date,
+          time_slot: schedule.time_slot,
+        }
+      : undefined;
+
+    // Check if this applicant has already completed this examination schedule
+    const codeUpper = (a.applicant_code || '').trim().toUpperCase();
+    const existingResults = await OfflineStore.getResults();
+    const alreadySubmitted = existingResults.some((r) => {
+      const matchCode = (r.applicant_code || '').trim().toUpperCase() === codeUpper;
+      const matchSched = Number(r.examination_schedule_id) === Number(scheduleId);
+      return matchCode && matchSched;
+    });
+
+    if (alreadySubmitted) {
+      return {
+        classification: 'already_completed',
+        message: 'Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.',
+        student: studentRecord,
+        schedule: scheduleObj,
+      };
+    }
+
     return {
       classification: 'valid',
-      student: {
-        id: String(a.id),
-        studentId: a.applicant_code || String(a.id),
-        firstName: parts[0] || name,
-        middleName: '',
-        lastName: parts.slice(1).join(' ') || '',
-        fullName: name,
-        email: a.gmail || a.email || '',
-        programId: a.course_applied || '',
-        programCode: a.course_applied || '',
-        programName: a.course_applied || '',
-        sex: 'Male' as const,
-        avatarInitials: name
-          .split(/\s+/)
-          .slice(0, 2)
-          .map((p) => p[0] || '')
-          .join('')
-          .toUpperCase(),
-        registration_id: reg.id,
-        selectionStatus: 'ready' as const,
-        selectable: true,
-      },
-      schedule: schedule
-        ? {
-            id: schedule.id,
-            title: schedule.title,
-            exam_date: schedule.exam_date,
-            time_slot: schedule.time_slot,
-          }
-        : undefined,
+      student: studentRecord,
+      schedule: scheduleObj,
     };
   },
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,7 @@ import {
   Modal,
   Alert,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import {
   Users,
   UserCheck,
@@ -41,6 +41,19 @@ type ActiveLobbyDetails = {
   status: 'lobby_open' | 'in_progress' | 'ended';
 };
 
+function formatTime12(timeStr?: string): string {
+  if (!timeStr) return '';
+  const trimmed = timeStr.trim();
+  if (/am|pm/i.test(trimmed)) return trimmed;
+  const match = trimmed.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return trimmed;
+  let h = parseInt(match[1], 10);
+  const m = match[2];
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${String(h).padStart(2, '0')}:${m} ${ampm}`;
+}
+
 export default function ProctorDashboardScreen() {
   const router = useRouter();
   const { colors, isDark, fontMultiplier } = useAppTheme();
@@ -68,6 +81,7 @@ export default function ProctorDashboardScreen() {
     endTime: '04:00 PM',
     timeWindowLabel: 'Starts 7:30 AM (Morning) - 4:00 PM (Noon)',
     questionCount: 60,
+    pendingSyncCount: 0,
   });
 
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -80,18 +94,18 @@ export default function ProctorDashboardScreen() {
   const loadData = async () => {
     try {
       setRefreshing(true);
-      const [pack, opened, queued] = await Promise.all([
+      const [pack, queued, openedRooms] = await Promise.all([
         OfflineStore.getPack(),
-        OfflineStore.getOpenedRooms(),
         OfflineStore.getResults(),
+        OfflineStore.getOpenedRooms(),
       ]);
 
-      const entries = Object.entries(opened);
+      const pendingSyncCount = queued.filter((r) => !r.synced).length;
 
-      // Check for any active room
-      const activeEntry = entries.find(
-        ([_, r]) => r.status === 'lobby_open' || r.status === 'in_progress',
-      ) || entries[0];
+      // Active room: look for any room opened on this phone that isn't ended
+      const activeEntry = Object.entries(openedRooms).find(
+        ([, v]) => v.status === 'lobby_open' || v.status === 'in_progress',
+      );
 
       let examTitle = 'Entrance Examination';
       let activeRoomName = 'Room CL 1';
@@ -154,6 +168,23 @@ export default function ProctorDashboardScreen() {
       const passingPercentage = (pack as any)?.grading_settings?.[0]?.passing_percentage ?? 75;
       const takenCount = queued.length > 0 ? queued.length : (pack?.registrations?.length ?? 42);
 
+      // Extract start and end times strictly based on the schedule
+      let schedStart = '';
+      let schedEnd = '';
+      if (primarySchedule) {
+        schedStart = formatTime12(primarySchedule.start_time);
+        schedEnd = formatTime12(primarySchedule.end_time);
+        if ((!schedStart || !schedEnd) && primarySchedule.time_slot) {
+          const parts = primarySchedule.time_slot.split(/\s*-\s*/);
+          if (parts[0]) schedStart = formatTime12(parts[0]);
+          if (parts[1]) schedEnd = formatTime12(parts[1]);
+        }
+      }
+      if (!schedStart) schedStart = '08:00 AM';
+      if (!schedEnd) schedEnd = '10:00 AM';
+
+      const venueText = primarySchedule?.venue || 'Testing Center · Main Campus';
+
       setStats({
         totalApplicants: pack?.applicants?.length ?? 48,
         examineesTaken: takenCount,
@@ -170,19 +201,13 @@ export default function ProctorDashboardScreen() {
           }),
         todayExamTitle:
           examTitle.replace(/Entrance\s+Examination/gi, '').trim() || 'Entrance Examination',
-        venueRoom: activeDetails
-          ? `${activeRoomName} · Code: ${activeCode}`
-          : `${activeRoomName} · Main Campus`,
-        status:
-          activeStatus === 'in_progress'
-            ? 'IN PROGRESS'
-            : activeStatus === 'lobby_open'
-              ? 'LOBBY OPEN'
-              : 'TODAY',
-        startTime: '07:30 AM',
-        endTime: '04:00 PM',
-        timeWindowLabel: 'Starts 7:30 AM (Morning) - 4:00 PM (Noon)',
+        venueRoom: venueText,
+        status: 'SCHEDULED',
+        startTime: schedStart,
+        endTime: schedEnd,
+        timeWindowLabel: `${schedStart} - ${schedEnd}`,
         questionCount: 60,
+        pendingSyncCount,
       });
     } finally {
       setRefreshing(false);
@@ -192,6 +217,12 @@ export default function ProctorDashboardScreen() {
   useEffect(() => {
     void loadData();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadData();
+    }, []),
+  );
 
   const getStatusColor = (status: string) => {
     if (status === 'LOBBY OPEN' || status === 'IN PROGRESS') return colors.success;
@@ -444,7 +475,7 @@ export default function ProctorDashboardScreen() {
           </View>
         </View>
 
-        {/* 3. TODAY'S EXAMINATION CARD (With Registered Total Applicants) */}
+        {/* 3. SCHEDULE REMINDERS CARD */}
         <View
           style={[
             styles.examCard,
@@ -457,26 +488,21 @@ export default function ProctorDashboardScreen() {
                 style={[styles.sectionTitle, { color: colors.accent }]}
                 maxFontSizeMultiplier={fontMultiplier}
               >
-                TODAY'S EXAMINATION
+                EXAMINATION REMINDERS
               </Text>
             </View>
             <View
               style={[
                 styles.statusBadge,
-                { backgroundColor: getStatusColor(stats.status) + '18' },
+                { backgroundColor: colors.accentMuted },
               ]}
             >
-              <View
-                style={[
-                  styles.statusDot,
-                  { backgroundColor: getStatusColor(stats.status) },
-                ]}
-              />
+              <Calendar size={12} color={colors.accent} style={{ marginRight: 4 }} />
               <Text
-                style={[styles.statusText, { color: getStatusColor(stats.status) }]}
+                style={[styles.statusText, { color: colors.accent }]}
                 maxFontSizeMultiplier={fontMultiplier}
               >
-                {stats.status}
+                SCHEDULED
               </Text>
             </View>
           </View>
@@ -496,7 +522,7 @@ export default function ProctorDashboardScreen() {
             {stats.venueRoom}
           </Text>
 
-          {/* SCHEDULE DATE & TIME (Starts 7:30 AM Morning - 4:00 PM Noon) */}
+          {/* SCHEDULE DATE & TIME (Strictly from schedule) */}
           <View style={styles.scheduleTimeRow}>
             <View
               style={[
@@ -523,9 +549,37 @@ export default function ProctorDashboardScreen() {
                 style={[styles.scheduleBadgeText, { color: colors.warning }]}
                 maxFontSizeMultiplier={fontMultiplier}
               >
-                Starts 7:30 AM (Morning) - 4:00 PM (Noon)
+                {stats.startTime} - {stats.endTime}
               </Text>
             </View>
+          </View>
+
+          {/* HELPFUL REMINDERS NOTICE BOX */}
+          <View
+            style={{
+              backgroundColor: colors.cardMuted,
+              borderRadius: 10,
+              padding: 10,
+              marginTop: 6,
+              borderWidth: 1,
+              borderColor: colors.cardBorder,
+              gap: 4,
+            }}
+          >
+            <Text
+              style={{ fontSize: 11, fontWeight: '700', color: colors.accent }}
+              maxFontSizeMultiplier={fontMultiplier}
+            >
+              Proctoring Reminders:
+            </Text>
+            <Text
+              style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 16 }}
+              maxFontSizeMultiplier={fontMultiplier}
+            >
+              • Verify examinee passkeys against official roster prior to entry.
+              • Maintain active testing room Wi-Fi connection throughout testing.
+              • Unsubmitted exam progress is securely saved and synced offline.
+            </Text>
           </View>
 
           {/* REGISTERED TOTAL APPLICANTS BANNER */}
@@ -811,6 +865,9 @@ export default function ProctorDashboardScreen() {
           >
             <View style={[styles.actionIcon, { backgroundColor: colors.accent }]}>
               <BarChart3 size={20} color="#FFFFFF" />
+              {stats.pendingSyncCount > 0 && (
+                <View style={styles.actionRedDot} />
+              )}
             </View>
             <Text
               style={[styles.actionText, { color: colors.textPrimary }]}
@@ -834,6 +891,9 @@ export default function ProctorDashboardScreen() {
           >
             <View style={[styles.actionIcon, { backgroundColor: colors.warning }]}>
               <RefreshCw size={20} color="#FFFFFF" />
+              {stats.pendingSyncCount > 0 && (
+                <View style={styles.actionRedDot} />
+              )}
             </View>
             <Text
               style={[styles.actionText, { color: colors.textPrimary }]}
@@ -1229,6 +1289,18 @@ const styles = StyleSheet.create({
     borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+  },
+  actionRedDot: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#DC3545',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
   actionText: { fontSize: 10, fontWeight: '700', textAlign: 'center' },
   activeLobbyBadge: {

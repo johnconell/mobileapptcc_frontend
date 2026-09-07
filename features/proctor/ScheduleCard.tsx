@@ -26,6 +26,7 @@ interface ScheduleCardProps {
   onToggle?: () => void;
   onSelectTimeSlot?: (session: ExamSession) => void;
   delay?: number;
+  openedRooms?: Record<string, { code: string; openedAt: string; status: 'lobby_open' | 'in_progress' | 'ended' }>;
 }
 
 export function ScheduleCard({
@@ -35,6 +36,7 @@ export function ScheduleCard({
   onToggle,
   onSelectTimeSlot,
   delay = 0,
+  openedRooms,
 }: ScheduleCardProps) {
   const sessionsQuery = useSessions(isExpanded ? schedule.id : undefined);
   const [headerPressed, setHeaderPressed] = useState(false);
@@ -199,7 +201,7 @@ export function ScheduleCard({
               numberOfLines={1}
               maxFontSizeMultiplier={1.15}
             >
-              Select a time slot to view rooms
+              Select a time slot to open or enter lobby
             </Text>
           </View>
 
@@ -218,25 +220,64 @@ export function ScheduleCard({
             </View>
           ) : (
             <View style={styles.timeSlotsList}>
-              {sessionsQuery.data!.map((session, sIdx) => (
+              {sessionsQuery.data!.map((session, sIdx) => {
+                const cleanSess = String(session.id).replace(/^offline-/, '');
+                const sessSchedId = parseInt(cleanSess.split('-')[0] || '', 10) || 0;
+                const matchingRooms = Object.entries(openedRooms || {}).filter(([k]) => {
+                  const [s] = k.split(':').map(Number);
+                  return s === sessSchedId || String(k).startsWith(`${sessSchedId}:`);
+                });
+                const isLobbyOpen = matchingRooms.some(
+                  ([, v]) => v.status === 'lobby_open' || v.status === 'in_progress',
+                );
+                const isEnded = !isLobbyOpen && matchingRooms.some(([, v]) => v.status === 'ended');
+
+                return (
                 <Pressable
                   key={session.id || sIdx}
                   onPress={() => onSelectTimeSlot?.(session)}
                 >
                   {({ pressed }) => (
                     <View style={[styles.timeSlotRow, pressed && styles.timeSlotPressed]}>
-                      <View style={styles.timeSlotIconWrap}>
-                        <Clock size={16} color="#003366" />
+                      <View
+                        style={[
+                          styles.timeSlotIconWrap,
+                          isLobbyOpen && { backgroundColor: '#E6F4EA' },
+                          isEnded && { backgroundColor: '#F1F5F9' },
+                        ]}
+                      >
+                        <Clock
+                          size={16}
+                          color={isLobbyOpen ? '#28A745' : isEnded ? '#64748B' : '#003366'}
+                        />
                       </View>
 
                       <View style={styles.timeSlotInfo}>
-                        <Text
-                          style={styles.timeSlotTitle}
-                          numberOfLines={1}
-                          maxFontSizeMultiplier={1.2}
-                        >
-                          {session.timeLabel}
-                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Text
+                            style={[
+                              styles.timeSlotTitle,
+                              isLobbyOpen && { color: '#16A34A', fontWeight: '800' },
+                              isEnded && { color: '#475569', fontWeight: '700' },
+                            ]}
+                            numberOfLines={1}
+                            maxFontSizeMultiplier={1.2}
+                          >
+                            {session.timeLabel}
+                          </Text>
+                          {isLobbyOpen && (
+                            <View style={styles.lobbyOpenBadge}>
+                              <View style={styles.lobbyOpenDot} />
+                              <Text style={styles.lobbyOpenBadgeText}>LOBBY OPEN</Text>
+                            </View>
+                          )}
+                          {isEnded && (
+                            <View style={styles.endedBadge}>
+                              <View style={styles.endedDot} />
+                              <Text style={styles.endedBadgeText}>ENDED</Text>
+                            </View>
+                          )}
+                        </View>
                         <View style={styles.timeSlotDetails}>
                           <Text
                             style={styles.timeSlotBatch}
@@ -265,12 +306,16 @@ export function ScheduleCard({
                       </View>
 
                       <View style={styles.timeSlotArrow}>
-                        <ChevronRight size={18} color="#0055A4" />
+                        <ChevronRight
+                          size={18}
+                          color={isLobbyOpen ? '#28A745' : isEnded ? '#94A3B8' : '#0055A4'}
+                        />
                       </View>
                     </View>
                   )}
                 </Pressable>
-              ))}
+                );
+              })}
             </View>
           )}
         </View>
@@ -504,5 +549,51 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
+  },
+  lobbyOpenBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginLeft: 8,
+  },
+  lobbyOpenDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#16A34A',
+  },
+  lobbyOpenBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#16A34A',
+    letterSpacing: 0.5,
+  },
+  endedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginLeft: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  endedDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#64748B',
+  },
+  endedBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#475569',
+    letterSpacing: 0.5,
   },
 });

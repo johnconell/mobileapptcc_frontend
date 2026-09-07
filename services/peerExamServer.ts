@@ -519,6 +519,50 @@ function registerRoutes(mod: HttpServerModule) {
         schedule: validated.schedule,
       });
     }
+    if (validated.classification === 'already_completed') {
+      return ok({
+        classification: 'already_completed',
+        message:
+          validated.message ||
+          'Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.',
+        student: validated.student,
+        schedule: validated.schedule,
+      });
+    }
+
+    // Authoritative check on Proctor Server:
+    const registrationId = Number(validated.student?.registration_id ?? 0);
+    const existing = session.students[registrationId];
+    if (existing?.submittedAt || existing?.status === 'finished') {
+      return ok({
+        classification: 'already_completed',
+        message:
+          'Examination Already Completed\nYou have already taken and submitted this examination. Multiple attempts are not permitted.',
+        student: validated.student,
+        schedule: validated.schedule,
+      });
+    }
+
+    const applicantCode = (validated.student?.studentId || '').trim().toUpperCase();
+    const queuedResults = await OfflineStore.getResults();
+    if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    const activeSchedId = session.scheduleId;
+    const hasPriorResult = queuedResults.some((r) => {
+      const matchCode = (r.applicant_code || '').trim().toUpperCase() === applicantCode;
+      const matchSched = Number(r.examination_schedule_id) === Number(activeSchedId);
+      return matchCode && matchSched;
+    });
+
+    if (hasPriorResult) {
+      return ok({
+        classification: 'already_completed',
+        message:
+          'Examination Already Completed\nYou have already taken and submitted this examination. Multiple attempts are not permitted.',
+        student: validated.student,
+        schedule: validated.schedule,
+      });
+    }
+
     return ok({
       student: validated.student,
       schedule: validated.schedule,
@@ -536,7 +580,7 @@ function registerRoutes(mod: HttpServerModule) {
     const body = parseBody(request.body);
     const passkey = String(body.passkey ?? '').trim().toUpperCase();
 
-    // Soft-validate passkey if present (passkey was already checked on the passkey screen)
+    // Validate passkey if present and check single attempt
     if (passkey) {
       try {
         const validated = await OfflineExamRepository.validatePasskey(
@@ -547,7 +591,25 @@ function registerRoutes(mod: HttpServerModule) {
         if (!validated || !validated.student) {
           console.warn(`[SERVER] /package passkey check soft-failed for: ${passkey}`);
         }
-      } catch {}
+        if (validated?.classification === 'already_completed') {
+          return fail(403, 'Examination Already Completed: Multiple attempts are not permitted.');
+        }
+        if (validated?.student) {
+          const appCode = (validated.student.studentId || '').trim().toUpperCase();
+          const queued = await OfflineStore.getResults();
+          if (
+            queued.some(
+              (r) =>
+                (r.applicant_code || '').trim().toUpperCase() === appCode &&
+                Number(r.examination_schedule_id) === Number(session?.scheduleId),
+            )
+          ) {
+            return fail(403, 'Examination Already Completed: Multiple attempts are not permitted.');
+          }
+        }
+      } catch (err) {
+        console.warn('[SERVER] /package passkey check error:', err);
+      }
     }
 
     const pack = await OfflineStore.getPack();
@@ -625,15 +687,43 @@ function registerRoutes(mod: HttpServerModule) {
       return fail(404, 'Unable to continue with that examination key.');
     }
 
+    if (validated.classification === 'already_completed') {
+      return fail(
+        403,
+        validated.message ||
+          'Examination Already Completed: You have already taken this examination. Multiple attempts are not permitted.',
+      );
+    }
+
     const registrationId = Number(validated.student.registration_id ?? 0);
     const existing = session.students[registrationId];
 
-    if (!existing && Object.keys(session.students).length >= MAX_ROOM_CAPACITY) {
-      return fail(409, 'Room Full. Maximum capacity of 60 students reached. Please contact the Proctor.');
+    if (existing?.submittedAt || existing?.status === 'finished') {
+      return fail(
+        403,
+        'Examination Already Completed: This examination has already been submitted. Multiple attempts are not permitted.',
+      );
     }
 
-    if (existing?.submittedAt) {
-      return fail(409, 'This examination key has already been submitted.');
+    const applicantCode = (validated.student.studentId || '').trim().toUpperCase();
+    const currentScheduleId = session.scheduleId;
+    const queuedResults = await OfflineStore.getResults();
+    if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    const hasPriorResult = queuedResults.some((r) => {
+      const matchCode = (r.applicant_code || '').trim().toUpperCase() === applicantCode;
+      const matchSched = Number(r.examination_schedule_id) === Number(currentScheduleId);
+      return matchCode && matchSched;
+    });
+
+    if (hasPriorResult) {
+      return fail(
+        403,
+        'Examination Already Completed: You have already taken this examination. Multiple attempts are not permitted.',
+      );
+    }
+
+    if (!existing && Object.keys(session.students).length >= MAX_ROOM_CAPACITY) {
+      return fail(409, 'Room Full. Maximum capacity of 60 students reached. Please contact the Proctor.');
     }
 
     const now = new Date().toISOString();
@@ -758,6 +848,9 @@ function registerRoutes(mod: HttpServerModule) {
     const params = parseParams(request);
     const student = studentByToken(params.participation_token ?? '');
     if (!student) return fail(404, 'You are no longer joined to this examination.');
+    if (student.submittedAt || student.status === 'finished') {
+      return fail(403, 'Examination Already Completed: This examination has already been completed.');
+    }
     if (session.status !== 'in_progress' && session.status !== 'lobby_open') {
       return fail(409, 'This examination is not active or has ended.');
     }
@@ -795,6 +888,9 @@ function registerRoutes(mod: HttpServerModule) {
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
     if (!student) return fail(404, 'You are no longer joined to this examination.');
+    if (student.submittedAt || student.status === 'finished') {
+      return fail(403, 'Examination Already Completed: Cannot modify answers for a submitted examination.');
+    }
 
     const answers = body.answers;
     if (answers && typeof answers === 'object') {
@@ -817,6 +913,9 @@ function registerRoutes(mod: HttpServerModule) {
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
     if (!student) return fail(404, 'You are no longer joined to this examination.');
+    if (student.submittedAt || student.status === 'finished') {
+      return fail(409, 'Examination Already Completed: This examination has already been submitted.');
+    }
 
     const answers = body.answers;
     if (answers && typeof answers === 'object') {

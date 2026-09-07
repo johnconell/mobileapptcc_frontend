@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { Button, Loader } from '@/components/ui';
 import { LobbyRepository, QuestionRepository } from '@/repositories';
 import { ExamProgressStore } from '@/services/examProgressStore';
+import { appStorage } from '@/services/storage';
 import { useExamStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
 
@@ -64,6 +65,13 @@ export default function SubmittingScreen() {
 
         await ExamProgressStore.clear();
         markSubmitted(reason);
+        try {
+          const appCode = verifiedStudent?.studentId || verifiedStudent?.id;
+          if (appCode && sessionId) {
+            const sid = String(sessionId).replace(/^offline-/, '').split('-')[0];
+            await appStorage.setItem(`tcc.student.completed.${sid}.${appCode}`, '1');
+          }
+        } catch {}
         submittingRef.current = false;
         router.replace('/(student)/completed');
         return;

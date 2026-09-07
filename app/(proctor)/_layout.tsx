@@ -5,6 +5,7 @@ import { Home, ClipboardList, BarChart3, Settings } from 'lucide-react-native';
 import { useAppTheme } from '@/hooks/useAppTheme';
 import { useProctorStore } from '@/stores';
 import { AuthRepository } from '@/repositories';
+import { OfflineStore } from '@/services/offlineStore';
 
 export default function ProctorRootLayout() {
   const { colors, isDark } = useAppTheme();
@@ -53,6 +54,27 @@ export default function ProctorRootLayout() {
       active = false;
     };
   }, [profile, segments, router]);
+
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const checkPending = async () => {
+      try {
+        const pending = await OfflineStore.pendingResults();
+        if (!cancelled) setPendingSyncCount(pending.length);
+      } catch {
+        if (!cancelled) setPendingSyncCount(0);
+      }
+    };
+
+    void checkPending();
+    const interval = setInterval(checkPending, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [segments]);
 
   const currentLeaf = segments[segments.length - 1];
   if (checkingAuth && currentLeaf !== 'login') {
@@ -116,7 +138,26 @@ export default function ProctorRootLayout() {
         name="results"
         options={{
           title: 'Results',
-          tabBarIcon: ({ color, size }) => <BarChart3 size={size} color={color} strokeWidth={2.5} />,
+          tabBarIcon: ({ color, size }) => (
+            <View style={{ width: size + 8, height: size, alignItems: 'center', justifyContent: 'center' }}>
+              <BarChart3 size={size} color={color} strokeWidth={2.5} />
+              {pendingSyncCount > 0 && (
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: -2,
+                    right: 0,
+                    width: 9,
+                    height: 9,
+                    borderRadius: 4.5,
+                    backgroundColor: '#DC3545',
+                    borderWidth: 1.5,
+                    borderColor: colors.tabBarBg,
+                  }}
+                />
+              )}
+            </View>
+          ),
         }}
       />
       <Tabs.Screen

@@ -513,7 +513,7 @@ export const LobbyRepository = {
   },
 
   async validatePasskey(passkey: string): Promise<{
-    classification: 'valid' | 'wrong_schedule';
+    classification: 'valid' | 'wrong_schedule' | 'already_completed';
     message?: string;
     student?: StudentRecord;
     schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
@@ -523,7 +523,7 @@ export const LobbyRepository = {
 
     if (await PeerExamClient.isActive()) {
       const response = await PeerExamClient.request<{
-        classification?: 'valid' | 'wrong_schedule';
+        classification?: 'valid' | 'wrong_schedule' | 'already_completed';
         message?: string;
         student?: StudentRecord;
         schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
@@ -538,6 +538,16 @@ export const LobbyRepository = {
         return {
           classification: 'wrong_schedule',
           message: response.message || 'This examination key belongs to a different schedule.',
+          schedule: response.schedule,
+        };
+      }
+      if (response.classification === 'already_completed') {
+        return {
+          classification: 'already_completed',
+          message:
+            response.message ||
+            'Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.',
+          student: response.student,
           schedule: response.schedule,
         };
       }
@@ -562,6 +572,16 @@ export const LobbyRepository = {
         return {
           classification: 'wrong_schedule',
           message: offline.message || 'This examination key belongs to a different examination schedule.',
+        };
+      }
+      if (offline.classification === 'already_completed') {
+        return {
+          classification: 'already_completed',
+          message:
+            offline.message ||
+            'Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.',
+          student: offline.student,
+          schedule: offline.schedule,
         };
       }
       if (!offline.student) {
@@ -597,6 +617,12 @@ export const LobbyRepository = {
             classification: 'wrong_schedule',
             message: json.message || 'This examination key belongs to a different schedule.',
             schedule: sched,
+          };
+        }
+        if (json.message?.toLowerCase().includes('already')) {
+          return {
+            classification: 'already_completed',
+            message: json.message || 'Examination Already Completed\nYou have already taken this examination.',
           };
         }
         throw new Error(json.message || 'Invalid examination key.');

@@ -26,6 +26,8 @@ import {
   ChevronRight,
   ArrowLeft,
   Users,
+  FileText,
+  AlertCircle,
 } from 'lucide-react-native';
 import { Header, Card, Button } from '@/components/ui';
 import { OfflineStore, type OfflineQueuedResult, type OfflinePack } from '@/services/offlineStore';
@@ -53,12 +55,13 @@ type ExamLobby = {
   scheduleTitle: string;
   examDate: string;
   timeSlot: string;
-  status: 'lobby_open' | 'in_progress' | 'ended' | 'scheduled';
+  status: 'in_progress' | 'ended';
   statusLabel: string;
   studentCount: number;
   passedCount: number;
   failedCount: number;
   averageScore: number | null;
+  hasUnsynced: boolean;
   students: LobbyStudentItem[];
 };
 
@@ -71,13 +74,15 @@ export default function ProctorResultsScreen() {
     Record<string, { code: string; openedAt: string; status: 'lobby_open' | 'in_progress' | 'ended' }>
   >({});
 
-  // Navigation state within Results: select a lobby to drill down into its examinees
+  // Navigation state: selected lobby for Level 2 examinee drill-down
   const [selectedLobbyId, setSelectedLobbyId] = useState<string | null>(null);
 
   // Search & Filter state
-  const [lobbySearch, setLobbySearch] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'in_progress' | 'ended' | 'pending_sync'>('all');
+
   const [studentSearch, setStudentSearch] = useState('');
-  const [studentFilter, setStudentFilter] = useState<'all' | 'passed' | 'failed' | 'enrolled'>('all');
+  const [studentFilter, setStudentFilter] = useState<'all' | 'passed' | 'failed'>('all');
 
   const loadData = async () => {
     try {
@@ -101,14 +106,12 @@ export default function ProctorResultsScreen() {
   }, []);
 
   // HIERARCHICAL NAVIGATION: Hardware back button returns from Level 2 to Level 1, or Level 1 to Dashboard
-  // HIERARCHICAL NAVIGATION: Hardware back button returns from Level 2 to Level 1, or Level 1 to previous screen / Dashboard
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (selectedLobbyId) {
         setSelectedLobbyId(null);
         return true;
       }
-      router.navigate('/(proctor)/dashboard' as any);
       if (router.canGoBack()) {
         router.back();
       } else {
@@ -119,19 +122,11 @@ export default function ProctorResultsScreen() {
     return () => sub.remove();
   }, [selectedLobbyId, router]);
 
-  // Build the list of examination lobbies from opened rooms and cached schedules
-  const lobbies = useMemo<ExamLobby[]>(() => {
+  // Build the list of RECENT examination lobbies that ALREADY STARTED or ENDED
+  const lobbies: ExamLobby[] = useMemo(() => {
     const list: ExamLobby[] = [];
     const passingPercentage =
       (pack as any)?.grading_settings?.[0]?.passing_percentage ?? 75;
-
-    // Results indexed by applicant_code upper-case
-    const resultsByCode = new Map<string, OfflineQueuedResult>();
-    for (const r of rawResults) {
-      if (r.applicant_code) {
-        resultsByCode.set(r.applicant_code.toUpperCase(), r);
-      }
-    }
 
     // Applicants indexed by applicant_code upper-case
     const applicantMap = new Map<string, NonNullable<OfflinePack['applicants']>[0]>();
@@ -149,10 +144,15 @@ export default function ProctorResultsScreen() {
       regBySchedule.set(reg.examination_schedule_id, arr);
     }
 
-    // 1. Process opened rooms first
+    // 1. Process rooms that were opened on this phone and are either IN_PROGRESS or ENDED
     const processedKeys = new Set<string>();
 
     for (const [key, opened] of Object.entries(openedRooms)) {
+      // ONLY include rooms that already started or ended!
+      if (opened.status !== 'in_progress' && opened.status !== 'ended') {
+        continue;
+      }
+
       processedKeys.add(key);
       const [schedIdNum, rmIdNum] = key.split(':').map(Number);
       const sched = pack?.schedules?.find((s) => s.id === schedIdNum);
@@ -163,105 +163,57 @@ export default function ProctorResultsScreen() {
         sched?.title?.replace(/Entrance\s+Examination/gi, '').trim() ||
         sched?.title ||
         'Entrance Examination';
-      const examDate = sched?.exam_date || 'Testing Session';
+      const examDate = sched?.exam_date || 'Examination Session';
       const timeSlot = sched?.start_time
         ? `${sched.start_time.slice(0, 5)} - ${(sched.end_time || '').slice(0, 5)}`
         : '09:30 AM - 10:30 AM';
 
       // Find examinees for this lobby
       const students: LobbyStudentItem[] = [];
+      const seenCodes = new Set<string>();
       const scheduledRegs = regBySchedule.get(schedIdNum) || [];
 
-      // Check if examinees have completed results
+      // 1) First, add all examinees who submitted results for this schedule
+      const schedResults = rawResults.filter((r) => r.examination_schedule_id === schedIdNum);
+      for (const res of schedResults) {
+        const codeUpper = (res.applicant_code || '').toUpperCase();
+        seenCodes.add(codeUpper);
+        const app = applicantMap.get(codeUpper);
+        const isPass = Number(res.score) >= passingPercentage;
+
+        students.push({
+          id: res.local_id || `res-${res.applicant_code}`,
+          applicantCode: res.applicant_code,
+          name: res.applicant_name || app?.name || res.applicant_code,
+          course: app?.course_applied || 'General Admission',
+          score: res.score,
+          itemsCorrect: res.items_correct ?? null,
+          itemsTotal: res.items_total ?? null,
+          status: isPass ? 'passed' : 'failed',
+          statusLabel: isPass ? 'PASSED' : 'FAILED',
+          synced: Boolean(res.synced),
+        });
+      }
+
+      // 2) If in progress, also add registered students who are currently taking it
       for (const reg of scheduledRegs) {
         const app = (pack?.applicants ?? []).find((a) => a.id === reg.applicant_id);
         const codeUpper = (app?.applicant_code || '').toUpperCase();
-        const res = resultsByCode.get(codeUpper);
+        if (seenCodes.has(codeUpper)) continue;
+        seenCodes.add(codeUpper);
 
-        if (res) {
-          const isPass = Number(res.score) >= passingPercentage;
-          students.push({
-            id: res.local_id || String(reg.id),
-            applicantCode: res.applicant_code,
-            name: res.applicant_name || app?.name || 'Examinee',
-            course: app?.course_applied || 'General Admission',
-            score: res.score,
-            itemsCorrect: res.items_correct ?? null,
-            itemsTotal: res.items_total ?? null,
-            status: isPass ? 'passed' : 'failed',
-            statusLabel: isPass ? 'PASSED' : 'FAILED',
-            synced: Boolean(res.synced),
-          });
-        } else {
-          students.push({
-            id: String(reg.id),
-            applicantCode: app?.applicant_code || `APP-${reg.id}`,
-            name: app?.name || 'Enrolled Candidate',
-            course: app?.course_applied || 'General Admission',
-            score: null,
-            itemsCorrect: null,
-            itemsTotal: null,
-            status: opened.status === 'in_progress' ? 'in_progress' : 'enrolled',
-            statusLabel: opened.status === 'in_progress' ? 'TAKING EXAM' : 'IN LOBBY',
-            synced: false,
-          });
-        }
-      }
-
-      // If scheduledRegs is empty, check rawResults for this schedule
-      if (students.length === 0) {
-        const schedResults = rawResults.filter((r) => r.examination_schedule_id === schedIdNum);
-        for (const res of schedResults) {
-          const isPass = Number(res.score) >= passingPercentage;
-          const app = applicantMap.get((res.applicant_code || '').toUpperCase());
-          students.push({
-            id: res.local_id,
-            applicantCode: res.applicant_code,
-            name: res.applicant_name || app?.name || res.applicant_code,
-            course: app?.course_applied || 'General Admission',
-            score: res.score,
-            itemsCorrect: res.items_correct ?? null,
-            itemsTotal: res.items_total ?? null,
-            status: isPass ? 'passed' : 'failed',
-            statusLabel: isPass ? 'PASSED' : 'FAILED',
-            synced: Boolean(res.synced),
-          });
-        }
-      }
-
-      // If still empty but we have pack applicants, populate with default roster
-      if (students.length === 0 && (pack?.applicants?.length ?? 0) > 0) {
-        for (const app of (pack?.applicants ?? []).slice(0, 30)) {
-          const res = resultsByCode.get((app.applicant_code || '').toUpperCase());
-          if (res) {
-            const isPass = Number(res.score) >= passingPercentage;
-            students.push({
-              id: res.local_id,
-              applicantCode: app.applicant_code,
-              name: app.name,
-              course: app.course_applied || 'General Admission',
-              score: res.score,
-              itemsCorrect: res.items_correct ?? null,
-              itemsTotal: res.items_total ?? null,
-              status: isPass ? 'passed' : 'failed',
-              statusLabel: isPass ? 'PASSED' : 'FAILED',
-              synced: Boolean(res.synced),
-            });
-          } else {
-            students.push({
-              id: String(app.id),
-              applicantCode: app.applicant_code,
-              name: app.name,
-              course: app.course_applied || 'General Admission',
-              score: null,
-              itemsCorrect: null,
-              itemsTotal: null,
-              status: 'enrolled',
-              statusLabel: 'IN LOBBY',
-              synced: false,
-            });
-          }
-        }
+        students.push({
+          id: String(reg.id),
+          applicantCode: app?.applicant_code || `APP-${reg.id}`,
+          name: app?.name || 'Enrolled Candidate',
+          course: app?.course_applied || 'General Admission',
+          score: null,
+          itemsCorrect: null,
+          itemsTotal: null,
+          status: opened.status === 'in_progress' ? 'in_progress' : 'enrolled',
+          statusLabel: opened.status === 'in_progress' ? 'TAKING EXAM' : 'NOT TAKEN',
+          synced: false,
+        });
       }
 
       const passed = students.filter((s) => s.status === 'passed').length;
@@ -272,6 +224,7 @@ export default function ProctorResultsScreen() {
           ? completedStudents.reduce((acc, s) => acc + (s.score || 0), 0) /
             completedStudents.length
           : null;
+      const hasUnsynced = students.some((s) => s.score != null && !s.synced);
 
       list.push({
         id: key,
@@ -282,138 +235,139 @@ export default function ProctorResultsScreen() {
         scheduleTitle,
         examDate,
         timeSlot,
-        status: opened.status,
-        statusLabel:
-          opened.status === 'in_progress'
-            ? 'IN PROGRESS'
-            : opened.status === 'lobby_open'
-              ? 'LOBBY OPEN'
-              : 'ENDED',
+        status: opened.status as 'in_progress' | 'ended',
+        statusLabel: opened.status === 'in_progress' ? 'IN PROGRESS' : 'ENDED',
         studentCount: students.length,
         passedCount: passed,
         failedCount: failed,
         averageScore: avgScore,
+        hasUnsynced,
         students,
       });
     }
 
-    // 2. Also add schedules/rooms from the pack if not already processed
-    if (pack?.schedules?.length) {
-      for (const sched of pack.schedules) {
-        for (const rm of sched.rooms || []) {
-          const key = `${sched.id}:${rm.id}`;
-          if (processedKeys.has(key)) continue;
+    // 2. Also add any examinations from rawResults that were conducted by the proctor
+    const resultsBySchedule = new Map<number, OfflineQueuedResult[]>();
+    for (const r of rawResults) {
+      if (!r.examination_schedule_id) continue;
+      const arr = resultsBySchedule.get(r.examination_schedule_id) || [];
+      arr.push(r);
+      resultsBySchedule.set(r.examination_schedule_id, arr);
+    }
 
-          const scheduleTitle =
-            sched.title?.replace(/Entrance\s+Examination/gi, '').trim() ||
-            sched.title ||
-            'General Examination';
-          const examDate = sched.exam_date || 'Scheduled Cycle';
-          const timeSlot = sched.start_time
-            ? `${sched.start_time.slice(0, 5)} - ${(sched.end_time || '').slice(0, 5)}`
-            : '09:30 AM - 10:30 AM';
+    for (const [schedId, sResults] of resultsBySchedule.entries()) {
+      const alreadyInList = list.some((item) => item.scheduleId === schedId);
+      if (alreadyInList) continue;
 
-          // Gather examinees for this scheduled room
-          const students: LobbyStudentItem[] = [];
-          const scheduledRegs = regBySchedule.get(sched.id) || [];
+      const sched = pack?.schedules?.find((s) => s.id === schedId);
+      const rm = sched?.rooms?.[0];
+      const key = `${schedId}:${rm?.id || 0}`;
+      if (processedKeys.has(key)) continue;
+      processedKeys.add(key);
 
-          for (const reg of scheduledRegs) {
-            const app = (pack.applicants || []).find((a) => a.id === reg.applicant_id);
-            const codeUpper = (app?.applicant_code || '').toUpperCase();
-            const res = resultsByCode.get(codeUpper);
+      const roomName = rm?.room_name || 'Examination Room';
+      const scheduleTitle =
+        sched?.title?.replace(/Entrance\s+Examination/gi, '').trim() ||
+        sched?.title ||
+        'Entrance Examination';
+      const examDate = sched?.exam_date || 'Conducted Session';
+      const timeSlot = sched?.start_time
+        ? `${sched.start_time.slice(0, 5)} - ${(sched.end_time || '').slice(0, 5)}`
+        : 'Completed';
 
-            if (res) {
-              const isPass = Number(res.score) >= passingPercentage;
-              students.push({
-                id: res.local_id || String(reg.id),
-                applicantCode: res.applicant_code,
-                name: res.applicant_name || app?.name || 'Examinee',
-                course: app?.course_applied || 'General Admission',
-                score: res.score,
-                itemsCorrect: res.items_correct ?? null,
-                itemsTotal: res.items_total ?? null,
-                status: isPass ? 'passed' : 'failed',
-                statusLabel: isPass ? 'PASSED' : 'FAILED',
-                synced: Boolean(res.synced),
-              });
-            } else {
-              students.push({
-                id: String(reg.id),
-                applicantCode: app?.applicant_code || `APP-${reg.id}`,
-                name: app?.name || 'Enrolled Candidate',
-                course: app?.course_applied || 'General Admission',
-                score: null,
-                itemsCorrect: null,
-                itemsTotal: null,
-                status: 'enrolled',
-                statusLabel: 'SCHEDULED',
-                synced: false,
-              });
-            }
-          }
+      const students: LobbyStudentItem[] = sResults.map((res) => {
+        const isPass = Number(res.score) >= passingPercentage;
+        const app = applicantMap.get((res.applicant_code || '').toUpperCase());
+        return {
+          id: res.local_id || `res-${res.applicant_code}`,
+          applicantCode: res.applicant_code,
+          name: res.applicant_name || app?.name || res.applicant_code,
+          course: app?.course_applied || 'General Admission',
+          score: res.score,
+          itemsCorrect: res.items_correct ?? null,
+          itemsTotal: res.items_total ?? null,
+          status: isPass ? 'passed' : 'failed',
+          statusLabel: isPass ? 'PASSED' : 'FAILED',
+          synced: Boolean(res.synced),
+        };
+      });
 
-          const passed = students.filter((s) => s.status === 'passed').length;
-          const failed = students.filter((s) => s.status === 'failed').length;
-          const completedStudents = students.filter((s) => s.score != null);
-          const avgScore =
-            completedStudents.length > 0
-              ? completedStudents.reduce((acc, s) => acc + (s.score || 0), 0) /
-                completedStudents.length
-              : null;
+      const passed = students.filter((s) => s.status === 'passed').length;
+      const failed = students.filter((s) => s.status === 'failed').length;
+      const avgScore =
+        students.length > 0
+          ? students.reduce((acc, s) => acc + (s.score || 0), 0) / students.length
+          : null;
+      const hasUnsynced = students.some((s) => !s.synced);
 
-          list.push({
-            id: key,
-            scheduleId: sched.id,
-            roomId: rm.id,
-            roomName: rm.room_name,
-            roomCode: `RM-${rm.id}`,
-            scheduleTitle,
-            examDate,
-            timeSlot,
-            status: 'scheduled',
-            statusLabel: 'SCHEDULED',
-            studentCount: students.length,
-            passedCount: passed,
-            failedCount: failed,
-            averageScore: avgScore,
-            students,
-          });
-        }
-      }
+      list.push({
+        id: key,
+        scheduleId: schedId,
+        roomId: rm?.id || 0,
+        roomName,
+        roomCode: `EXAM-${schedId}`,
+        scheduleTitle,
+        examDate,
+        timeSlot,
+        status: 'ended',
+        statusLabel: 'ENDED',
+        studentCount: students.length,
+        passedCount: passed,
+        failedCount: failed,
+        averageScore: avgScore,
+        hasUnsynced,
+        students,
+      });
     }
 
     return list;
   }, [pack, rawResults, openedRooms]);
 
-  // Selected Lobby Object
+  // Overall metrics summary calculations
+  const totalSubmissions = rawResults.length;
+  const passedSubmissions = rawResults.filter((r) => Number(r.score) >= 75).length;
+  const overallPassRate =
+    totalSubmissions > 0 ? ((passedSubmissions / totalSubmissions) * 100).toFixed(1) : '—';
+  const syncedCount = rawResults.filter((r) => r.synced).length;
+  const pendingSyncCount = rawResults.filter((r) => !r.synced).length;
+
+  // Selected Lobby Object (for Level 2 drill-down)
   const selectedLobby = useMemo(() => {
     if (!selectedLobbyId) return null;
     return lobbies.find((l) => l.id === selectedLobbyId) || null;
   }, [lobbies, selectedLobbyId]);
 
-  // Filtered Lobbies for Level 1 View
+  // Filtered Lobbies
   const filteredLobbies = useMemo(() => {
-    if (!lobbySearch.trim()) return lobbies;
-    const q = lobbySearch.toLowerCase().trim();
-    return lobbies.filter(
-      (l) =>
-        l.roomName.toLowerCase().includes(q) ||
-        l.roomCode.toLowerCase().includes(q) ||
-        l.scheduleTitle.toLowerCase().includes(q),
-    );
-  }, [lobbies, lobbySearch]);
+    return lobbies.filter((l) => {
+      if (statusFilter === 'in_progress' && l.status !== 'in_progress') return false;
+      if (statusFilter === 'ended' && l.status !== 'ended') return false;
+      if (statusFilter === 'pending_sync' && !l.hasUnsynced) return false;
 
-  // Filtered Students for Level 2 (Selected Lobby) View
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchesRoom = l.roomName.toLowerCase().includes(q);
+        const matchesCode = l.roomCode.toLowerCase().includes(q);
+        const matchesSched = l.scheduleTitle.toLowerCase().includes(q);
+        const matchesStudent = l.students.some(
+          (s) =>
+            s.name.toLowerCase().includes(q) ||
+            s.applicantCode.toLowerCase().includes(q) ||
+            s.course.toLowerCase().includes(q),
+        );
+        return matchesRoom || matchesCode || matchesSched || matchesStudent;
+      }
+      return true;
+    });
+  }, [lobbies, statusFilter, searchQuery]);
+
+  // Filtered Students for Level 2 (Selected Lobby)
   const filteredStudents = useMemo(() => {
     if (!selectedLobby) return [];
     return selectedLobby.students.filter((s) => {
-      // Filter tab
       if (studentFilter === 'passed' && s.status !== 'passed') return false;
       if (studentFilter === 'failed' && s.status !== 'failed') return false;
-      if (studentFilter === 'enrolled' && s.status !== 'enrolled' && s.status !== 'in_progress')
-        return false;
 
-      // Search query
       if (studentSearch.trim()) {
         const q = studentSearch.toLowerCase().trim();
         const matchesName = s.name.toLowerCase().includes(q);
@@ -426,13 +380,13 @@ export default function ProctorResultsScreen() {
   }, [selectedLobby, studentFilter, studentSearch]);
 
   const getStatusColor = (status: string) => {
-    if (status === 'lobby_open' || status === 'in_progress') return '#28A745';
+    if (status === 'in_progress') return '#28A745';
     if (status === 'ended') return '#003366';
     return '#64748B';
   };
 
   // =========================================================================
-  // VIEW 2: LEVEL 2 - EXAMINEES IN THE SELECTED LOBBY
+  // VIEW 2: LEVEL 2 - EXAMINEES IN THE SELECTED EXAMINATION
   // =========================================================================
   if (selectedLobby) {
     return (
@@ -450,14 +404,14 @@ export default function ProctorResultsScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={loadData} tintColor="#003366" />
           }
         >
-          {/* BACK TO LOBBIES BAR */}
+          {/* BACK TO RECENT TRANSACTIONS BAR */}
           <Pressable
             style={styles.backToLobbiesBtn}
             onPress={() => setSelectedLobbyId(null)}
           >
             <ArrowLeft size={16} color="#0055A4" />
             <Text style={styles.backToLobbiesText} maxFontSizeMultiplier={1.15}>
-              Back to Examination Lobbies
+              Back to Recent Examination Transactions
             </Text>
           </Pressable>
 
@@ -483,7 +437,7 @@ export default function ProctorResultsScreen() {
                 </View>
                 <View style={styles.passGradeBadge}>
                   <Award size={12} color="#D97706" />
-                  <Text style={styles.passGradeText}>Passing: 75.0%</Text>
+                  <Text style={styles.passGradeText}>Passing Threshold: 75.0%</Text>
                 </View>
               </View>
             </View>
@@ -520,7 +474,7 @@ export default function ProctorResultsScreen() {
                     {selectedLobby.studentCount}
                   </Text>
                   <Text style={styles.statLabel} numberOfLines={1} maxFontSizeMultiplier={1.15}>
-                    Examinees in Lobby
+                    Total Examinees
                   </Text>
                 </View>
               </View>
@@ -535,7 +489,7 @@ export default function ProctorResultsScreen() {
                     {selectedLobby.passedCount}
                   </Text>
                   <Text style={styles.statLabel} numberOfLines={1} maxFontSizeMultiplier={1.15}>
-                    Passed Candidates
+                    Passed
                   </Text>
                 </View>
               </View>
@@ -552,7 +506,7 @@ export default function ProctorResultsScreen() {
                     {selectedLobby.failedCount}
                   </Text>
                   <Text style={styles.statLabel} numberOfLines={1} maxFontSizeMultiplier={1.15}>
-                    Failed Candidates
+                    Failed
                   </Text>
                 </View>
               </View>
@@ -576,13 +530,13 @@ export default function ProctorResultsScreen() {
             </View>
           </View>
 
-          {/* SEARCH & FILTERS */}
+          {/* SEARCH & FILTERS FOR EXAMINEES */}
           <View style={styles.searchBlock}>
             <View style={styles.searchBar}>
               <Search size={18} color="#64748B" />
               <TextInput
                 style={styles.searchInput}
-                placeholder="Search student by name or code…"
+                placeholder="Search examinee by name or code…"
                 placeholderTextColor="#94A3B8"
                 value={studentSearch}
                 onChangeText={setStudentSearch}
@@ -627,41 +581,23 @@ export default function ProctorResultsScreen() {
                   Failed ({selectedLobby.failedCount})
                 </Text>
               </Pressable>
-
-              <Pressable
-                style={[styles.pill, studentFilter === 'enrolled' && styles.pillActiveEnrolled]}
-                onPress={() => setStudentFilter('enrolled')}
-              >
-                <Text
-                  style={[styles.pillText, studentFilter === 'enrolled' && styles.pillTextEnrolled]}
-                  maxFontSizeMultiplier={1.15}
-                >
-                  In Lobby (
-                  {
-                    selectedLobby.students.filter(
-                      (s) => s.status === 'enrolled' || s.status === 'in_progress',
-                    ).length
-                  }
-                  )
-                </Text>
-              </Pressable>
             </View>
           </View>
 
           {/* STUDENTS LIST */}
           <View style={styles.listHeaderRow}>
             <Text style={styles.groupHeading} maxFontSizeMultiplier={1.2}>
-              Students in this Lobby
+              Examinee Transactions
             </Text>
             <Text style={styles.resultCount} maxFontSizeMultiplier={1.15}>
-              {filteredStudents.length} examinees
+              {filteredStudents.length} candidates
             </Text>
           </View>
 
           {filteredStudents.length === 0 ? (
             <View style={styles.emptyCard}>
               <Layers size={32} color="#94A3B8" />
-              <Text style={styles.emptyTitle}>No matching students in this lobby</Text>
+              <Text style={styles.emptyTitle}>No matching examinees</Text>
               <Text style={styles.emptySub}>
                 Try adjusting your search query or filter tab.
               </Text>
@@ -741,7 +677,7 @@ export default function ProctorResultsScreen() {
                       </Text>
                     ) : (
                       <Text style={styles.scorePending} maxFontSizeMultiplier={1.15}>
-                        Pending
+                        Taking Exam
                       </Text>
                     )}
 
@@ -770,12 +706,17 @@ export default function ProctorResultsScreen() {
                       </Text>
                     </View>
 
-                    {student.synced && (
+                    {student.synced ? (
                       <View style={styles.syncedIndicator}>
                         <Check size={10} color="#28A745" />
                         <Text style={styles.syncedText}>Synced</Text>
                       </View>
-                    )}
+                    ) : student.score != null ? (
+                      <View style={styles.unsyncedStudentIndicator}>
+                        <View style={styles.notificationRedDotSmall} />
+                        <Text style={styles.unsyncedStudentText}>Not Synced</Text>
+                      </View>
+                    ) : null}
                   </View>
                 </View>
               </View>
@@ -787,13 +728,13 @@ export default function ProctorResultsScreen() {
   }
 
   // =========================================================================
-  // VIEW 1: LEVEL 1 - LIST OF RECENT EXAMINATION LOBBIES
+  // VIEW 1: LEVEL 1 - RECENT EXAMINATION TRANSACTIONS
   // =========================================================================
   return (
     <View style={styles.screen}>
       <Header
         title="Examination Results"
-        subtitle="Recent Examination Lobbies"
+        subtitle="Recent Examination Transactions"
         onBack={() => {
           if (router.canGoBack()) {
             router.back();
@@ -810,58 +751,207 @@ export default function ProctorResultsScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={loadData} tintColor="#003366" />
         }
       >
-        {/* BANNER */}
-        <View style={styles.examBanner}>
-          <View style={styles.bannerHeader}>
-            <View style={styles.badgeRow}>
-              <View style={styles.recentPill}>
-                <Text style={styles.recentPillText}>RECENT EXAMINATION LOBBIES</Text>
+        {/* TOP OVERVIEW SUMMARY STATS (4 Cards) */}
+        <View style={styles.statsContainer}>
+          <View style={styles.statsRow}>
+            {/* Lobbies Conducted */}
+            <View style={styles.statCard}>
+              <View style={[styles.statIconWrap, { backgroundColor: '#EBF3FE' }]}>
+                <DoorOpen size={20} color="#0055A4" />
               </View>
-              <View style={styles.passGradeBadge}>
-                <Award size={12} color="#D97706" />
-                <Text style={styles.passGradeText}>Passing Threshold: 75.0%</Text>
+              <View style={styles.statContent}>
+                <Text style={styles.statValue} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                  {lobbies.length}
+                </Text>
+                <Text style={styles.statLabel} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                  Conducted Sessions
+                </Text>
+              </View>
+            </View>
+
+            {/* Total Examinee Submissions / Transactions */}
+            <View style={styles.statCard}>
+              <View style={[styles.statIconWrap, { backgroundColor: '#F0FDF4' }]}>
+                <FileText size={20} color="#16A34A" />
+              </View>
+              <View style={styles.statContent}>
+                <Text style={styles.statValue} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                  {totalSubmissions}
+                </Text>
+                <Text style={styles.statLabel} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                  Transactions
+                </Text>
               </View>
             </View>
           </View>
 
-          <Text style={styles.bannerTitle} maxFontSizeMultiplier={1.2}>
-            Select a Lobby to View Examinees
-          </Text>
-          <Text style={styles.bannerInstruction} maxFontSizeMultiplier={1.15}>
-            Tap any examination room below to view all examinees, their full names, score percentages, and passed/failed statuses.
-          </Text>
+          <View style={styles.statsRow}>
+            {/* Overall Pass Rate */}
+            <View style={styles.statCard}>
+              <View style={[styles.statIconWrap, { backgroundColor: '#FEF3C7' }]}>
+                <Award size={20} color="#D97706" />
+              </View>
+              <View style={styles.statContent}>
+                <Text style={styles.statValue} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                  {overallPassRate}{totalSubmissions > 0 ? '%' : ''}
+                </Text>
+                <Text style={styles.statLabel} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                  Pass Rate ({passedSubmissions}/{totalSubmissions})
+                </Text>
+              </View>
+            </View>
+
+            {/* Cloud Sync Status */}
+            <View style={styles.statCard}>
+              <View
+                style={[
+                  styles.statIconWrap,
+                  { backgroundColor: pendingSyncCount > 0 ? '#FEF2F2' : '#E6F4EA' },
+                ]}
+              >
+                <RefreshCw
+                  size={18}
+                  color={pendingSyncCount > 0 ? '#DC3545' : '#28A745'}
+                />
+              </View>
+              <View style={styles.statContent}>
+                <Text
+                  style={[
+                    styles.statValue,
+                    { color: pendingSyncCount > 0 ? '#DC3545' : '#28A745' },
+                  ]}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={1.2}
+                >
+                  {pendingSyncCount > 0 ? `${pendingSyncCount} Pending` : 'All Synced'}
+                </Text>
+                <Text style={styles.statLabel} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                  {syncedCount} Synced to Server
+                </Text>
+              </View>
+            </View>
+          </View>
         </View>
 
-        {/* SEARCH BAR FOR LOBBIES */}
-        <View style={styles.searchBar}>
-          <Search size={18} color="#64748B" />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search lobby by room name or code…"
-            placeholderTextColor="#94A3B8"
-            value={lobbySearch}
-            onChangeText={setLobbySearch}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+        {/* PENDING SYNC NOTICE BANNER */}
+        {pendingSyncCount > 0 && (
+          <View style={styles.pendingSyncBanner}>
+            <View style={styles.pendingSyncIconWrap}>
+              <AlertCircle size={20} color="#D97706" />
+            </View>
+            <View style={styles.pendingSyncContent}>
+              <Text style={styles.pendingSyncTitle}>
+                {pendingSyncCount} {pendingSyncCount === 1 ? 'Transaction' : 'Transactions'} Pending Sync
+              </Text>
+              <Text style={styles.pendingSyncSub}>
+                Results are securely queued offline on this device. Sync to transmit records to the administrative server.
+              </Text>
+            </View>
+            <Pressable
+              style={styles.pendingSyncBtn}
+              onPress={() => router.push('/offline-prepare' as any)}
+            >
+              <Text style={styles.pendingSyncBtnText}>Sync</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {/* SEARCH & FILTERS */}
+        <View style={styles.searchBlock}>
+          <View style={styles.searchBar}>
+            <Search size={18} color="#64748B" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search recent transactions by room, code, or schedule…"
+              placeholderTextColor="#94A3B8"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+
+          <View style={styles.filterPills}>
+            <Pressable
+              style={[styles.pill, statusFilter === 'all' && styles.pillActive]}
+              onPress={() => setStatusFilter('all')}
+            >
+              <Text
+                style={[styles.pillText, statusFilter === 'all' && styles.pillTextActive]}
+                maxFontSizeMultiplier={1.15}
+              >
+                All ({lobbies.length})
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.pill, statusFilter === 'in_progress' && styles.pillActivePass]}
+              onPress={() => setStatusFilter('in_progress')}
+            >
+              <Text
+                style={[styles.pillText, statusFilter === 'in_progress' && styles.pillTextPass]}
+                maxFontSizeMultiplier={1.15}
+              >
+                In Progress ({lobbies.filter((l) => l.status === 'in_progress').length})
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.pill, statusFilter === 'ended' && styles.pillActiveEnrolled]}
+              onPress={() => setStatusFilter('ended')}
+            >
+              <Text
+                style={[styles.pillText, statusFilter === 'ended' && styles.pillTextEnrolled]}
+                maxFontSizeMultiplier={1.15}
+              >
+                Ended ({lobbies.filter((l) => l.status === 'ended').length})
+              </Text>
+            </Pressable>
+
+            {pendingSyncCount > 0 && (
+              <Pressable
+                style={[styles.pill, statusFilter === 'pending_sync' && styles.pillActiveWarn]}
+                onPress={() => setStatusFilter('pending_sync')}
+              >
+                <Text
+                  style={[styles.pillText, statusFilter === 'pending_sync' && styles.pillTextWarn]}
+                  maxFontSizeMultiplier={1.15}
+                >
+                  Pending Sync ({lobbies.filter((l) => l.hasUnsynced).length})
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                  <View style={styles.notificationRedDotSmall} />
+                  <Text
+                    style={[styles.pillText, statusFilter === 'pending_sync' && styles.pillTextWarn]}
+                    maxFontSizeMultiplier={1.15}
+                  >
+                    Pending Sync ({lobbies.filter((l) => l.hasUnsynced).length})
+                  </Text>
+                </View>
+              </Pressable>
+            )}
+          </View>
         </View>
 
-        {/* LOBBIES LIST */}
+        {/* LIST HEADER */}
         <View style={styles.listHeaderRow}>
           <Text style={styles.groupHeading} maxFontSizeMultiplier={1.2}>
-            Available Examination Lobbies ({filteredLobbies.length})
+            Recent Examination Transactions ({filteredLobbies.length})
+          </Text>
+          <Text style={styles.resultCount} maxFontSizeMultiplier={1.15}>
+            Tap to view examinee details
           </Text>
         </View>
 
         {filteredLobbies.length === 0 ? (
           <View style={styles.emptyCard}>
-            <Layers size={36} color="#94A3B8" />
-            <Text style={styles.emptyTitle}>No examination lobbies found</Text>
+            <FileText size={36} color="#94A3B8" />
+            <Text style={styles.emptyTitle}>No examination transactions found</Text>
             <Text style={styles.emptySub}>
-              No rooms or lobbies have been recorded yet. Launch a lobby from Examination tab.
+              Only examinations that have already started or ended appear here. Start an examination room from the Examination tab to begin.
             </Text>
             <Button
-              title="Browse Examination Schedules"
+              title="Go to Examination"
               variant="outline"
               size="sm"
               onPress={() => router.push('/(proctor)/examination' as any)}
@@ -882,20 +972,17 @@ export default function ProctorResultsScreen() {
                     styles.lobbyIconWrap,
                     {
                       backgroundColor:
-                        lobby.status === 'lobby_open' || lobby.status === 'in_progress'
-                          ? '#E6F4EA'
-                          : '#EBF3FE',
+                        lobby.status === 'in_progress' ? '#E6F4EA' : '#EBF3FE',
                     },
                   ]}
                 >
                   <DoorOpen
                     size={22}
-                    color={
-                      lobby.status === 'lobby_open' || lobby.status === 'in_progress'
-                        ? '#28A745'
-                        : '#0055A4'
-                    }
+                    color={lobby.status === 'in_progress' ? '#28A745' : '#003366'}
                   />
+                  {lobby.hasUnsynced && (
+                    <View style={styles.notificationRedDot} />
+                  )}
                 </View>
 
                 {/* Info */}
@@ -908,21 +995,29 @@ export default function ProctorResultsScreen() {
                     >
                       {lobby.roomName}
                     </Text>
-                    <View
-                      style={[
-                        styles.statusPill,
-                        { backgroundColor: getStatusColor(lobby.status) + '18' },
-                      ]}
-                    >
-                      <Text
+                    <View style={styles.pillGroupRow}>
+                      {lobby.hasUnsynced && (
+                        <View style={styles.unsyncedNotificationBadge}>
+                          <View style={styles.notificationRedDotSmall} />
+                          <Text style={styles.unsyncedNotificationText}>Not Synced</Text>
+                        </View>
+                      )}
+                      <View
                         style={[
-                          styles.statusPillText,
-                          { color: getStatusColor(lobby.status) },
+                          styles.statusPill,
+                          { backgroundColor: getStatusColor(lobby.status) + '18' },
                         ]}
-                        maxFontSizeMultiplier={1.15}
                       >
-                        {lobby.statusLabel}
-                      </Text>
+                        <Text
+                          style={[
+                            styles.statusPillText,
+                            { color: getStatusColor(lobby.status) },
+                          ]}
+                          maxFontSizeMultiplier={1.15}
+                        >
+                          {lobby.statusLabel}
+                        </Text>
+                      </View>
                     </View>
                   </View>
 
@@ -944,7 +1039,7 @@ export default function ProctorResultsScreen() {
                 <ChevronRight size={20} color="#94A3B8" style={{ flexShrink: 0 }} />
               </View>
 
-              {/* Bottom stats footer of the lobby card */}
+              {/* Bottom stats footer */}
               <View style={styles.lobbyCardFooter}>
                 <View style={styles.lobbyFooterItem}>
                   <Users size={13} color="#0055A4" />
@@ -972,19 +1067,39 @@ export default function ProctorResultsScreen() {
                     Failed
                   </Text>
                 </View>
+
+                {lobby.averageScore != null && (
+                  <View style={styles.lobbyFooterItem}>
+                    <Award size={13} color="#D97706" />
+                    <Text style={styles.lobbyFooterText}>
+                      <Text style={[styles.lobbyFooterBold, { color: '#D97706' }]}>
+                        {lobby.averageScore.toFixed(1)}%
+                      </Text>{' '}
+                      Avg
+                    </Text>
+                  </View>
+                )}
+
+                {lobby.hasUnsynced && (
+                  <View style={[styles.lobbyFooterItem, styles.unsyncedFootBadge]}>
+                    <RefreshCw size={11} color="#D97706" />
+                    <View style={styles.notificationRedDotSmall} />
+                    <Text style={styles.unsyncedFootText}>Sync Required</Text>
+                  </View>
+                )}
               </View>
             </Pressable>
           ))
         )}
 
-        {/* SYNC BUTTON */}
+        {/* SYNC RESULTS BUTTON */}
         <Button
-          title="Sync Results to Administrator"
+          title="Sync All Results to Cloud Server"
           variant="outline"
           size="md"
           fullWidth
           onPress={() => router.push('/offline-prepare' as any)}
-          style={{ marginTop: 8 }}
+          style={{ marginTop: 12 }}
         />
       </ScrollView>
     </View>
@@ -1008,14 +1123,14 @@ const styles = StyleSheet.create({
     color: '#0055A4',
   },
 
-  // Exam Banner
-  examBanner: {
+  // Lobby Detail Banner (in Level 2)
+  lobbyDetailBanner: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    gap: 8,
+    gap: 6,
     ...shadows.card,
   },
   bannerHeader: {
@@ -1028,18 +1143,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     flexWrap: 'wrap',
-  },
-  recentPill: {
-    backgroundColor: '#EBF3FE',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  recentPillText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#0055A4',
-    letterSpacing: 0.5,
   },
   passGradeBadge: {
     flexDirection: 'row',
@@ -1055,33 +1158,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#D97706',
   },
-  bannerTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#003366',
-    marginTop: 2,
-  },
-  bannerInstruction: {
-    fontSize: 12,
-    color: '#64748B',
-    lineHeight: 18,
-    fontWeight: '500',
-  },
-
-  // Lobby Detail Banner (in Level 2)
-  lobbyDetailBanner: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 6,
-    ...shadows.card,
-  },
   lobbyBannerTitle: {
     fontSize: 18,
     fontWeight: '800',
     color: '#003366',
+    marginTop: 2,
   },
   lobbyBannerSub: {
     fontSize: 13,
@@ -1155,6 +1236,53 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
+  // PENDING SYNC BANNER
+  pendingSyncBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFBEB',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    gap: 10,
+  },
+  pendingSyncIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  pendingSyncContent: {
+    flex: 1,
+    gap: 2,
+  },
+  pendingSyncTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#92400E',
+  },
+  pendingSyncSub: {
+    fontSize: 11,
+    color: '#B45309',
+    lineHeight: 15,
+  },
+  pendingSyncBtn: {
+    backgroundColor: '#D97706',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    alignSelf: 'center',
+  },
+  pendingSyncBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+
   // Search & Filters
   searchBlock: {
     gap: 10,
@@ -1202,6 +1330,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#DC3545',
     borderColor: '#DC3545',
   },
+  pillActiveWarn: {
+    backgroundColor: '#D97706',
+    borderColor: '#D97706',
+  },
   pillActiveEnrolled: {
     backgroundColor: '#0055A4',
     borderColor: '#0055A4',
@@ -1218,6 +1350,9 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   pillTextFail: {
+    color: '#FFFFFF',
+  },
+  pillTextWarn: {
     color: '#FFFFFF',
   },
   pillTextEnrolled: {
@@ -1243,7 +1378,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // LOBBY CARD (Level 1)
+  // LOBBY CARD
   lobbyCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
@@ -1315,6 +1450,8 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: '#F1F5F9',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   lobbyFooterItem: {
     flexDirection: 'row',
@@ -1329,6 +1466,17 @@ const styles = StyleSheet.create({
   lobbyFooterBold: {
     fontWeight: '700',
     color: '#003366',
+  },
+  unsyncedFootBadge: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  unsyncedFootText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#D97706',
   },
 
   // STUDENT CARD (Level 2)
@@ -1435,6 +1583,62 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: '#28A745',
     fontWeight: '700',
+  },
+  unsyncedStudentIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FEF2F2',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  unsyncedStudentText: {
+    fontSize: 9,
+    color: '#DC2626',
+    fontWeight: '700',
+  },
+
+  // Notification Red Dot Styles
+  notificationRedDot: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    width: 11,
+    height: 11,
+    borderRadius: 5.5,
+    backgroundColor: '#DC3545',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    elevation: 3,
+  },
+  notificationRedDotSmall: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#DC3545',
+  },
+  pillGroupRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  unsyncedNotificationBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  unsyncedNotificationText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#DC2626',
+    letterSpacing: 0.3,
   },
 
   // Empty State

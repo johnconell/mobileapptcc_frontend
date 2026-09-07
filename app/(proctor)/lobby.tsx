@@ -22,6 +22,7 @@ import { useLobby } from '@/hooks/useRepositories';
 import { LobbyRepository } from '@/repositories';
 import { QUERY_KEYS } from '@/constants';
 import { PeerExamServer } from '@/services/peerExamServer';
+import { OfflineStore } from '@/services/offlineStore';
 import { useLobbyStore, useProctorStore } from '@/stores';
 import { colors } from '@/theme';
 import type { LobbyStudent } from '@/types';
@@ -315,24 +316,7 @@ export default function ProctorLobbyScreen() {
   }, [lobby?.status, lobby?.session?.examSessionId, lobby?.finishedCount]);
 
   const goBack = () => {
-    const targetScheduleId =
-      scheduleId || lobby?.session?.scheduleId || selectedSchedule?.id || undefined;
-    if (router.canGoBack()) {
-      router.back();
-      return;
-    }
-    if (sessionId) {
-      router.replace({
-        pathname: '/(proctor)/rooms' as any,
-        params: {
-          sessionId,
-          ...(targetScheduleId ? { scheduleId: targetScheduleId } : {}),
-        },
-      });
-      return;
-    }
     router.replace('/(proctor)/examination' as any);
-    safeBack(router, '/(proctor)/examination' as any);
   };
 
   // HIERARCHICAL NAVIGATION: Hardware back button returns to Rooms / Time slot
@@ -944,9 +928,20 @@ export default function ProctorLobbyScreen() {
             } else {
               const snapshot = await LobbyRepository.endExamination(sessionId, roomId);
               setSnapshot(snapshot);
+              // Ensure this session is marked ended in offline store
+              const sid = String(sessionId).replace(/^offline-/, '');
+              if (roomId) {
+                await OfflineStore.setOpenedRoom(
+                  sid,
+                  roomId,
+                  lobby?.examinationCode || 'ENDED',
+                  'ended',
+                );
+              }
             }
             await refresh();
             await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.rooms(sessionId) });
+            await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.schedules });
             setEndOpen(false);
             Alert.alert(
               wasLobbyOnly ? 'Lobby closed' : 'Examination ended',
@@ -954,12 +949,7 @@ export default function ProctorLobbyScreen() {
                 ? 'This room is closed but not ended. You can open it again when ready.'
                 : 'All active examinees were submitted and the session is closed.',
             );
-            if (sessionId) {
-              router.replace({
-                pathname: '/(proctor)/rooms' as any,
-                params: { sessionId },
-              });
-            }
+            router.replace('/(proctor)/examination' as any);
           } catch (error) {
             Alert.alert(
               'Unable to close',

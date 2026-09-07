@@ -1,4 +1,4 @@
-export type PasskeyMatchClassification = 'valid' | 'wrong_schedule' | 'invalid';
+export type PasskeyMatchClassification = 'valid' | 'wrong_schedule' | 'invalid' | 'already_completed';
 
 export function classifyPasskeyMatch(input: {
   currentScheduleId: number | null | undefined;

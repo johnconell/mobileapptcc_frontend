@@ -1,11 +1,10 @@
 import React, { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import { Alert, BackHandler, ScrollView, Text, View, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
-import { Check, User, ShieldAlert, RefreshCw, AlertTriangle } from 'lucide-react-native';
+import { Check, User, ShieldAlert, RefreshCw, AlertTriangle, ShieldCheck } from 'lucide-react-native';
 import { Header } from '@/components/ui/Header';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { LobbyWaitingAnimation } from '@/features/lobby/LobbyWaitingAnimation';
 import { useLobby } from '@/hooks/useRepositories';
 import { appStorage } from '@/services/storage';
 import { STORAGE_KEYS } from '@/constants';
@@ -309,23 +308,88 @@ export default function StudentLobbyScreen() {
            )}
         </Card>
 
-        {/* SECTION 3: SIGNAL AREA */}
-        <View style={styles.waitingArea}>
-            <LobbyWaitingAnimation />
-            <Text style={styles.waitingTitle}>
-               {controller.state === 'STARTING' ? "Entry Authorized!" : "Waiting for Proctor..."}
-            </Text>
-            <Text style={styles.waitingSub}>
-               The exam opens automatically. Keep this screen visible and stay on the Wi-Fi.
-            </Text>
+        {/* SECTION 3: WAITING STATUS BANNER */}
+        <Card style={styles.waitingCard}>
+          <View style={styles.waitingBannerRow}>
+            <View style={styles.waitingAnimWrap}>
+              <ActivityIndicator size="small" color="#0055A4" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.waitingBannerTitle}>
+                {controller.state === 'STARTING' ? 'Entry Authorized!' : 'Waiting for Proctor to Start...'}
+              </Text>
+              <Text style={styles.waitingBannerSub}>
+                {controller.state === 'STARTING'
+                  ? 'Launching examination browser. Please hold on.'
+                  : 'The test opens automatically. Please read the regulations below.'}
+              </Text>
+            </View>
+          </View>
 
-            {controller.state === 'STARTING' && (
-                <View style={styles.startingBox}>
-                    <ActivityIndicator size="small" color={colors.primary} />
-                    <Text style={styles.startingText}>Launching Exam Browser...</Text>
-                </View>
-            )}
-        </View>
+          {controller.state === 'STARTING' && (
+            <View style={styles.startingBox}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.startingText}>Launching Exam Browser...</Text>
+            </View>
+          )}
+        </Card>
+
+        {/* SECTION 4: RULES & REGULATIONS (Exactly matches Proctor Dashboard) */}
+        <Card style={styles.rulesCard}>
+          <View style={styles.rulesHeader}>
+            <View style={styles.rulesIconWrap}>
+              <ShieldCheck size={20} color="#0055A4" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rulesTitle}>Rules & Regulations</Text>
+              <Text style={styles.rulesSubtitle}>
+                Proctoring Standards & Examinee Guidelines
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.rulesList}>
+            <View style={styles.ruleRow}>
+              <Text style={styles.ruleBullet}>•</Text>
+              <Text style={styles.ruleText}>
+                <Text style={styles.ruleBold}>Verification: </Text>
+                Examinees must scan proctor QR code or enter verified 6-digit access code.
+              </Text>
+            </View>
+
+            <View style={styles.ruleRow}>
+              <Text style={styles.ruleBullet}>•</Text>
+              <Text style={styles.ruleText}>
+                <Text style={styles.ruleBold}>Strict No-Device Policy: </Text>
+                Smartphones, smartwatches, and unauthorized electronics are prohibited.
+              </Text>
+            </View>
+
+            <View style={styles.ruleRow}>
+              <Text style={styles.ruleBullet}>•</Text>
+              <Text style={styles.ruleText}>
+                <Text style={styles.ruleBold}>Duration & Timer: </Text>
+                Session is strictly timed; auto-submits when countdown reaches 00:00.
+              </Text>
+            </View>
+
+            <View style={styles.ruleRow}>
+              <Text style={styles.ruleBullet}>•</Text>
+              <Text style={styles.ruleText}>
+                <Text style={styles.ruleBold}>Passing Standard: </Text>
+                Minimum qualifying score is 75.0%.
+              </Text>
+            </View>
+
+            <View style={styles.ruleRow}>
+              <Text style={styles.ruleBullet}>•</Text>
+              <Text style={styles.ruleText}>
+                <Text style={styles.ruleBold}>Disconnection: </Text>
+                Examinees can resume disconnected sessions via Proctor PIN without data loss.
+              </Text>
+            </View>
+          </View>
+        </Card>
 
         {/* SECTION 4: NETWORK HEALTH */}
         <View style={styles.networkBox}>
@@ -376,10 +440,40 @@ const styles = StyleSheet.create({
   infoItem: { alignItems: 'center' },
   infoLabel: { fontSize: 10, fontWeight: '800', color: colors.inkMuted, textTransform: 'uppercase' },
   infoValue: { fontSize: 14, fontWeight: '700', color: colors.ink, marginTop: 2 },
-  waitingArea: { alignItems: 'center', paddingVertical: 40 },
-  waitingTitle: { fontSize: 18, fontWeight: '800', color: colors.ink, marginTop: 12 },
-  waitingSub: { fontSize: 13, color: colors.inkSecondary, textAlign: 'center', lineHeight: 19, paddingHorizontal: 20 },
-  startingBox: { flexDirection: 'row', alignItems: 'center', marginTop: 16 },
+  waitingCard: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  waitingBannerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  waitingAnimWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#EBF3FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  waitingBannerTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#003366',
+  },
+  waitingBannerSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+    fontWeight: '500',
+    lineHeight: 15,
+  },
+  startingBox: { flexDirection: 'row', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#E2E8F0' },
   startingText: { fontSize: 14, fontWeight: '700', color: colors.primary, marginLeft: 8 },
   networkBox: { flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: colors.surface, borderRadius: 12, borderWidth: 1, borderColor: colors.border, marginTop: 8 },
   pulse: { width: 8, height: 8, borderRadius: 4, marginRight: 10 },
@@ -389,4 +483,66 @@ const styles = StyleSheet.create({
   loadingInfo: { fontSize: 13, color: colors.inkMuted, fontStyle: 'italic', textAlign: 'center' },
   crashWrap: { flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', padding: 40 },
   crashTitle: { fontSize: 20, fontWeight: '800', color: colors.ink, marginBottom: 12 },
+
+  // RULES & REGULATIONS STYLES
+  rulesCard: {
+    marginTop: 14,
+    padding: 16,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  rulesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  rulesIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#EBF3FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rulesTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#003366',
+  },
+  rulesSubtitle: {
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  rulesList: {
+    gap: 10,
+  },
+  ruleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  ruleBullet: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#0055A4',
+    lineHeight: 18,
+  },
+  ruleText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#475569',
+  },
+  ruleBold: {
+    fontWeight: '700',
+    color: '#003366',
+  },
 });

@@ -75,6 +75,13 @@ export default function StudentPasskeyScreen() {
     setError(null);
     try {
       const result = await LobbyRepository.validatePasskey(values.passkey.trim());
+      if (result.classification === 'already_completed') {
+        setError(
+          result.message ||
+            'Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.',
+        );
+        return;
+      }
       if (result.classification === 'wrong_schedule') {
         const sched = result.schedule;
         if (sched && (sched.exam_date || sched.time_slot || sched.title)) {
@@ -96,17 +103,29 @@ export default function StudentPasskeyScreen() {
       if (!result.student) {
         throw new Error(result.message || 'Unable to continue with this examination key.');
       }
-      // Prevent repeated attempts: check if this applicant already has a queued or submitted result
+      // Prevent repeated attempts: check if this applicant already has a queued or submitted result or local device marker
       try {
-        const results = await OfflineStore.getResults();
+        const applicantCode = String(result.student?.studentId || result.student?.id || '').trim().toUpperCase();
         const scheduleId = result.schedule?.id ? Number(result.schedule.id) : null;
+
+        if (applicantCode && scheduleId) {
+          const localMarker = await appStorage.getItem(`tcc.student.completed.${scheduleId}.${applicantCode}`);
+          if (localMarker === '1') {
+            setError(
+              'Examination Already Completed\nYou have already taken this examination on this device. Multiple attempts are not permitted.',
+            );
+            return;
+          }
+        }
+
+        const results = await OfflineStore.getResults();
         const already = results.find((r) => {
-          const matchApplicant = String(r.applicant_code) === String(result.student?.studentId || result.student?.id);
-          const matchSchedule = scheduleId ? r.examination_schedule_id === scheduleId : false;
+          const matchApplicant = (r.applicant_code || '').trim().toUpperCase() === applicantCode;
+          const matchSchedule = scheduleId ? Number(r.examination_schedule_id) === scheduleId : false;
           return matchApplicant && matchSchedule;
         });
         if (already) {
-          setError('Examination Already Completed\nYou have already taken this examination. Multiple attempts are not allowed.');
+          setError('Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.');
           return;
         }
       } catch {
