@@ -7,6 +7,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
+import { useKeepAwake } from 'expo-keep-awake';
 import { CloudUpload, Shield } from 'lucide-react-native';
 import {
   Button,
@@ -22,15 +23,17 @@ import { useExamStore, useStudentStore } from '@/stores';
 import { useExamTimer } from '@/hooks/useExamTimer';
 import { useExamSecurity } from '@/hooks/useExamSecurity';
 import { useWifiExamGate } from '@/hooks/useWifiExamGate';
-import { useLobby } from '@/hooks/useRepositories';
 import { LobbyRepository } from '@/repositories';
 import { QuestionRepository } from '@/repositories/QuestionRepository';
 import { ExamProgressStore } from '@/services/examProgressStore';
-import { OfflineStore } from '@/services/offlineStore';
+import { ExamLifecycle } from '@/services/examLifecycle';
+import { PeerExamClient } from '@/services/peerExamClient';
+import { parseStartPulse } from '@/services/examStartCoordinator';
 import { colors } from '@/theme';
 import type { ChoiceKey } from '@/types';
 
 export default function ExamScreen() {
+  useKeepAwake();
   const router = useRouter();
   const navigation = useNavigation();
   const scrollRef = useRef<ScrollView>(null);
@@ -38,7 +41,7 @@ export default function ExamScreen() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [reconnectLoading, setReconnectLoading] = useState(false);
   const [reconnectError, setReconnectError] = useState<string | null>(null);
-  const [offlineMode, setOfflineMode] = useState(false);
+  const [roomEnded, setRoomEnded] = useState(false);
   const restoredRef = useRef(false);
   const autoSubmittedRef = useRef(false);
 
@@ -58,13 +61,13 @@ export default function ExamScreen() {
   const restoreProgress = useExamStore((s) => s.restoreProgress);
 
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
-  const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
-  const lobbyQuery = useLobby(scannedSessionId ?? undefined);
 
   const securityEnabled = questions.length > 0;
 
   useEffect(() => {
-    void OfflineStore.isOfflineMode().then(setOfflineMode);
+    console.log('[STUDENT] Exam Screen Opened');
+    void ExamLifecycle.apply('ACTIVE');
+    void LobbyRepository.acknowledgeStart('entered');
   }, []);
 
   const onWifiDisconnect = useCallback(() => {
@@ -72,7 +75,7 @@ export default function ExamScreen() {
   }, []);
 
   const { wifiLocked, requiresPin, unlockAfterReconnect } = useWifiExamGate({
-    enabled: securityEnabled && !offlineMode,
+    enabled: securityEnabled,
     onDisconnect: onWifiDisconnect,
   });
 
@@ -144,16 +147,36 @@ export default function ExamScreen() {
     markAutoSaved,
   ]);
 
-  // Heartbeat while unlocked on campus Wi‑Fi.
+  // Heartbeat while the exam is open. LAN/offline mode must still reach the proctor phone.
   useEffect(() => {
-    if (!securityEnabled || offlineMode || wifiLocked) return;
-    const beat = () => {
-      void LobbyRepository.sendHeartbeat();
+    if (!securityEnabled || wifiLocked) return;
+    let cancelled = false;
+    const beat = async () => {
+      const pulse = await LobbyRepository.sendHeartbeat();
+      const parsed = parseStartPulse(pulse);
+      if (cancelled) return;
+      if (parsed?.roomStatus === 'ended') {
+        await ExamLifecycle.applyFromServer('ended');
+        setRoomEnded(true);
+        return;
+      }
+      if (!pulse.ok) {
+        const global = await PeerExamClient.getGlobalStatus();
+        if (!cancelled && global?.roomStatus === 'ended') {
+          await ExamLifecycle.applyFromServer('ended');
+          setRoomEnded(true);
+        }
+      }
     };
-    beat();
-    const id = setInterval(beat, 5000);
-    return () => clearInterval(id);
-  }, [securityEnabled, offlineMode, wifiLocked]);
+    void beat();
+    const id = setInterval(() => {
+      void beat();
+    }, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [securityEnabled, wifiLocked]);
 
   const goSubmit = useCallback(
     (reason: 'submitted' | 'policy_violation' | 'time_expired' = 'submitted') => {
@@ -254,12 +277,12 @@ export default function ExamScreen() {
   // otherwise a paused student would sit on an expired exam forever.
   useEffect(() => {
     if (autoSubmittedRef.current) return;
-    const ended = lobbyQuery.data?.status === 'ended';
+    const ended = roomEnded;
     if (questions.length > 0 && (remainingSeconds <= 0 || ended)) {
       autoSubmittedRef.current = true;
       goSubmit('time_expired');
     }
-  }, [remainingSeconds, questions.length, lobbyQuery.data?.status, goSubmit]);
+  }, [remainingSeconds, questions.length, roomEnded, goSubmit]);
 
   const progress = questions.length ? answeredCount() / questions.length : 0;
   const missingLabel = useMemo(() => {

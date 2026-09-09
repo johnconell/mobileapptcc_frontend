@@ -24,6 +24,22 @@ export function LobbyStudentCard({ student, delay = 0, onPress }: LobbyStudentCa
             <Text style={styles.name}>{student.fullName}</Text>
             <Text style={styles.email}>{student.email}</Text>
             <Text style={styles.program}>{student.programName}</Text>
+            {student.downloadPercent != null || student.hashVerified != null || student.moduleReady != null || student.isReady != null ? (
+              <Text style={styles.downloadLine}>
+                {`${Math.round(student.downloadPercent ?? (student.isReady ? 100 : 0))}% · ${
+                  student.hashVerified || student.isReady ? 'Verified' : 'Downloading'
+                } · ${student.moduleReady || student.isReady ? 'Ready' : 'Not ready'}`}
+              </Text>
+            ) : null}
+            <Text style={styles.startPhase}>
+              {student.startPhase === 'entered' || student.status === 'taking_exam'
+                ? 'Entered Examination'
+                : student.startPhase === 'received'
+                  ? 'Received Start Signal'
+                  : student.status === 'waiting'
+                    ? 'Waiting'
+                    : student.status.replace(/_/g, ' ')}
+            </Text>
             {student.violationCount > 0 ? (
               <Text style={styles.violations}>Warnings: {student.violationCount}</Text>
             ) : null}
@@ -49,6 +65,8 @@ const styles = StyleSheet.create({
   name: { fontSize: 15, fontWeight: '700', color: colors.ink },
   email: { fontSize: 12, color: colors.inkMuted, fontWeight: '500' },
   program: { fontSize: 12, color: colors.inkSecondary, fontWeight: '600' },
+  downloadLine: { fontSize: 11, fontWeight: '700', color: colors.primary, marginTop: 4 },
+  startPhase: { fontSize: 11, fontWeight: '700', color: colors.inkSecondary, marginTop: 2 },
   violations: { fontSize: 11, fontWeight: '700', color: colors.danger, marginTop: 2 },
   reconnectRow: {
     marginTop: 8,

@@ -713,4 +713,14 @@ export const OfflineStore = {
     }
     await appStorage.setItem(STORAGE_KEYS.offlineClaims, JSON.stringify(ids));
   },
+
+  /** Deletes cached exam pack files. Does not touch queued results. */
+  async clearPackFiles(): Promise<void> {
+    this.invalidatePackCache();
+    await deleteIfExists(PACK_ENC_FILE, WEB_PACK_ENC_KEY);
+    await deleteIfExists(PACK_FILE, WEB_PACK_KEY);
+    await appStorage.deleteItem(STORAGE_KEYS.offlinePackReady);
+    await appStorage.deleteItem(STORAGE_KEYS.offlinePackAt);
+    await appStorage.deleteItem('tcc.offline.pack.sha256');
+  },
 };

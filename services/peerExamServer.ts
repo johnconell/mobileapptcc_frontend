@@ -68,6 +68,10 @@ type PeerStudentState = {
   reconnectCodeExpiresAt: string | null;
   isReady: boolean;
   packageHash: string | null;
+  downloadPercent: number;
+  hashVerified: boolean;
+  moduleReady: boolean;
+  startPhase: 'waiting' | 'received' | 'entered';
 };
 
 type PeerViolation = {
@@ -96,6 +100,7 @@ type PeerSessionState = {
   violationSeq: number;
   wifiSsid?: string | null;
   hostIp?: string | null;
+  startSeq: number;
 };
 
 type JsonResponse = {
@@ -278,7 +283,55 @@ function toLobbyStudent(state: PeerStudentState): LobbyStudent {
     reconnectCode: state.reconnectCode,
     reconnectCodeExpiresAt: state.reconnectCodeExpiresAt,
     isReady: Boolean(state.isReady),
+    downloadPercent: Number(state.downloadPercent ?? (state.isReady ? 100 : 0)),
+    hashVerified: Boolean(state.hashVerified ?? state.isReady),
+    moduleReady: Boolean(state.moduleReady ?? state.isReady),
+    startPhase: state.startPhase ?? (state.status === 'taking_exam' ? 'entered' : 'waiting'),
   };
+}
+
+function authorityOf(status: PeerSessionState['status']): 'WAITING' | 'ACTIVE' | 'ENDED' {
+  if (status === 'ended') return 'ENDED';
+  if (status === 'in_progress') return 'ACTIVE';
+  return 'WAITING';
+}
+
+function statusPayload(student: PeerStudentState | null) {
+  if (!session) {
+    return {
+      examStarted: false,
+      roomStatus: 'offline',
+      authorityStatus: 'WAITING' as const,
+      myStatus: 'anonymous',
+      startPhase: 'waiting' as const,
+      startSeq: 0,
+      serverTime: Date.now(),
+      v: 0,
+    };
+  }
+  return {
+    examStarted: session.status === 'in_progress',
+    roomStatus: session.status,
+    authorityStatus: authorityOf(session.status),
+    myStatus: student?.status ?? 'anonymous',
+    startPhase: student?.startPhase ?? 'waiting',
+    startSeq: session.startSeq ?? 0,
+    serverTime: Date.now(),
+    v: session.startSeq ?? (session.status === 'in_progress' ? 2 : 1),
+  };
+}
+
+function applyStartAck(student: PeerStudentState, phase: 'received' | 'entered') {
+  const order = { waiting: 0, received: 1, entered: 2 };
+  const current = student.startPhase ?? 'waiting';
+  if (order[phase] >= order[current]) {
+    student.startPhase = phase;
+  }
+  if (phase === 'entered' && student.status === 'waiting') {
+    student.status = 'taking_exam';
+    student.startedAt = student.startedAt ?? new Date().toISOString();
+    console.log(`[SESSION] ${student.applicantCode} entered examination`);
+  }
 }
 
 function remainingSeconds(state: PeerSessionState): number | null {
@@ -432,36 +485,37 @@ function registerRoutes(mod: HttpServerModule) {
 
   const p = (path: string) => `${PEER_PATH_PREFIX}${path}`;
 
-  mod.route(p('/health'), 'GET', async () => {
+  const handleHealth = async () => {
     return ok({
       server: 'proctor',
       mode: 'offline',
       status: session ? 'ready' : 'idle',
       session_status: session?.status ?? null,
     });
-  });
+  };
+  mod.route(p('/health'), 'GET', handleHealth);
+  mod.route(p('/health'), 'POST', handleHealth);
 
   /**
    * Ultra-fast signal endpoint (Minecraft-style).
    * RETURNS ONLY PRIMITIVES. NO STUDENT LIST. NO HEAVY OBJECTS.
    * Fixing Root Cause 1 (Congestion) and 2 (Token Gate).
    */
-  mod.route(p('/status'), 'GET', async (request) => {
+  const handleStatus = async (request: any) => {
     if (!session) return fail(503, 'Offline');
-
-    // We try to find the student for personalized status, but the
-    // ROOM status is always returned regardless of token.
     const params = parseParams(request);
-    const student = studentByToken(params.participation_token ?? '');
-
-    return ok({
-      examStarted: session.status !== 'lobby_open',
-      roomStatus: session.status,
-      myStatus: student?.status ?? 'anonymous',
-      serverTime: Date.now(),
-      v: session.status === 'in_progress' ? 2 : 1 // Simple versioning
-    });
-  });
+    const body = parseBody(request.body);
+    const token = String(
+      params.participation_token ?? body.participation_token ?? '',
+    );
+    const student = studentByToken(token);
+    if (student) {
+      student.lastActivityAt = new Date().toISOString();
+    }
+    return ok(statusPayload(student));
+  };
+  mod.route(p('/status'), 'GET', handleStatus);
+  mod.route(p('/status'), 'POST', handleStatus);
 
   mod.route(p('/ping'), 'GET', async () => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
@@ -727,7 +781,10 @@ function registerRoutes(mod: HttpServerModule) {
     }
 
     const now = new Date().toISOString();
-    const isReady = body.is_ready !== false;
+    const downloadPercent = Math.max(0, Math.min(100, Number(body.download_percent ?? (body.is_ready === true ? 100 : 0)) || 0));
+    const hashVerified = body.hash_verified === true || (body.is_ready === true && Boolean(studentPackHash));
+    const moduleReady = body.module_ready === true || (hashVerified && downloadPercent >= 100);
+    const isReady = body.is_ready === true && moduleReady;
 
     let student = existing;
     if (student) {
@@ -736,6 +793,9 @@ function registerRoutes(mod: HttpServerModule) {
       student.lastActivityAt = now;
       student.isReady = isReady;
       student.packageHash = studentPackHash || student.packageHash;
+      student.downloadPercent = downloadPercent;
+      student.hashVerified = hashVerified;
+      student.moduleReady = moduleReady;
       console.log(`[SESSION] Student ${student.applicantCode} rejoined.`);
     } else {
       const questions = buildExamQuestions(pack);
@@ -763,6 +823,10 @@ function registerRoutes(mod: HttpServerModule) {
         reconnectCodeExpiresAt: null,
         isReady,
         packageHash: studentPackHash || null,
+        downloadPercent,
+        hashVerified,
+        moduleReady,
+        startPhase: session.status === 'in_progress' ? 'waiting' : 'waiting',
       };
       session.students[registrationId] = student;
       if (!session.tokenMap) session.tokenMap = {};
@@ -794,25 +858,9 @@ function registerRoutes(mod: HttpServerModule) {
       return fail(404, 'You are no longer joined to this examination. Please scan the QR again.');
     }
 
-    console.log('[SERVER] Heartbeat received from student:', student.applicantCode);
-    const now = new Date().toISOString();
-    student.lastActivityAt = now;
+    student.lastActivityAt = new Date().toISOString();
 
-    let changed = false;
-    if (session.status === 'in_progress' && student.status === 'waiting') {
-      student.status = 'taking_exam';
-      student.startedAt = student.startedAt ?? now;
-      changed = true;
-      invalidateSnapshot();
-      console.log(`[SESSION] Student ${student.applicantCode} transitioned: waiting -> taking_exam`);
-    }
-
-    // Always notify proctor UI that a heartbeat was received to keep the list fresh
-    notify();
-
-    if (changed) {
-      await persist();
-    }
+    // Presence only. Do not mark taking_exam here — that hid stuck lobby students.
 
     const snapshot = await buildSnapshot(session);
 
@@ -860,7 +908,7 @@ function registerRoutes(mod: HttpServerModule) {
       _builtQuestionsCache = null; // Invalidate built questions if pack changes
     }
     const pack = _packCache;
-    if (!pack) return fail(500, 'Proctor phone has no exam pack.');
+    if (!pack) return fail(500, 'Exam Pack Missing');
 
     // Replay this student's stored order so a reload never reshuffles mid-exam.
     if (!_builtQuestionsCache) {
@@ -875,9 +923,49 @@ function registerRoutes(mod: HttpServerModule) {
       .filter((q): q is Question => Boolean(q))
       .map((q, index) => ({ ...q, number: index + 1 }));
 
-    console.log(`[SESSION] Student ${student.applicantCode} fetched questions. Count: ${questions.length}`);
+    const outgoing = questions.length ? questions : built;
+    if (!outgoing.length) {
+      return fail(500, 'Question Bank Not Found');
+    }
+    console.log(`[SESSION] Student ${student.applicantCode} fetched questions. Count: ${outgoing.length}`);
     return ok({
-      questions: questions.length ? questions : built,
+      questions: outgoing,
+      durationMinutes: session.durationMinutes,
+      answers: student.answers,
+    });
+  });
+
+  mod.route(p('/questions'), 'POST', async (request) => {
+    if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    const body = parseBody(request.body);
+    const token = String(body.participation_token ?? parseParams(request).participation_token ?? '');
+    const student = studentByToken(token);
+    if (!student) return fail(404, 'You are no longer joined to this examination.');
+    if (student.submittedAt || student.status === 'finished') {
+      return fail(403, 'Examination Already Completed: This examination has already been completed.');
+    }
+    if (session.status !== 'in_progress' && session.status !== 'lobby_open') {
+      return fail(409, 'This examination is not active or has ended.');
+    }
+    if (!_packCache) {
+      _packCache = await OfflineStore.getPack();
+      _builtQuestionsCache = null;
+    }
+    const pack = _packCache;
+    if (!pack) return fail(500, 'Exam Pack Missing');
+    if (!_builtQuestionsCache) {
+      _builtQuestionsCache = buildExamQuestions(pack);
+    }
+    const built = _builtQuestionsCache;
+    const byId = new Map(built.map((q) => [q.id, q]));
+    const questions: Question[] = student.order
+      .map((id) => byId.get(id))
+      .filter((q): q is Question => Boolean(q))
+      .map((q, index) => ({ ...q, number: index + 1 }));
+    const outgoing = questions.length ? questions : built;
+    if (!outgoing.length) return fail(500, 'Question Bank Not Found');
+    return ok({
+      questions: outgoing,
       durationMinutes: session.durationMinutes,
       answers: student.answers,
     });
@@ -1028,7 +1116,70 @@ function registerRoutes(mod: HttpServerModule) {
     const student = studentByToken(String(body.participation_token ?? ''));
     if (!student) return fail(404, 'You are no longer joined to this examination.');
     student.lastActivityAt = new Date().toISOString();
-    return ok({ status: session.status, remainingSeconds: remainingSeconds(session) });
+
+    const nextPercent = body.download_percent != null
+      ? Math.max(0, Math.min(100, Number(body.download_percent) || 0))
+      : student.downloadPercent ?? 0;
+    const nextHash = body.hash_verified != null ? body.hash_verified === true : Boolean(student.hashVerified);
+    const nextModule = body.module_ready != null
+      ? body.module_ready === true
+      : Boolean(student.moduleReady);
+    const nextReady = nextModule && nextHash && nextPercent >= 100;
+
+    let changed =
+      student.downloadPercent !== nextPercent ||
+      student.hashVerified !== nextHash ||
+      student.moduleReady !== nextModule ||
+      student.isReady !== nextReady;
+
+    student.downloadPercent = nextPercent;
+    student.hashVerified = nextHash;
+    student.moduleReady = nextModule;
+    student.isReady = nextReady;
+    if (typeof body.package_hash === 'string' && body.package_hash.trim()) {
+      student.packageHash = body.package_hash.trim();
+    }
+
+    const ack = String(body.start_ack ?? body.phase ?? '').toLowerCase();
+    if (ack === 'received' || ack === 'entered') {
+      applyStartAck(student, ack as 'received' | 'entered');
+      changed = true;
+    }
+
+    if (changed) {
+      invalidateSnapshot();
+      await persist();
+      notify();
+    }
+
+    return ok({
+      status: session.status,
+      roomStatus: session.status,
+      remainingSeconds: remainingSeconds(session),
+      isReady: student.isReady,
+      authorityStatus: authorityOf(session.status),
+      startPhase: student.startPhase,
+      startSeq: session.startSeq ?? 0,
+    });
+  });
+
+  mod.route(p('/ack-start'), 'POST', async (request) => {
+    if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    const body = parseBody(request.body);
+    const student = studentByToken(String(body.participation_token ?? ''));
+    if (!student) return fail(404, 'You are no longer joined to this examination.');
+    const phase = String(body.phase ?? 'received') === 'entered' ? 'entered' : 'received';
+    applyStartAck(student, phase);
+    student.lastActivityAt = new Date().toISOString();
+    invalidateSnapshot();
+    await persist();
+    notify();
+    return ok({
+      acknowledged: true,
+      phase: student.startPhase,
+      status: session.status,
+      authorityStatus: authorityOf(session.status),
+    });
   });
 
   mod.route(p('/allow-reconnect'), 'POST', async (request) => {
@@ -1189,6 +1340,14 @@ export const PeerExamServer = {
       const saved = await OfflineStore.getPeerSession<PeerSessionState>();
       if (!saved) return false;
       session = saved;
+      session.startSeq = Number(session.startSeq ?? (session.status === 'in_progress' ? 1 : 0));
+      for (const student of Object.values(session.students || {})) {
+        student.downloadPercent = Number(student.downloadPercent ?? (student.isReady ? 100 : 0));
+        student.hashVerified = Boolean(student.hashVerified ?? student.isReady);
+        student.moduleReady = Boolean(student.moduleReady ?? student.isReady);
+        student.startPhase =
+          student.startPhase ?? (student.status === 'taking_exam' ? 'entered' : 'waiting');
+      }
     }
 
     // Ended sessions are loaded into memory for viewing, but we don't
@@ -1286,6 +1445,10 @@ export const PeerExamServer = {
       await this.reset();
     }
 
+    if (reopening && session) {
+      session.startSeq = Number(session.startSeq ?? 0);
+    }
+
     if (!reopening) {
       console.log('[SERVER] Starting FRESH examination session. Clearing roster.');
       session = {
@@ -1302,6 +1465,7 @@ export const PeerExamServer = {
         violations: [],
         violationSeq: 0,
         wifiSsid,
+        startSeq: 0,
       };
     }
 
@@ -1330,19 +1494,13 @@ export const PeerExamServer = {
 
   async startExam(): Promise<LobbySnapshot> {
     if (!session) throw new Error('Open the room lobby first.');
-    console.log('[START_EVENT] START_BUTTON_CLICKED');
+    console.log('[PROCTOR] Examination Started');
     const now = new Date().toISOString();
     session.status = 'in_progress';
     session.startedAt = session.startedAt ?? now;
-    console.log('[START_EVENT] SESSION_UPDATED. Status: in_progress');
-    console.log('[LOBBY DEBUG] Proctor Action: START EXAM. New Status:', session.status);
-    console.log('[SESSION] Proctor started examination. Status: started');
-
+    session.startSeq = (session.startSeq ?? 0) + 1;
     for (const student of Object.values(session.students)) {
-      if (student.status === 'waiting') {
-        student.status = 'taking_exam';
-        student.startedAt = student.startedAt ?? now;
-      }
+      if (!student.startPhase) student.startPhase = 'waiting';
     }
     if (session.roomId != null) {
       await OfflineStore.setOpenedRoom(
@@ -1351,12 +1509,11 @@ export const PeerExamServer = {
         session.examCode,
         'in_progress',
       );
-      console.log('[START_EVENT] ROOM_UPDATED');
     }
-    console.log('[START_EVENT] BROADCAST_SENT (via polling update)');
     invalidateSnapshot();
     await persist();
     notify();
+    console.log('[SERVER] Broadcast ACTIVE');
     return buildSnapshot(session);
   },
 

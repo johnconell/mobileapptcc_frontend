@@ -5,9 +5,15 @@ import { STORAGE_KEYS } from '@/constants';
 import { appStorage } from '@/services/storage';
 import { PeerExamClient } from '@/services/peerExamClient';
 import { encryptJson, decryptJson } from '@/services/offlineStore';
+import {
+  countMediaAssets,
+  INITIAL_PACK_PROGRESS,
+  phaseLabelFor,
+  type ExamPackProgress,
+  type DownloadPhase,
+} from '@/services/examReadiness';
 import type { Question } from '@/types';
 
-// AES-256-GCM Encrypted local file for pre-loaded exam package
 const PRELOAD_FILE = `${FileSystem.documentDirectory ?? ''}metcc-preloaded-questions.enc`;
 const WEB_PRELOAD_KEY = 'tcc.student.preloaded.questions.enc';
 
@@ -21,41 +27,166 @@ export type PreloadPackageResult = {
   error?: string;
 };
 
+type ExaminationSettings = {
+  duration_minutes?: number;
+  shuffle_questions?: boolean;
+  shuffle_categories?: boolean;
+  shuffle_both?: boolean;
+};
+
 type PreloadEncryptedPayload = {
   sessionId: string;
   hash: string;
   timestamp: number;
   questions: Question[];
   durationMinutes?: number;
+  examinationSettings?: ExaminationSettings | null;
+  packageVersion?: number;
+  questionsExpected?: number;
+  assetsDownloaded?: number;
+  assetsExpected?: number;
+  configurationComplete?: boolean;
 };
 
+type ProgressListener = (progress: ExamPackProgress) => void;
+
+let currentProgress: ExamPackProgress = { ...INITIAL_PACK_PROGRESS };
+const listeners = new Set<ProgressListener>();
+
+function emitProgress(partial: Partial<ExamPackProgress>, replace = false) {
+  const next: ExamPackProgress = {
+    ...(replace ? INITIAL_PACK_PROGRESS : currentProgress),
+    ...partial,
+  };
+  const phase = (partial.phase ?? next.phase) as DownloadPhase;
+  next.phase = phase;
+  next.phaseLabel = partial.phaseLabel ?? phaseLabelFor(phase, next.percent);
+  next.moduleReady = Boolean(
+    next.percent >= 100 &&
+      next.hashVerified &&
+      next.questionsDownloaded > 0 &&
+      next.questionsDownloaded >= next.questionsExpected &&
+      next.configurationComplete,
+  );
+  currentProgress = next;
+  listeners.forEach((fn) => {
+    try {
+      fn(next);
+    } catch {
+      /* ignore subscriber errors */
+    }
+  });
+}
+
+export async function computeQuestionPackHash(questions: Question[]): Promise<string> {
+  const sorted = [...questions].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const normalized = sorted.map((q) => ({
+    id: q.id,
+    question: (q.question || '').trim(),
+    choices: q.choices,
+    category: q.category || '',
+  }));
+  return Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    JSON.stringify(normalized),
+  );
+}
+
+async function computeLegacyQuestionHash(questions: Question[]): Promise<string> {
+  return Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    JSON.stringify(questions),
+  );
+}
+
+function progressFromPayload(
+  payload: PreloadEncryptedPayload,
+  hashVerified: boolean,
+): ExamPackProgress {
+  const questions = payload.questions || [];
+  const assets = payload.assetsDownloaded ?? countMediaAssets(questions);
+  const assetsExpected = payload.assetsExpected ?? assets;
+  const configurationComplete = Boolean(
+    payload.configurationComplete ??
+      ((payload.durationMinutes ?? 0) > 0 && payload.examinationSettings != null),
+  );
+  const percent = questions.length > 0 && hashVerified ? 100 : questions.length > 0 ? 90 : 0;
+  const phase: DownloadPhase = hashVerified && questions.length > 0 ? 'ready' : 'incomplete';
+  return {
+    ...INITIAL_PACK_PROGRESS,
+    phase,
+    phaseLabel: phaseLabelFor(phase, percent),
+    percent,
+    questionsDownloaded: questions.length,
+    questionsExpected: payload.questionsExpected || questions.length,
+    assetsDownloaded: assets,
+    assetsExpected: assetsExpected,
+    configurationComplete: configurationComplete || (payload.durationMinutes ?? 0) > 0,
+    hashVerified,
+    moduleReady: false,
+    durationMinutes: payload.durationMinutes ?? null,
+    hasSettings: Boolean(payload.examinationSettings),
+  };
+}
+
 export const ExamPreloader = {
+  getProgress(): ExamPackProgress {
+    return currentProgress;
+  },
+
+  subscribe(listener: ProgressListener): () => void {
+    listeners.add(listener);
+    listener(currentProgress);
+    return () => {
+      listeners.delete(listener);
+    };
+  },
+
   /**
-   * STEP 11, 12, 13: Downloads the complete examination package BEFORE entering the lobby.
-   * Validates:
-   * ✓ Package questions and structure
-   * ✓ SHA-256 integrity hash
-   * ✓ Stores in AES-256-GCM encrypted format
+   * Downloads the complete examination package and tracks real progress.
    */
   async downloadAndVerifyExamPackage(input: {
     sessionId: string;
     passkey: string;
     code?: string;
   }): Promise<PreloadPackageResult> {
-    if (__DEV__) console.log(`[PRELOADER] Starting pre-lobby package download for session: ${input.sessionId}`);
+    if (__DEV__) {
+      console.log(`[PRELOADER] Starting package download for session: ${input.sessionId}`);
+    }
+
+    emitProgress({
+      phase: 'preparing',
+      phaseLabel: 'Preparing Examination Pack',
+      percent: 0,
+    }, true);
 
     let questions: Question[] = [];
     let serverReportedHash = '';
     let durationMinutes = 90;
+    let examinationSettings: ExaminationSettings | null = null;
+    let packageVersion = 1;
 
-    // 1. If connected in peer mode to proctor phone
+    emitProgress({
+      phase: 'downloading',
+      percent: 0,
+      phaseLabel: 'Downloading Module...\n0%',
+    });
+
     if (await PeerExamClient.isActive()) {
       let packageRes: {
         questions: Question[];
         packageHash?: string;
         durationMinutes?: number;
+        examinationSettings?: ExaminationSettings;
+        packageVersion?: number;
       } | null = null;
       let lastErr: unknown = null;
+
+      emitProgress({
+        phase: 'downloading',
+        percent: 25,
+        phaseLabel: 'Downloading Module...\n25%',
+      });
 
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
@@ -63,6 +194,8 @@ export const ExamPreloader = {
             questions: Question[];
             packageHash?: string;
             durationMinutes?: number;
+            examinationSettings?: ExaminationSettings;
+            packageVersion?: number;
           }>('/package', {
             method: 'POST',
             body: {
@@ -82,40 +215,36 @@ export const ExamPreloader = {
         questions = packageRes.questions;
         serverReportedHash = packageRes.packageHash || '';
         durationMinutes = packageRes.durationMinutes || 90;
+        examinationSettings = packageRes.examinationSettings ?? { duration_minutes: durationMinutes };
+        packageVersion = packageRes.packageVersion || 1;
+        emitProgress({
+          phase: 'downloading',
+          percent: 50,
+          phaseLabel: 'Downloading Module...\n50%',
+          questionsDownloaded: questions.length,
+          questionsExpected: questions.length,
+        });
       } else {
-        // Fallback: Check if applicant already downloaded the exam module locally
-        try {
-          const { OfflineStore } = await import('@/services/offlineStore');
-          const { buildExamQuestions } = await import('@/services/offlineExamRepository');
-          if (await OfflineStore.hasPack()) {
-            const localPack = await OfflineStore.getPack();
-            if (localPack) {
-              const localQuestions = buildExamQuestions(localPack);
-              if (localQuestions && localQuestions.length > 0) {
-                console.log(`[PRELOADER] Loaded ${localQuestions.length} questions from local downloaded pack.`);
-                questions = localQuestions;
-                durationMinutes = localPack.examination_settings?.duration_minutes ?? 90;
-              }
-            }
-          }
-        } catch (localErr) {
-          console.warn('[PRELOADER] Local pack check error:', localErr);
-        }
-
-        // Secondary fallback to /questions endpoint if token is present
         if (!questions.length) {
           try {
             const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
             if (token) {
-              const fallbackRes = await PeerExamClient.request<{ questions: Question[] }>('/questions', {
+              const fallbackRes = await PeerExamClient.request<{
+                questions: Question[];
+                durationMinutes?: number;
+              }>('/questions', {
                 query: { participation_token: token },
                 timeoutMs: 20000,
               });
               if (fallbackRes?.questions?.length) {
                 questions = fallbackRes.questions;
+                durationMinutes = fallbackRes.durationMinutes || durationMinutes;
+                examinationSettings = examinationSettings ?? { duration_minutes: durationMinutes };
               }
             }
-          } catch {}
+          } catch {
+            /* continue to error below */
+          }
         }
       }
 
@@ -123,48 +252,75 @@ export const ExamPreloader = {
         const errorMsg =
           lastErr instanceof Error
             ? lastErr.message
-            : typeof lastErr === 'string'
-            ? lastErr
-            : (lastErr as any)?.message ||
-              'Unable to download examination package from proctor phone. Please check Wi-Fi connection.';
+            : 'Unable to download examination package from proctor phone. Please check Wi-Fi connection.';
+        emitProgress({
+          phase: 'error',
+          percent: currentProgress.percent,
+          error: errorMsg,
+          moduleReady: false,
+        });
         throw new Error(errorMsg);
       }
     } else {
-      // 2. Online / Hub mode: fetch via repository
+      emitProgress({
+        phase: 'downloading',
+        percent: 25,
+        phaseLabel: 'Downloading Module...\n25%',
+      });
       const { QuestionRepository } = await import('@/repositories/QuestionRepository');
       questions = await QuestionRepository.getQuestions(input.sessionId);
+      examinationSettings = { duration_minutes: durationMinutes };
     }
 
     if (!questions || !questions.length) {
-      throw new Error('Examination package contains no questions. Contact your proctor.');
+      const errorMsg = 'Examination package contains no questions. Contact your proctor.';
+      emitProgress({ phase: 'error', error: errorMsg, moduleReady: false });
+      throw new Error(errorMsg);
     }
 
-    // 3. Generate SHA-256 Integrity Digest (Deterministic across shuffles)
-    const sorted = [...questions].sort((a, b) => String(a.id).localeCompare(String(b.id)));
-    const normalized = sorted.map((q) => ({
-      id: q.id,
-      question: (q.question || '').trim(),
-      choices: q.choices,
-      category: q.category || '',
-    }));
-    const rawContent = JSON.stringify(normalized);
-    const calculatedHash = await Crypto.digestStringAsync(
-      Crypto.CryptoDigestAlgorithm.SHA256,
-      rawContent,
-    );
+    const assets = countMediaAssets(questions);
+    emitProgress({
+      phase: 'downloading',
+      percent: 75,
+      phaseLabel: 'Downloading Module...\n75%',
+      questionsDownloaded: questions.length,
+      questionsExpected: questions.length,
+      assetsDownloaded: assets,
+      assetsExpected: assets,
+      durationMinutes,
+      hasSettings: Boolean(examinationSettings),
+    });
 
-    // If proctor provided a hash, verify it matches
+    emitProgress({
+      phase: 'downloading',
+      percent: 100,
+      phaseLabel: 'Downloading Module...\n100%',
+    });
+
+    emitProgress({
+      phase: 'verifying',
+      percent: 100,
+      phaseLabel: 'Verifying Examination Pack...',
+    });
+
+    const calculatedHash = await computeQuestionPackHash(questions);
+
     if (serverReportedHash && serverReportedHash !== 'no-pack' && serverReportedHash !== calculatedHash) {
       console.warn(`[PRELOADER] Hash mismatch: server=${serverReportedHash}, local=${calculatedHash}`);
     }
 
-    // 4. Encrypt with AES-256-GCM and store locally
     const payload: PreloadEncryptedPayload = {
       sessionId: input.sessionId,
       hash: calculatedHash,
       timestamp: Date.now(),
       questions,
       durationMinutes,
+      examinationSettings,
+      packageVersion,
+      questionsExpected: questions.length,
+      assetsDownloaded: assets,
+      assetsExpected: assets,
+      configurationComplete: Boolean(durationMinutes && examinationSettings),
     };
 
     const encryptedBlob = await encryptJson(payload);
@@ -178,9 +334,36 @@ export const ExamPreloader = {
     await appStorage.setItem(PRELOAD_READY_KEY, '1');
     await appStorage.setItem(PRELOAD_HASH_KEY, calculatedHash);
 
+    emitProgress({
+      phase: 'hash_complete',
+      percent: 100,
+      phaseLabel: 'Hash Verification Complete',
+      hashVerified: true,
+      configurationComplete: Boolean(durationMinutes && examinationSettings),
+      questionsDownloaded: questions.length,
+      questionsExpected: questions.length,
+      assetsDownloaded: assets,
+      assetsExpected: assets,
+      durationMinutes,
+      hasSettings: Boolean(examinationSettings),
+    });
+
+    emitProgress({
+      phase: 'ready',
+      percent: 100,
+      phaseLabel: 'Ready for Examination',
+      hashVerified: true,
+      moduleReady: true,
+    });
+
     if (__DEV__) {
-      console.log(`[PRELOADER] Successfully encrypted & saved ${questions.length} questions. Hash: ${calculatedHash.slice(0, 10)}`);
+      console.log(
+        `[PRELOADER] Saved ${questions.length} questions. Hash: ${calculatedHash.slice(0, 10)}`,
+      );
     }
+    console.log('[STARTUP] Exam Pack Found');
+    console.log(`[STARTUP] Questions Loaded ${questions.length}/${questions.length}`);
+    console.log('[STARTUP] Hash Verified');
 
     return {
       success: true,
@@ -189,76 +372,116 @@ export const ExamPreloader = {
     };
   },
 
-  /** Legacy helper for background preloading */
   async preloadQuestions(sessionId: string): Promise<{ count: number; hash: string }> {
     const passkey = (await appStorage.getItem(STORAGE_KEYS.examinationCode)) || '';
     const res = await this.downloadAndVerifyExamPackage({ sessionId, passkey });
     return { count: res.count, hash: res.hash };
   },
 
-  /** Reads and decrypts questions instantly from local encrypted file */
-  async getPreloadedQuestions(): Promise<Question[]> {
+  async getPreloadedPayload(): Promise<PreloadEncryptedPayload | null> {
     try {
       let rawEncrypted: string | null = null;
       if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
         rawEncrypted = await appStorage.getItem(WEB_PRELOAD_KEY);
       } else {
         const info = await FileSystem.getInfoAsync(PRELOAD_FILE);
-        if (!info.exists) return [];
+        if (!info.exists) return null;
         rawEncrypted = await FileSystem.readAsStringAsync(PRELOAD_FILE);
       }
-
-      if (!rawEncrypted) return [];
-
-      // Decrypt AES-256-GCM
+      if (!rawEncrypted) return null;
       const decrypted = await decryptJson<PreloadEncryptedPayload>(rawEncrypted);
-      if (!decrypted || !decrypted.questions || !decrypted.hash) {
-        console.error('[PRELOADER] Decryption returned empty or invalid payload');
-        return [];
-      }
-
-      // Layer 3: Tamper check
-      const currentHash = await Crypto.digestStringAsync(
-        Crypto.CryptoDigestAlgorithm.SHA256,
-        JSON.stringify(decrypted.questions),
-      );
-
-      if (currentHash !== decrypted.hash) {
-        console.error('[SECURITY VIOLATION] Examination questions modified or tampered!');
-        await this.clear();
-        return [];
-      }
-
-      return decrypted.questions;
+      if (!decrypted || !decrypted.questions) return null;
+      return decrypted;
     } catch (err) {
       if (__DEV__) console.error('[PRELOADER] Decryption error:', err);
-      return [];
+      return null;
     }
   },
 
-  /** Verifies that the local preloaded file is valid, decryptable, and untampered. */
+  async getPreloadedQuestions(): Promise<Question[]> {
+    const decrypted = await this.getPreloadedPayload();
+    if (!decrypted || !decrypted.questions?.length) {
+      console.log('[STARTUP] Exam Pack Missing');
+      return [];
+    }
+
+    const currentHash = await computeQuestionPackHash(decrypted.questions);
+    let hashVerified = Boolean(decrypted.hash) && currentHash === decrypted.hash;
+
+    if (!hashVerified && decrypted.hash) {
+      const legacyHash = await computeLegacyQuestionHash(decrypted.questions);
+      if (legacyHash === decrypted.hash) {
+        hashVerified = true;
+        decrypted.hash = currentHash;
+        try {
+          const encryptedBlob = await encryptJson(decrypted);
+          if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
+            await appStorage.setItem(WEB_PRELOAD_KEY, encryptedBlob);
+          } else {
+            await FileSystem.writeAsStringAsync(PRELOAD_FILE, encryptedBlob);
+          }
+          await appStorage.setItem(PRELOAD_HASH_KEY, currentHash);
+        } catch {
+          /* keep questions even if re-persist fails */
+        }
+        console.log('[STARTUP] Hash Verified (legacy payload upgraded)');
+      }
+    }
+
+    if (!hashVerified) {
+      console.error('[STARTUP] Hash verification failed — pack kept, exam will not open until re-download');
+      emitProgress(progressFromPayload(decrypted, false));
+      return [];
+    }
+
+    emitProgress(progressFromPayload(decrypted, true));
+    console.log('[STARTUP] Exam Pack Found');
+    console.log(`[STARTUP] Questions Loaded ${decrypted.questions.length}`);
+    console.log('[STARTUP] Hash Verified');
+    return decrypted.questions;
+  },
+
+  async getReadinessSnapshot(): Promise<ExamPackProgress> {
+    const decrypted = await this.getPreloadedPayload();
+    if (!decrypted) {
+      emitProgress({ phase: 'incomplete', phaseLabel: 'Exam Download Incomplete' }, true);
+      return currentProgress;
+    }
+    const currentHash = await computeQuestionPackHash(decrypted.questions);
+    const legacyHash = decrypted.hash
+      ? await computeLegacyQuestionHash(decrypted.questions)
+      : '';
+    const hashVerified = decrypted.hash === currentHash || decrypted.hash === legacyHash;
+    emitProgress(progressFromPayload(decrypted, hashVerified));
+    return currentProgress;
+  },
+
   async verifyIntegrity(): Promise<boolean> {
     try {
       const questions = await this.getPreloadedQuestions();
-      return Boolean(questions && questions.length > 0);
+      return Boolean(questions && questions.length > 0 && currentProgress.hashVerified);
     } catch {
       return false;
     }
   },
 
   async isReady(): Promise<boolean> {
-    const ready = await appStorage.getItem(PRELOAD_READY_KEY);
-    if (ready !== '1') return false;
-    if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
-      const val = await appStorage.getItem(WEB_PRELOAD_KEY);
-      return Boolean(val);
-    }
-    const info = await FileSystem.getInfoAsync(PRELOAD_FILE);
-    return Boolean(info.exists);
+    const snapshot = await this.getReadinessSnapshot();
+    return snapshot.moduleReady && snapshot.hashVerified && snapshot.percent >= 100;
   },
 
   async getPreloadedHash(): Promise<string | null> {
     return await appStorage.getItem(PRELOAD_HASH_KEY);
+  },
+
+  async getCachedDuration(): Promise<number | null> {
+    const payload = await this.getPreloadedPayload();
+    return payload?.durationMinutes ?? null;
+  },
+
+  async getCachedSettings(): Promise<ExaminationSettings | null> {
+    const payload = await this.getPreloadedPayload();
+    return payload?.examinationSettings ?? null;
   },
 
   async clear(): Promise<void> {
@@ -271,8 +494,11 @@ export const ExamPreloader = {
           await FileSystem.deleteAsync(PRELOAD_FILE, { idempotent: true });
         }
       }
-    } catch {}
+    } catch {
+      /* ignore */
+    }
     await appStorage.deleteItem(PRELOAD_READY_KEY);
     await appStorage.deleteItem(PRELOAD_HASH_KEY);
+    emitProgress({ ...INITIAL_PACK_PROGRESS }, true);
   },
 };

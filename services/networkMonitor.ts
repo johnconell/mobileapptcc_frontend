@@ -23,6 +23,12 @@ export async function evaluateAndSwitchNetworkMode(): Promise<boolean> {
     const isWifi = netState.type === Network.NetworkStateType.WIFI;
     const isConnected = Boolean(netState.isConnected);
 
+    const { PeerExamClient } = await import('@/services/peerExamClient');
+    if (await PeerExamClient.isActive()) {
+      // Examinee is bound to the proctor phone. Cloud outage must not disable LAN polls.
+      return false;
+    }
+
     if (!isConnected) {
       if (await OfflineStore.hasPack()) {
         await OfflineStore.setOfflineMode(true);

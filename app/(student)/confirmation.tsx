@@ -19,6 +19,8 @@ import { SkeletonDetail } from '@/components/ui/Skeleton';
 import { LobbyRepository } from '@/repositories';
 import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 import { ExamPreloader } from '@/services/examPreloader';
+import { ExamLifecycle } from '@/services/examLifecycle';
+import { INITIAL_PACK_PROGRESS, type ExamPackProgress } from '@/services/examReadiness';
 import { appStorage } from '@/services/storage';
 import { useLobbyStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
@@ -49,6 +51,7 @@ export default function StudentConfirmationScreen() {
   const [joinError, setJoinError] = React.useState<string | null>(null);
   const [joining, setJoining] = React.useState(false);
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = React.useState<ExamPackProgress>(INITIAL_PACK_PROGRESS);
 
   // Already has Gmail from import — confirm identity only; do not ask again.
   const hasGmail = Boolean(selectedStudent?.email?.trim());
@@ -61,6 +64,8 @@ export default function StudentConfirmationScreen() {
     resolver: zodResolver(gmailSchema),
     defaultValues: { email: selectedStudent?.email?.trim() || '' },
   });
+
+  React.useEffect(() => ExamPreloader.subscribe(setDownloadProgress), []);
 
   React.useEffect(() => {
     if (verifiedStudent && scannedSessionId) {
@@ -99,8 +104,7 @@ export default function StudentConfirmationScreen() {
         return;
       }
 
-      // STEP 11, 12, 13: Download & verify complete examination package BEFORE entering lobby
-      setStatusMessage('Downloading & verifying exam module...');
+      setStatusMessage('Receiving questions from the examination room…');
       const effectivePasskey =
         examPasskey || (await appStorage.getItem('tcc.student.exam.passkey')) || '';
 
@@ -150,6 +154,7 @@ export default function StudentConfirmationScreen() {
         } catch {}
       }
       setSnapshot(lobby);
+      await ExamLifecycle.applyFromServer(lobby.status, { sessionId: String(scannedSessionId) });
       router.replace('/(student)/lobby');
     } catch (error) {
       setJoinError(error instanceof Error ? error.message : 'Unable to join examination.');
@@ -215,7 +220,11 @@ export default function StudentConfirmationScreen() {
           )}
 
           {statusMessage && joining ? (
-            <Text style={styles.statusMessage}>{statusMessage}</Text>
+            <Text style={styles.statusMessage}>
+              {downloadProgress.percent > 0
+                ? `${statusMessage}\n${downloadProgress.phaseLabel}`
+                : statusMessage}
+            </Text>
           ) : null}
 
           {joinError ? <Text style={styles.error}>{joinError}</Text> : null}

@@ -3,26 +3,18 @@ import { Modal, Pressable, Text, View, StyleSheet, Alert, ActivityIndicator } fr
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
-import { Keyboard, QrCode, Shield, Download } from 'lucide-react-native';
+import { Keyboard, QrCode, Shield } from 'lucide-react-native';
 import { APP_NAME, SCHOOL_NAME } from '@/constants';
 import { colors, shadows } from '@/theme';
-import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { FloatingButton } from '@/components/ui/FloatingButton';
-import {
-  Skeleton,
-  SkeletonCard,
-  SkeletonCircle,
-  SkeletonText,
-} from '@/components/ui/Skeleton';
 import { SchoolLogo } from '@/features/student/SchoolLogo';
 import { AuthRepository } from '@/repositories';
 import * as Updates from 'expo-updates';
 import * as Network from 'expo-network';
 import { useSettingsStore, useProctorStore } from '@/stores';
 import { VersionInfo } from '@/components/VersionInfo';
-import { ensureExamPackCached } from '@/services/ensureExamPack';
-import { OfflineStore } from '@/services/offlineStore';
+import { clearApplicantExamMaterial } from '@/services/applicantExamCleanup';
 
 /** Tracks whether the application process was just cold launched from OS */
 let isAppColdBoot = true;
@@ -33,12 +25,6 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const [joinOpen, setJoinOpen] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
-  const [preparing, setPreparing] = useState(false);
-  const [pack, setPack] = useState<any>(null);
-  const [downloadProgress, setDownloadProgress] = useState<{
-    percent: number;
-    label: string;
-  } | null>(null);
 
   // If a proctor session exists on this phone on initial cold launch, go straight to proctor dashboard.
   // When a user deliberately navigates here (e.g. after logout, back from login, or mode toggle),
@@ -76,30 +62,18 @@ export default function HomeScreen() {
   }, [router, params.stay, params.from]);
 
   useEffect(() => {
-    void OfflineStore.getPackSummary().then(setPack);
+    // Applicants must not keep leftover exam modules on the landing phone.
+    // Do not wipe a live lobby/exam session if the student briefly returns here.
+    void (async () => {
+      const session = await AuthRepository.getCachedSessionFast();
+      if (session) return;
+      const { appStorage } = await import('@/services/storage');
+      const { STORAGE_KEYS } = await import('@/constants');
+      const inSession = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      if (inSession) return;
+      await clearApplicantExamMaterial();
+    })();
   }, []);
-
-  const downloadPack = async () => {
-    setPreparing(true);
-    setDownloadProgress({ percent: 0, label: 'Connecting…' });
-    try {
-      const result = await ensureExamPackCached({
-        force: true,
-        includeAuth: false, // Students don't need proctor accounts
-        onProgress: setDownloadProgress,
-      });
-      const summary = await OfflineStore.getPackSummary();
-      setPack(summary);
-      if (result.ok) {
-         Alert.alert('Ready for Exam', 'Examination data is now secured on this phone. You can now take the exam offline.');
-      } else {
-         Alert.alert('Download failed', result.message);
-      }
-    } finally {
-      setPreparing(false);
-      setDownloadProgress(null);
-    }
-  };
 
   // No Wi‑Fi / Hub check here — students open the scanner first.
   // Network matching is validated only AFTER a QR is scanned (or a code is submitted).
@@ -111,26 +85,6 @@ export default function HomeScreen() {
     return (
       <View style={[styles.screen, { alignItems: 'center', justifyContent: 'center' }]}>
         <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
-  }
-
-  if (preparing) {
-    return (
-      <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
-        <View style={styles.prepareSkeleton}>
-          <SkeletonCircle size={96} />
-          <Skeleton height={26} width="70%" />
-          <Skeleton height={12} width="85%" />
-          <SkeletonCard>
-            <Skeleton height={16} width="55%" />
-            <SkeletonText lines={2} />
-            <Skeleton height={52} radius={14} />
-          </SkeletonCard>
-          <Text style={styles.prepareNote}>
-            Preparing exam content on this phone…
-          </Text>
-        </View>
       </View>
     );
   }
@@ -232,46 +186,13 @@ export default function HomeScreen() {
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(100).springify()}>
-          <Card style={StyleSheet.flatten([styles.packCard, pack?.ready ? styles.packCardReady : undefined])}>
-            <Text style={styles.cardTitle}>Offline Preparation</Text>
+          <Card>
+            <Text style={styles.cardTitle}>How to take the exam</Text>
             <Text style={styles.cardBody}>
-              {pack?.ready
-                ? "Examination module is secured on this phone. You are ready for the offline exam."
-                : "Download the questionnaire now so you are ready to start instantly when you enter the exam room."}
+              Connect to the examination Wi-Fi, then scan the proctor QR code or enter
+              the room code. Questions are sent from the proctor during the exam and
+              removed from this phone after you submit.
             </Text>
-
-            {downloadProgress ? (
-                <View style={styles.progressBlock}>
-                  <View style={styles.progressTrack}>
-                    <View
-                      style={[
-                        styles.progressFill,
-                        { width: `${Math.max(4, downloadProgress.percent)}%` },
-                      ]}
-                    />
-                  </View>
-                  <Text style={styles.progressLabel}>
-                    {downloadProgress.label} · {downloadProgress.percent}%
-                  </Text>
-                </View>
-              ) : null}
-
-            <Button
-                title={
-                  downloadProgress
-                    ? `Verifying… ${downloadProgress.percent}%`
-                    : pack?.ready
-                      ? 'Update Module'
-                      : 'Download Exam Module'
-                }
-                icon={<Download size={18} color={pack?.ready ? colors.primary : colors.white} />}
-                variant={pack?.ready && !downloadProgress ? 'outline' : 'primary'}
-                fullWidth
-                loading={preparing && !downloadProgress}
-                disabled={Boolean(downloadProgress)}
-                onPress={() => void downloadPack()}
-                style={{ marginTop: 8 }}
-              />
           </Card>
         </Animated.View>
 

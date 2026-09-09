@@ -148,10 +148,10 @@ export default function RoomDetailScreen() {
       targetRoute,
     });
 
-    // Ended: view-only — student list + Sync to Admin (no new lobby).
-    if (isEnded && !isOpen) {
-      console.log('RoomDetailScreen: navigating to existing ended lobby', targetRoute);
-      router.push(targetRoute as any);
+    // Already open or ended: always leave Room Details immediately.
+    if (isOpen || isEnded) {
+      console.log('RoomDetailScreen: navigating to lobby', targetRoute);
+      router.replace(targetRoute as any);
       return;
     }
 

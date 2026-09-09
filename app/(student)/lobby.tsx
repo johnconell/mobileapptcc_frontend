@@ -1,24 +1,39 @@
 import React, { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import { Alert, BackHandler, ScrollView, Text, View, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
-import { Check, User, ShieldAlert, RefreshCw, AlertTriangle, ShieldCheck } from 'lucide-react-native';
+import { useKeepAwake } from 'expo-keep-awake';
+import { Check, User, RefreshCw, AlertTriangle, ShieldCheck } from 'lucide-react-native';
 import { Header } from '@/components/ui/Header';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { useLobby } from '@/hooks/useRepositories';
 import { appStorage } from '@/services/storage';
 import { STORAGE_KEYS } from '@/constants';
-import { QuestionRepository, LobbyRepository, StudentRepository } from '@/repositories';
+import { LobbyRepository, StudentRepository } from '@/repositories';
 import { useExamStore, useLobbyStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
 import { PeerExamClient } from '@/services/peerExamClient';
-import { OfflineStore } from '@/services/offlineStore';
 import { ExamPreloader } from '@/services/examPreloader';
+import {
+  ExamLifecycle,
+  type AuthorityStatus,
+} from '@/services/examLifecycle';
+import {
+  STUDENT_MONITOR_INTERVAL_MS,
+  parseStartPulse,
+  shouldNavigateToExam,
+} from '@/services/examStartCoordinator';
+import {
+  INITIAL_PACK_PROGRESS,
+  userFacingStartupError,
+  validateExamStartup,
+  type ExamPackProgress,
+} from '@/services/examReadiness';
 
 /**
  * DETERMINISTIC LOBBY STATES
  */
-type LobbyState = 'DASHBOARD' | 'STARTING' | 'ERROR';
+type LobbyState = 'DASHBOARD' | 'STARTING' | 'FINISHING_DOWNLOAD' | 'ERROR';
 
 function useLobbyController() {
   const router = useRouter();
@@ -36,111 +51,234 @@ function useLobbyController() {
   const [state, setState] = useState<LobbyState>('DASHBOARD');
   const [error, setError] = useState<string | null>(null);
   const [lastSeen, setLastSeen] = useState<number>(Date.now());
-  const [lastSuccessAt, setLastSuccessAt] = useState<number>(Date.now());
+  const [progress, setProgress] = useState<ExamPackProgress>(INITIAL_PACK_PROGRESS);
+  const [authority, setAuthority] = useState<AuthorityStatus>('WAITING');
+  const [lastPulseAt, setLastPulseAt] = useState<number>(Date.now());
+  const [pulseOk, setPulseOk] = useState(true);
 
   const hasJoined = useRef(false);
   const hasEntered = useRef(false);
+  const downloading = useRef(false);
+  const entering = useRef(false);
+  const ackedReceived = useRef(false);
 
-  // Polling is ALWAYS active on this screen to ensure proctor stays updated.
-  const lobbyQuery = useLobby(scannedSessionId ?? undefined, undefined, true);
+  // Room details come from the join snapshot. Do not poll GET /lobby — that path
+  // fails on expo-http-server and starves the start signal.
+  const lobbyQuery = useLobby(scannedSessionId ?? undefined, undefined, false);
 
-  // Anti-Stale Data Strategy (Fix Root Cause 3)
-  const isStale = Date.now() - lastSuccessAt > 15000;
+  const isStale = Date.now() - lastPulseAt > 15000 || !pulseOk;
 
   const lobbyData = useMemo(() => {
-    if (lobbyQuery.data) {
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        setLastSuccessAt(Date.now());
-        return lobbyQuery.data;
+    const raw = lobbyQuery.data ?? storedSnapshot;
+    if (!raw) return raw;
+    if (authority === 'ACTIVE' && raw.status === 'lobby_open') {
+      return { ...raw, status: 'in_progress' as const };
     }
-    return storedSnapshot;
-  }, [lobbyQuery.data, storedSnapshot]);
+    if (authority === 'ENDED' && raw.status !== 'ended') {
+      return { ...raw, status: 'ended' as const };
+    }
+    return raw;
+  }, [lobbyQuery.data, storedSnapshot, authority]);
 
-  // -- SIGNAL MONITOR (UN-GATED - Fix Root Cause 2) --
+  useEffect(() => ExamPreloader.subscribe(setProgress), []);
+
   useEffect(() => {
-    if (hasEntered.current) return;
-
-    // Priority 1: Check snapshot status
-    if (lobbyData?.status === 'in_progress') {
-        console.log('[LOBBY_CTL] START_SIGNAL_BY_SNAPSHOT');
-        setState('STARTING');
-        return;
+    const status = storedSnapshot?.status;
+    if (status === 'in_progress' || status === 'ended') {
+      void applyLiveStatus(status);
     }
+  }, [storedSnapshot?.status, applyLiveStatus]);
+
+  const ensurePackDownload = useCallback(async () => {
+    if (!scannedSessionId || downloading.current) return;
+    downloading.current = true;
+    try {
+      const snapshot = await ExamPreloader.getReadinessSnapshot();
+      if (snapshot.moduleReady && snapshot.hashVerified && snapshot.percent >= 100) {
+        return;
+      }
+      await ExamPreloader.preloadQuestions(scannedSessionId);
+    } catch (preloadErr) {
+      console.warn('[STARTUP] Download failed:', preloadErr);
+    } finally {
+      downloading.current = false;
+    }
+  }, [scannedSessionId]);
+
+  useEffect(() => {
+    void ensurePackDownload();
+  }, [ensurePackDownload]);
+
+  const applyLiveStatus = useCallback(async (roomStatus?: string | null, startSeq?: number) => {
+    const record = await ExamLifecycle.applyFromServer(roomStatus, {
+      sessionId: scannedSessionId ?? undefined,
+      startSeq,
+    });
+    setAuthority(record.status);
+    return record.status;
+  }, [scannedSessionId]);
+
+  useEffect(() => {
+    void ExamLifecycle.hydrate();
+    return ExamLifecycle.subscribe((record) => setAuthority(record.status));
+  }, []);
+
+  // One in-flight start poll. Heartbeat also keeps the proctor last-seen alive.
+  useEffect(() => {
+    let cancelled = false;
+    let inFlight = false;
 
     const checkSignal = async () => {
-        // Ultra-fast Global status check
-        const global = await PeerExamClient.getGlobalStatus();
-        if (global?.examStarted || global?.roomStatus === 'in_progress') {
-             console.log('[LOBBY_CTL] START_SIGNAL_BY_GLOBAL_PULSE');
-             setState('STARTING');
-             return;
+      if (inFlight || cancelled || hasEntered.current) return;
+      inFlight = true;
+      try {
+        let beat = await LobbyRepository.sendHeartbeat();
+        let pulse = parseStartPulse(beat);
+        if (!beat.ok || !pulse) {
+          const global = await PeerExamClient.getGlobalStatus();
+          if (global?.roomStatus) {
+            beat = {
+              ok: true,
+              status: global.roomStatus,
+              roomStatus: global.roomStatus,
+              authorityStatus: global.authorityStatus,
+              startSeq: global.startSeq,
+            };
+            pulse = parseStartPulse(beat);
+          }
         }
-
-        // Standard student-specific check
-        const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
-        if (token) {
-            const quick = await PeerExamClient.getQuickStatus(token);
-            if (quick?.s === 'in_progress' || quick?.ss === 'taking_exam') {
-                 setState('STARTING');
+        if (cancelled) return;
+        if (beat.ok && pulse) {
+          setPulseOk(true);
+          setLastPulseAt(Date.now());
+          setLastSeen(Date.now());
+          console.log('[STUDENT] Pulse', pulse.roomStatus, pulse.authorityStatus ?? '');
+          const next = await applyLiveStatus(pulse.roomStatus, pulse.startSeq);
+          if (next === 'ACTIVE') {
+            console.log('[STUDENT] ACTIVE Received');
+            if (!ackedReceived.current) {
+              ackedReceived.current = true;
+              void LobbyRepository.acknowledgeStart('received');
             }
+          }
+          return;
         }
+        setPulseOk(false);
+      } finally {
+        inFlight = false;
+      }
     };
-    const id = setInterval(checkSignal, 2500);
-    return () => clearInterval(id);
-  }, [lobbyData?.status]);
 
-  // -- EXAM TRANSITION --
-  useEffect(() => {
-    if (state !== 'STARTING' || hasEntered.current || !lobbyData) return;
-    const go = async () => {
-        hasEntered.current = true;
-        try {
-            console.log('[LOBBY_CTL] INITIALIZING_EXAMINATION');
-
-            // 1. Fast path: check preloaded questions from lobby waiting phase
-            let questions = await ExamPreloader.getPreloadedQuestions();
-
-            // 2. If not preloaded yet, fetch from repository (with resilient retry)
-            if (!questions || !questions.length) {
-              questions = await QuestionRepository.getQuestions(scannedSessionId!);
-            }
-
-            if (!questions || !questions.length) {
-              throw new Error('No questions found in examination module.');
-            }
-
-            setSessionId(scannedSessionId!);
-            setQuestions(questions);
-            startExam(lobbyData.session?.durationMinutes || 90);
-
-            console.log('[LOBBY_CTL] NAVIGATING_TO_EXAM_SCREEN');
-            router.replace('/(student)/exam');
-        } catch (err) {
-            console.error('[LOBBY_CTL] ENTRY_CRASH:', err);
-            hasEntered.current = false;
-            setState('DASHBOARD');
-            const detail = err instanceof Error ? err.message : 'Stay connected to the examination Wi‑Fi and try again.';
-            Alert.alert(
-              'Load Failure',
-              `Could not open examination.\n\n${detail}`,
-            );
-        }
+    void checkSignal();
+    const id = setInterval(checkSignal, STUDENT_MONITOR_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
     };
-    void go();
-  }, [state, lobbyData, scannedSessionId]);
+  }, [applyLiveStatus]);
 
-  // -- PRESENCE HEARTBEAT (Always Active) --
+  const enterExamination = useCallback(async () => {
+    if (hasEntered.current || entering.current || !scannedSessionId) return;
+    if (authority === 'ENDED') return;
+    if (authority !== 'ACTIVE') return;
+
+    if (!progress.moduleReady || !progress.hashVerified || progress.percent < 100) {
+      setState('FINISHING_DOWNLOAD');
+      void ensurePackDownload();
+      return;
+    }
+
+    entering.current = true;
+    hasEntered.current = true;
+    setState('STARTING');
+    try {
+      console.log('[STUDENT] Loading Exam Module');
+      const questions = await ExamPreloader.getPreloadedQuestions();
+      if (!questions?.length) {
+        throw new Error(
+          userFacingStartupError(
+            progress.percent > 0 ? 'DOWNLOAD_INCOMPLETE' : 'PACK_MISSING',
+            'The local examination module is not ready.',
+          ),
+        );
+      }
+
+      const duration =
+        (await ExamPreloader.getCachedDuration()) ||
+        lobbyData?.session?.durationMinutes ||
+        90;
+      const settings = await ExamPreloader.getCachedSettings();
+      const examId =
+        lobbyData?.session?.id ||
+        lobbyData?.schedule?.id ||
+        scannedSessionId;
+
+      const gate = validateExamStartup({
+        sessionId: scannedSessionId,
+        examId,
+        questions,
+        durationMinutes: duration,
+        hasSettings: Boolean(settings) || progress.configurationComplete,
+        sessionStatus: 'in_progress',
+        authorityStatus: 'ACTIVE',
+        progress: { ...progress, questionsDownloaded: questions.length },
+      });
+      if (!gate.ok) {
+        throw new Error(userFacingStartupError(gate.code, gate.detail));
+      }
+
+      console.log('[STUDENT] Navigation Triggered');
+      setSessionId(scannedSessionId);
+      setQuestions(questions);
+      startExam(duration);
+      await ExamLifecycle.apply('ACTIVE', { sessionId: scannedSessionId });
+      void LobbyRepository.acknowledgeStart('entered');
+      router.replace('/(student)/exam');
+    } catch (err) {
+      console.error('[STUDENT] ENTRY_CRASH:', err);
+      hasEntered.current = false;
+      entering.current = false;
+      setState(progress.moduleReady ? 'DASHBOARD' : 'FINISHING_DOWNLOAD');
+      Alert.alert(
+        'Could not open examination',
+        err instanceof Error ? err.message : 'Stay connected to the examination Wi‑Fi and try again.',
+      );
+    }
+  }, [
+    authority,
+    scannedSessionId,
+    progress,
+    lobbyData,
+    ensurePackDownload,
+    router,
+    setQuestions,
+    setSessionId,
+    startExam,
+  ]);
+
   useEffect(() => {
-    const id = setInterval(async () => {
-        try {
-            const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
-            if (!token) return;
-            await LobbyRepository.sendHeartbeat();
-            setLastSeen(Date.now());
-        } catch { }
-    }, 5000);
-    return () => clearInterval(id);
-  }, []);
+    if (authority === 'ENDED') {
+      setState('ERROR');
+      setError('Examination Ended');
+      return;
+    }
+    if (
+      !shouldNavigateToExam({
+        authority,
+        moduleReady: progress.moduleReady,
+        hashVerified: progress.hashVerified,
+        percent: progress.percent,
+        alreadyEntered: hasEntered.current,
+      })
+    ) {
+      if (authority === 'ACTIVE' && !hasEntered.current) {
+        setState('FINISHING_DOWNLOAD');
+        void ensurePackDownload();
+      }
+      return;
+    }
+    void enterExamination();
+  }, [authority, progress.moduleReady, progress.hashVerified, progress.percent, enterExamination]);
 
   // -- BACKGROUND HANDSHAKE --
   const initializeAndJoin = useCallback(async () => {
@@ -162,31 +300,17 @@ function useLobbyController() {
 
             setVerifiedStudent(verified);
             setSnapshot(lobby);
-            setLastSuccessAt(Date.now());
+            if (lobby.status === 'in_progress' || lobby.status === 'ended') {
+              await applyLiveStatus(lobby.status);
+            }
 
-            // PRELOAD QUESTIONS IN BACKGROUND WHILE WAITING FOR PROCTOR TO START
-            // PRELOAD QUESTIONS IN BACKGROUND IF NOT ALREADY READY
-            void (async () => {
-              try {
-                await ExamPreloader.preloadQuestions(scannedSessionId!);
-                console.log('[LOBBY_CTL] Preload successful in background.');
-                const isReady = await ExamPreloader.isReady();
-                if (!isReady) {
-                  await ExamPreloader.preloadQuestions(scannedSessionId!);
-                  console.log('[LOBBY_CTL] Preload successful in background.');
-                } else {
-                  console.log('[LOBBY_CTL] Package already preloaded and verified.');
-                }
-              } catch (preloadErr) {
-                console.warn('[LOBBY_CTL] Background preload warning:', preloadErr);
-              }
-            })();
+            void ensurePackDownload();
         } catch (e) {
             console.warn("Lobby handshake delay...", e);
             hasJoined.current = false;
         }
     }
-  }, [scannedSessionId, verifiedStudent, selectedStudent, examPasskey, router, setVerifiedStudent, setSnapshot]);
+  }, [scannedSessionId, verifiedStudent, selectedStudent, examPasskey, router, setVerifiedStudent, setSnapshot, ensurePackDownload, applyLiveStatus]);
 
   useEffect(() => { void initializeAndJoin(); }, [initializeAndJoin]);
 
@@ -197,11 +321,15 @@ function useLobbyController() {
     lobbyData,
     lastSeen,
     isStale,
-    lobbyQuery
+    lobbyQuery,
+    progress,
+    authority,
+    pulseOk,
   };
 }
 
 export default function StudentLobbyScreen() {
+  useKeepAwake();
   const router = useRouter();
   const navigation = useNavigation();
   const controller = useLobbyController();
@@ -223,7 +351,17 @@ export default function StudentLobbyScreen() {
       );
   }
 
-  const { lobbyData, currentStudent, isStale } = controller;
+  const { lobbyData, currentStudent, isStale, progress, authority, pulseOk } = controller;
+  const sessionLabel =
+    authority === 'ACTIVE' || authority === 'STARTING'
+      ? 'Active'
+      : authority === 'ENDED'
+        ? 'Ended'
+        : authority === 'PAUSED'
+          ? 'Paused'
+          : 'Waiting';
+  const networkConnected = pulseOk && !isStale;
+  const examReady = Boolean(progress.moduleReady && progress.hashVerified && progress.percent >= 100);
 
   const handleExit = () => {
     Alert.alert(
@@ -246,6 +384,7 @@ export default function StudentLobbyScreen() {
                 appStorage.deleteItem(STORAGE_KEYS.studentProgress),
                 appStorage.deleteItem(STORAGE_KEYS.examCheckpoint),
                 appStorage.deleteItem('tcc.student.preload.ready'),
+                ExamLifecycle.clear(),
                 PeerExamClient.clear(),
               ]);
               useStudentStore.getState().reset();
@@ -281,18 +420,58 @@ export default function StudentLobbyScreen() {
               </View>
            </View>
 
-           {/* HARDCODED GREEN STATUS - As requested, the pack is already downloaded at home */}
-           <View style={[styles.readinessBanner, styles.readyBg]}>
-              <Check size={18} color={colors.success} />
-              <Text style={[styles.readinessText, styles.readyText]}>
-                 Ready for Offline Exam
+           <View style={[styles.readinessBanner, examReady ? styles.readyBg : styles.progressBg]}>
+              {examReady ? <Check size={18} color={colors.success} /> : <ActivityIndicator size="small" color={colors.primary} />}
+              <Text style={[styles.readinessText, examReady ? styles.readyText : styles.progressText]}>
+                 {controller.state === 'FINISHING_DOWNLOAD'
+                   ? `Finishing Download...\n${Math.round(progress.percent)}%`
+                   : progress.phaseLabel}
               </Text>
            </View>
         </Card>
 
+        <Card style={styles.readinessCard}>
+          <Text style={styles.readinessCardTitle}>Exam Readiness</Text>
+          <ReadinessRow label="Module Download" value={`${Math.round(progress.percent)}%`} ok={progress.percent >= 100} />
+          <ReadinessRow
+            label="Questions"
+            value={`${progress.questionsDownloaded}/${progress.questionsExpected || progress.questionsDownloaded || 0}`}
+            ok={progress.questionsDownloaded > 0}
+          />
+          <ReadinessRow label="Verification" value={progress.hashVerified ? 'Passed' : 'Pending'} ok={progress.hashVerified} />
+          <ReadinessRow label="Session" value={sessionLabel} ok={sessionLabel === 'Active' || sessionLabel === 'Waiting'} />
+          <ReadinessRow label="Network" value={networkConnected ? 'Connected' : 'Interrupted'} ok={networkConnected} />
+          <ReadinessRow label="Ready" value={examReady ? 'YES' : 'NO'} ok={examReady} />
+        </Card>
+
+        <Card style={styles.readinessCard}>
+          <Text style={styles.readinessCardTitle}>Downloaded Files</Text>
+          <ReadinessRow
+            label="Questions"
+            value={`${progress.questionsDownloaded}/${progress.questionsExpected || progress.questionsDownloaded || 0}`}
+            ok={progress.questionsDownloaded > 0}
+          />
+          <ReadinessRow
+            label="Assets"
+            value={`${progress.assetsDownloaded}/${progress.assetsExpected || progress.assetsDownloaded || 0}`}
+            ok={progress.assetsDownloaded >= (progress.assetsExpected || 0)}
+          />
+          <ReadinessRow
+            label="Configuration"
+            value={progress.configurationComplete ? 'Complete' : 'Missing'}
+            ok={progress.configurationComplete}
+          />
+          <ReadinessRow label="Hash" value={progress.hashVerified ? 'Verified' : 'Pending'} ok={progress.hashVerified} />
+          <ReadinessRow
+            label="Status"
+            value={examReady ? 'Ready' : progress.phase === 'error' ? 'Incomplete' : 'Downloading'}
+            ok={examReady}
+          />
+        </Card>
+
         {/* SECTION 2: EXAM DETAILS */}
         <Card style={styles.infoCard}>
-           {(!isStale && lobbyData) ? (
+           {lobbyData ? (
               <View style={styles.infoGrid}>
                   <InfoItem label="Batch" value={lobbyData?.session?.batchNumber || "—"} />
                   <InfoItem label="Time" value={lobbyData?.session?.timeLabel || "—"} />
@@ -300,10 +479,7 @@ export default function StudentLobbyScreen() {
               </View>
            ) : (
               <View style={{ padding: 16 }}>
-                 <Text style={styles.loadingInfo}>
-                    {isStale ? "Reconnecting to Room..." : "Syncing room details..."}
-                 </Text>
-                 <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 8 }} />
+                 <Text style={styles.loadingInfo}>Room details loaded from the join snapshot.</Text>
               </View>
            )}
         </Card>
@@ -316,20 +492,34 @@ export default function StudentLobbyScreen() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.waitingBannerTitle}>
-                {controller.state === 'STARTING' ? 'Entry Authorized!' : 'Waiting for Proctor to Start...'}
+                {authority === 'ENDED'
+                  ? 'Examination Ended'
+                  : controller.state === 'STARTING' || authority === 'ACTIVE'
+                    ? 'Entry Authorized!'
+                    : controller.state === 'FINISHING_DOWNLOAD'
+                      ? 'Finishing Download...'
+                      : 'Waiting for Proctor to Start...'}
               </Text>
               <Text style={styles.waitingBannerSub}>
-                {controller.state === 'STARTING'
-                  ? 'Launching examination browser. Please hold on.'
-                  : 'The test opens automatically. Please read the regulations below.'}
+                {authority === 'ENDED'
+                  ? 'This examination has ended. You cannot enter the waiting lobby again.'
+                  : controller.state === 'STARTING' || authority === 'ACTIVE'
+                    ? 'Launching examination browser. Please hold on.'
+                    : controller.state === 'FINISHING_DOWNLOAD'
+                      ? `The proctor has started the exam. Completing download at ${Math.round(progress.percent)}%.`
+                      : 'The test opens automatically after the pack is verified and the proctor starts.'}
               </Text>
             </View>
           </View>
 
-          {controller.state === 'STARTING' && (
+          {(controller.state === 'STARTING' || controller.state === 'FINISHING_DOWNLOAD') && (
             <View style={styles.startingBox}>
               <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={styles.startingText}>Launching Exam Browser...</Text>
+              <Text style={styles.startingText}>
+                {controller.state === 'FINISHING_DOWNLOAD'
+                  ? `Finishing Download... ${Math.round(progress.percent)}%`
+                  : 'Launching Exam Browser...'}
+              </Text>
             </View>
           )}
         </Card>
@@ -414,6 +604,15 @@ export default function StudentLobbyScreen() {
   );
 }
 
+function ReadinessRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
+  return (
+    <View style={styles.readinessRow}>
+      <Text style={styles.readinessRowLabel}>{label}</Text>
+      <Text style={[styles.readinessRowValue, ok ? styles.readyText : styles.pendingText]}>{value}</Text>
+    </View>
+  );
+}
+
 function InfoItem({ label, value }: { label: string; value: string }) {
     return (
         <View style={styles.infoItem}>
@@ -433,8 +632,16 @@ const styles = StyleSheet.create({
   programText: { fontSize: 13, color: colors.inkSecondary, fontWeight: '500' },
   readinessBanner: { flexDirection: 'row', alignItems: 'center', padding: 10, borderRadius: 10, marginVertical: 8 },
   readyBg: { backgroundColor: '#DCFCE7' },
-  readinessText: { fontSize: 13, fontWeight: '700', marginLeft: 8 },
+  progressBg: { backgroundColor: '#E0F2FE' },
+  readinessText: { fontSize: 13, fontWeight: '700', marginLeft: 8, flex: 1 },
   readyText: { color: colors.success },
+  progressText: { color: '#0369A1' },
+  pendingText: { color: '#B45309' },
+  readinessCard: { marginTop: 12, padding: 14 },
+  readinessCardTitle: { fontSize: 13, fontWeight: '800', color: '#003366', marginBottom: 8 },
+  readinessRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 5 },
+  readinessRowLabel: { fontSize: 12, fontWeight: '600', color: '#64748B' },
+  readinessRowValue: { fontSize: 12, fontWeight: '800', color: colors.ink },
   infoCard: { marginTop: 12, padding: 0, overflow: 'hidden' },
   infoGrid: { flexDirection: 'row', justifyContent: 'space-between', padding: 16 },
   infoItem: { alignItems: 'center' },

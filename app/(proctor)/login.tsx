@@ -7,11 +7,14 @@ import {
   Platform,
   ScrollView,
   BackHandler,
+  Alert,
+  Pressable,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Shield } from 'lucide-react-native';
+import { Shield, Wifi } from 'lucide-react-native';
 import { Button } from '@/components/ui/Button';
 import { Header } from '@/components/ui/Header';
 import { Input } from '@/components/ui/Input';
@@ -27,10 +30,15 @@ import { MOCK_PROCTOR } from '@/constants';
 import {
   clearLanApiUrl,
   getAuthApiBaseUrl,
-  getCloudApiBaseUrl,
-  hasLanApiOverride,
+  getApiBaseUrl,
   hydrateApiBaseUrl,
+  setLanApiUrl,
 } from '@/services/api';
+import {
+  discoverLanExamServers,
+  getWifiHint,
+  type DiscoveredServer,
+} from '@/services/lanDiscovery';
 import { ensureExamPackCached } from '@/services/ensureExamPack';
 import { OfflineStore } from '@/services/offlineStore';
 import { ProctorAuthCache } from '@/services/proctorAuthCache';
@@ -46,6 +54,11 @@ export default function ProctorLoginScreen() {
   const [prepareLabel, setPrepareLabel] = useState('Please wait…');
   const [booting, setBooting] = useState(true);
   const [authCacheReady, setAuthCacheReady] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState('');
+  const [wifiHint, setWifiHint] = useState('');
+  const [servers, setServers] = useState<DiscoveredServer[]>([]);
+  const [lanUrl, setLanUrl] = useState(getApiBaseUrl());
 
   // Hardware back returns cleanly to landing page
   useEffect(() => {
@@ -96,9 +109,6 @@ export default function ProctorLoginScreen() {
   useEffect(() => {
     void (async () => {
       await hydrateApiBaseUrl();
-      if (hasLanApiOverride() && getCloudApiBaseUrl()) {
-        await clearLanApiUrl();
-      }
 
       // While online on the login screen: pre-download exam pack + proctor accounts
       // so this phone can log in later without internet.
@@ -108,9 +118,45 @@ export default function ProctorLoginScreen() {
         await ensureExamPackCached({ force: true, includeAuth: true });
       }
       setAuthCacheReady(await ProctorAuthCache.hasAccounts());
+      setLanUrl(getApiBaseUrl());
+      setWifiHint(await getWifiHint());
       setBooting(false);
     })();
   }, []);
+
+  const findServers = async () => {
+    setScanning(true);
+    setFormError(null);
+    setServers([]);
+    try {
+      setWifiHint(await getWifiHint());
+      const found = await discoverLanExamServers((done, total) => {
+        setScanProgress(`Scanning Wi‑Fi… ${done}/${total}`);
+      });
+      setServers(found);
+      if (!found.length) {
+        Alert.alert(
+          'No exam server found',
+          'Join the exam Wi‑Fi, keep Laravel on 0.0.0.0:8000, then try again. Or type the LAN URL below.',
+        );
+      }
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Scan failed');
+    } finally {
+      setScanning(false);
+      setScanProgress('');
+    }
+  };
+
+  const saveFoundServer = async (url: string) => {
+    try {
+      const saved = await setLanApiUrl(url);
+      setLanUrl(saved);
+      Alert.alert('Exam server saved', saved);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Invalid LAN URL');
+    }
+  };
 
   const onSubmit = handleSubmit(async (values) => {
     setFormError(null);
@@ -160,6 +206,59 @@ export default function ProctorLoginScreen() {
               ? 'Offline login cache: ready'
               : 'Offline login cache: not ready (needs internet once)'}
           </Text>
+
+          <Text style={styles.wifiHint}>{wifiHint || 'Connect to exam Wi‑Fi to find the room server.'}</Text>
+          <Button
+            title={scanning ? 'Scanning this Wi‑Fi…' : 'Find servers on this Wi‑Fi'}
+            variant="outline"
+            fullWidth
+            loading={scanning}
+            icon={<Wifi size={16} color={colors.primary} />}
+            onPress={() => void findServers()}
+          />
+          {scanning ? (
+            <View style={styles.scanRow}>
+              <ActivityIndicator color={colors.primary} />
+              <Text style={styles.scanText}>{scanProgress}</Text>
+            </View>
+          ) : null}
+          {servers.map((s) => (
+            <Pressable
+              key={s.ip}
+              style={styles.serverItem}
+              onPress={() => void saveFoundServer(s.url)}
+            >
+              <Wifi size={16} color={colors.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.serverTitle}>{s.label}</Text>
+                <Text style={styles.serverUrl}>{s.url}</Text>
+              </View>
+            </Pressable>
+          ))}
+          <Input
+            label="LAN exam server URL"
+            placeholder="http://10.x.x.x:8000/api/v1"
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={lanUrl}
+            onChangeText={setLanUrl}
+          />
+          <View style={styles.urlActions}>
+            <Button
+              title="Save server"
+              variant="outline"
+              onPress={() => void saveFoundServer(lanUrl)}
+              style={{ flex: 1 }}
+            />
+            <Button
+              title="Reset"
+              variant="ghost"
+              onPress={async () => {
+                await clearLanApiUrl();
+                setLanUrl(getApiBaseUrl());
+              }}
+            />
+          </View>
 
           <Controller
             control={control}
@@ -241,6 +340,28 @@ const styles = StyleSheet.create({
     color: colors.primary,
     marginBottom: 14,
   },
+  wifiHint: {
+    fontSize: 12,
+    color: colors.inkMuted,
+    marginBottom: 8,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  scanRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8, marginBottom: 8 },
+  serverItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.surface,
+    marginTop: 8,
+  },
+  serverTitle: { fontSize: 14, fontWeight: '700', color: colors.ink },
+  serverUrl: { fontSize: 12, color: colors.inkMuted, marginTop: 2 },
+  urlActions: { flexDirection: 'row', gap: 8, marginBottom: 8, marginTop: 8 },
   error: { marginTop: 10, color: colors.danger, fontWeight: '600', fontSize: 13 },
   hint: {
     marginTop: 14,

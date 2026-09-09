@@ -27,6 +27,7 @@ import { useLobbyStore, useProctorStore } from '@/stores';
 import { colors } from '@/theme';
 import type { LobbyStudent } from '@/types';
 import { safeBack } from '@/utils';
+import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
 import {
   // keep existing imports below — do not break the rest of this file
   Copy,
@@ -37,6 +38,7 @@ import {
   CheckCircle2,
   ShieldAlert,
   AlertTriangle,
+  LogOut,
 } from 'lucide-react-native';
 
 function formatTime(iso: string | null | undefined) {
@@ -331,7 +333,21 @@ export default function ProctorLobbyScreen() {
   if (!ready) {
     return (
       <View style={styles.screen}>
-        <Header title="Examination Lobby" subtitle="Loading…" onBack={goBack} />
+        <Header
+          title="Examination Lobby"
+          subtitle="Loading…"
+          onBack={goBack}
+          right={
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Logout"
+              onPress={() => confirmProctorLogout(router)}
+              hitSlop={8}
+            >
+              <LogOut size={18} color={colors.danger} />
+            </Pressable>
+          }
+        />
         <View style={styles.lobbySkeleton}>
           <SkeletonCard>
             <Skeleton height={16} width="50%" />
@@ -347,7 +363,20 @@ export default function ProctorLobbyScreen() {
   if (openError || !lobby) {
     return (
       <View style={styles.screen}>
-        <Header title="Examination Lobby" onBack={goBack} />
+        <Header
+          title="Examination Lobby"
+          onBack={goBack}
+          right={
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Logout"
+              onPress={() => confirmProctorLogout(router)}
+              hitSlop={8}
+            >
+              <LogOut size={18} color={colors.danger} />
+            </Pressable>
+          }
+        />
         <View style={styles.errorWrap}>
           <Text style={styles.errorTitle}>Lobby not available</Text>
           <Text style={styles.errorBody}>
@@ -389,6 +418,16 @@ export default function ProctorLobbyScreen() {
             : lobby.session?.batchNumber
         }
         onBack={goBack}
+        right={
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Logout"
+            onPress={() => confirmProctorLogout(router)}
+            hitSlop={8}
+          >
+            <LogOut size={18} color={colors.danger} />
+          </Pressable>
+        }
       />
 
       <FlatList
@@ -986,6 +1025,18 @@ export default function ProctorLobbyScreen() {
               <StatusChip status={selected.status} />
               <DetailRow label="Gmail" value={selected.email} />
               <DetailRow label="Desired Program" value={selected.programName} />
+              <DetailRow
+                label="Download"
+                value={`${Math.round(selected.downloadPercent ?? (selected.isReady ? 100 : 0))}%`}
+              />
+              <DetailRow
+                label="Verification"
+                value={selected.hashVerified || selected.isReady ? 'Verified' : 'Pending'}
+              />
+              <DetailRow
+                label="Ready Status"
+                value={selected.moduleReady || selected.isReady ? 'Ready' : 'Not ready'}
+              />
               <DetailRow
                 label="Current Status"
                 value={

@@ -266,15 +266,49 @@ export const LobbyRepository = {
       if (participation) {
         if (__DEV__) console.debug('[LobbyRepository.getLobby] using participation token (snippet)', { participation: String(participation).slice(0, 8) });
         try {
-          const snapshot = await PeerExamClient.request<LobbySnapshot>('/lobby', {
-            query: { participation_token: participation },
-            timeoutMs: 3500, // Slightly more aggressive timeout for lobby poll
+          const pulse = await PeerExamClient.request<{
+            roomStatus?: string;
+            authorityStatus?: string;
+            myStatus?: string;
+          }>('/status', {
+            method: 'POST',
+            body: { participation_token: participation },
+            timeoutMs: 4000,
           });
-          if (__DEV__) console.log("[LOBBY DEBUG] Peer Server Response Status:", snapshot?.status);
-          return snapshot ?? null;
+          const { ExamLifecycle } = await import('@/services/examLifecycle');
+          const roomStatus = pulse?.roomStatus || 'lobby_open';
+          await ExamLifecycle.applyFromServer(roomStatus);
+          const { useLobbyStore } = await import('@/stores');
+          const cached = useLobbyStore.getState().snapshot;
+          const status =
+            ExamLifecycle.peek().status === 'ACTIVE'
+              ? 'in_progress'
+              : ExamLifecycle.peek().status === 'ENDED'
+                ? 'ended'
+                : roomStatus === 'in_progress'
+                  ? 'in_progress'
+                  : roomStatus === 'ended'
+                    ? 'ended'
+                    : cached?.status ?? 'lobby_open';
+          if (cached) {
+            return { ...cached, status, my_status: pulse?.myStatus as any };
+          }
+          return {
+            status,
+            students: [],
+            registeredCount: 0,
+            connectedCount: 0,
+            waitingCount: 0,
+            takingCount: 0,
+            finishedCount: 0,
+            warningCount: 0,
+            terminatedCount: 0,
+            violationsDetected: 0,
+            notYetConnectedCount: 0,
+          } as LobbySnapshot;
         } catch (err) {
           if (__DEV__) console.warn('[LOBBY DEBUG] Peer poll failed:', err);
-          throw err; // Let useQuery handle the error state
+          throw err;
         }
       }
 
@@ -691,6 +725,9 @@ export const LobbyRepository = {
           student_pack_hash: preloadedHash,
           package_hash: preloadedHash,
           is_ready: Boolean(preloadedHash),
+          download_percent: preloadedHash ? 100 : 0,
+          hash_verified: Boolean(preloadedHash),
+          module_ready: Boolean(preloadedHash),
         },
       });
 
@@ -845,6 +882,7 @@ export const LobbyRepository = {
 
     // Peer mode: flipping local state releases the questions to every joined phone.
     if (await PeerExamServer.snapshot()) {
+      console.log('[PROCTOR] Examination Started');
       return PeerExamServer.startExam();
     }
 
@@ -1166,17 +1204,58 @@ export const LobbyRepository = {
     void studentId;
   },
 
-  async sendHeartbeat(): Promise<{ ok: boolean; message?: string }> {
-    if (await OfflineStore.isOfflineMode()) {
-      return { ok: true };
-    }
+  async acknowledgeStart(phase: 'received' | 'entered'): Promise<void> {
     const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
-    if (!token) return { ok: false, message: 'Missing participation token.' };
+    if (!token || !(await PeerExamClient.isActive())) return;
+    try {
+      await PeerExamClient.request('/ack-start', {
+        method: 'POST',
+        body: { participation_token: token, phase },
+        timeoutMs: 4000,
+      });
+    } catch (err) {
+      console.warn('[STUDENT] Start ACK failed:', phase, err);
+    }
+  },
 
+  async sendHeartbeat(): Promise<{
+    ok: boolean;
+    message?: string;
+    status?: string;
+    roomStatus?: string;
+    authorityStatus?: string;
+    startSeq?: number;
+  }> {
+    // Peer LAN is the exam network. Never skip it because cloud is offline.
     if (await PeerExamClient.isActive()) {
+      const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      if (!token) return { ok: false, message: 'Missing participation token.' };
       try {
-        await PeerExamClient.getQuickStatus(token);
-        return { ok: true };
+        const { ExamPreloader } = await import('@/services/examPreloader');
+        const readiness = ExamPreloader.getProgress();
+        const hash = (await ExamPreloader.getPreloadedHash()) || '';
+        const pulse = await PeerExamClient.request<{
+          status?: string;
+          authorityStatus?: string;
+          startSeq?: number;
+        }>('/heartbeat', {
+          method: 'POST',
+          body: {
+            participation_token: token,
+            download_percent: readiness.percent,
+            hash_verified: readiness.hashVerified,
+            module_ready: readiness.moduleReady,
+            package_hash: hash,
+          },
+          timeoutMs: 4000,
+        });
+        return {
+          ok: true,
+          status: pulse?.status,
+          roomStatus: pulse?.status,
+          authorityStatus: pulse?.authorityStatus,
+          startSeq: pulse?.startSeq,
+        };
       } catch (e) {
         return {
           ok: false,
@@ -1184,7 +1263,14 @@ export const LobbyRepository = {
         };
       }
     }
-    // ... rest of existing code
+
+    if (await OfflineStore.isOfflineMode()) {
+      return { ok: true };
+    }
+
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) return { ok: false, message: 'Missing participation token.' };
+
     try {
       await apiRequest('/exam/heartbeat', {
         method: 'POST',

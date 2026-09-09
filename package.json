@@ -7,7 +7,9 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "generate:mock": "npx ts-node --compiler-options \"{\\\"module\\\":\\\"commonjs\\\"}\" scripts/generate-mock-data.ts"
+    "generate:mock": "npx ts-node --compiler-options \"{\\\"module\\\":\\\"commonjs\\\"}\" scripts/generate-mock-data.ts",
+    "test": "npx --yes tsx --test services/examStartCoordinator.test.ts services/passkeyClassification.test.ts",
+    "postinstall": "patch-package"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
@@ -61,6 +63,7 @@
     "@types/react": "~19.1.0",
     "babel-plugin-module-resolver": "^5.0.3",
     "babel-preset-expo": "~54.0.12",
+    "patch-package": "^8.0.1",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.9.2"
   },

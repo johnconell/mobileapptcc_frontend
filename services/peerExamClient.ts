@@ -63,28 +63,74 @@ export const PeerExamClient = {
    * Ultra-fast signal check (Fix Root Cause 1 & 2).
    * Polls the server for GLOBAL room status without needing a registration token.
    */
-  async getGlobalStatus(): Promise<{ examStarted: boolean; roomStatus: string; v: number } | null> {
+  async getGlobalStatus(): Promise<{
+    examStarted: boolean;
+    roomStatus: string;
+    authorityStatus?: 'WAITING' | 'ACTIVE' | 'ENDED' | 'STARTING' | 'PAUSED';
+    startSeq?: number;
+    v: number;
+  } | null> {
     const target = await this.getTarget();
     if (!target) return null;
+
+    const normalize = (data: any) => {
+      if (!data) return null;
+      const authority = data.authorityStatus != null ? String(data.authorityStatus) : undefined;
+      let roomStatus = String(data.roomStatus ?? data.status ?? '');
+      if (!roomStatus && authority === 'ACTIVE') roomStatus = 'in_progress';
+      if (!roomStatus && authority === 'ENDED') roomStatus = 'ended';
+      if (!roomStatus) return null;
+      return {
+        examStarted: roomStatus === 'in_progress',
+        roomStatus,
+        authorityStatus: authority,
+        startSeq: Number(data.startSeq ?? data.v ?? 0),
+        v: Number(data.v ?? data.startSeq ?? 0),
+      };
+    };
+
+    // POST first — expo-http-server GET often returns an empty 200 on phones.
+    try {
+      const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      const data = await this.request<any>('/status', {
+        method: 'POST',
+        body: token ? { participation_token: token } : {},
+        timeoutMs: 4000,
+      });
+      const parsed = normalize(data);
+      if (parsed) return parsed;
+    } catch {
+      /* fall through */
+    }
+
     try {
       const res = await withTimeout(
         (signal) =>
           fetch(`${baseUrl(target)}/status`, {
-            headers: { Accept: 'application/json' },
+            method: 'POST',
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+            body: '{}',
             signal,
           }),
-        2500,
+        4000,
       );
-      if (!res.ok) return null;
-      const json = await res.json();
-      return json.data;
+      const json = await res.json().catch(() => null);
+      return normalize(json?.data ?? json);
     } catch {
       return null;
     }
   },
 
   /** Personal status check - used once student has a token */
-  async getQuickStatus(token: string): Promise<{ s: string; ss: string; examStarted: boolean; roomStatus: string } | null> {
+  async getQuickStatus(token: string): Promise<{
+    s: string;
+    ss: string;
+    examStarted: boolean;
+    roomStatus: string;
+    authorityStatus?: string;
+    startPhase?: string;
+    startSeq?: number;
+  } | null> {
     const target = await this.getTarget();
     if (!target) return null;
     try {
@@ -98,12 +144,18 @@ export const PeerExamClient = {
       );
       if (!res.ok) return null;
       const json = await res.json();
-      // Map new format to legacy if needed, or return new format
-      const data = json.data;
+      const data = json?.data ?? json;
+      if (!data) return null;
+      const roomStatus = String(data.roomStatus ?? data.status ?? '');
       return {
         ...data,
-        s: data.roomStatus,
-        ss: data.myStatus
+        examStarted: roomStatus === 'in_progress',
+        roomStatus,
+        s: roomStatus,
+        ss: data.myStatus,
+        authorityStatus: data.authorityStatus,
+        startPhase: data.startPhase,
+        startSeq: Number(data.startSeq ?? 0),
       };
     } catch {
       return null;
@@ -117,13 +169,24 @@ export const PeerExamClient = {
     try {
       const res = await withTimeout(
         (signal) =>
-          fetch(`${baseUrl(resolved)}/health`, { // Changed from /ping to /health
+          fetch(`${baseUrl(resolved)}/health`, {
+            method: 'POST',
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+            body: '{}',
+            signal,
+          }),
+        4000,
+      );
+      if (res.ok) return true;
+      const fallback = await withTimeout(
+        (signal) =>
+          fetch(`${baseUrl(resolved)}/health`, {
             headers: { Accept: 'application/json' },
             signal,
           }),
         4000,
       );
-      return res.ok;
+      return fallback.ok;
     } catch {
       return false;
     }
@@ -184,21 +247,27 @@ export const PeerExamClient = {
       json = text ? JSON.parse(text) : null;
     } catch (err) {
       if (__DEV__) console.error(`[LAN ERROR] JSON Parse failed from ${target.host}:`, text.slice(0, 100));
-      throw new Error(`Invalid response from proctor phone.`);
+      throw new Error('Exam Pack Incomplete');
     }
 
-    if (!res.ok || !json || json.success === false) {
-      const msg = json?.message || `Request rejected (${res.status})`;
-      if (__DEV__) console.error(`[LAN ERROR] rejected:`, msg);
-      throw new Error(msg);
+    const hasUsablePayload =
+      json &&
+      json.success !== false &&
+      (json.data != null || json.questions != null || json.registration_id != null);
+
+    if (res.ok && hasUsablePayload) {
+      return (json.data !== undefined ? json.data : json) as T;
     }
 
-    // Proctor server always wraps valid payloads in 'data'
-    if (json.data === undefined) {
-      return json as T;
+    const { classifyPeerStartupError } = await import('@/services/examReadiness');
+    const rawMessage =
+      (typeof json?.message === 'string' && json.message.trim()) ||
+      (!json || !text ? '' : `Request rejected (${res.status})`);
+    const msg = classifyPeerStartupError(rawMessage, path);
+    if (__DEV__) {
+      console.error(`[LAN ERROR] ${path} status=${res.status} body=${(text || '').slice(0, 180)} mapped=${msg}`);
     }
-
-    return json.data as T;
+    throw new Error(msg);
   },
 };
 

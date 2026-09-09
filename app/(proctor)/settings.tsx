@@ -28,6 +28,7 @@ import { useProctorStore } from '@/stores';
 import { useAppTheme } from '@/hooks/useAppTheme';
 import { AuthRepository } from '@/repositories';
 import { VersionInfo } from '@/components/VersionInfo';
+import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
 import type { ThemeMode, AppFontSize } from '@/stores/settingsStore';
 
 export default function ProctorSettingsScreen() {
@@ -39,23 +40,8 @@ export default function ProctorSettingsScreen() {
 
   const [appearanceModalOpen, setAppearanceModalOpen] = useState(false);
 
-  const doLogout = async () => {
-    Alert.alert(
-      'Sign Out',
-      'Are you sure you want to sign out and return to the main landing page?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Sign Out',
-          style: 'destructive',
-          onPress: async () => {
-            await AuthRepository.logout();
-            reset();
-            router.replace({ pathname: '/', params: { stay: '1', from: 'logout' } } as any);
-          },
-        },
-      ],
-    );
+  const doLogout = () => {
+    confirmProctorLogout(router);
   };
 
   return (

@@ -138,6 +138,7 @@ export default function ProctorRootLayout() {
         name="results"
         options={{
           title: 'Results',
+          tabBarIcon: ({ color, size }) => <BarChart3 size={size} color={color} strokeWidth={2.5} />,
           tabBarIcon: ({ color, size }) => (
             <View style={{ width: size + 8, height: size, alignItems: 'center', justifyContent: 'center' }}>
               <BarChart3 size={size} color={color} strokeWidth={2.5} />

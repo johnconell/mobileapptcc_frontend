@@ -21,6 +21,7 @@ import {
   DoorOpen,
   Clock,
   Calendar,
+  LogOut,
 } from 'lucide-react-native';
 import { Header, Card, Button, EmptyState, Breadcrumbs, StatusChip } from '@/components/ui';
 import { ScheduleCard } from '@/features/proctor/ScheduleCard';
@@ -33,6 +34,7 @@ import { OfflineStore } from '@/services/offlineStore';
 import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 import { shadows } from '@/theme';
 import type { ExamSchedule, ExamSession } from '@/types';
+import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -178,6 +180,8 @@ export default function ProctorExaminationTabScreen() {
       1;
 
     const schedMatch = (offlinePack?.schedules ?? []).find(
+      (s) => s.id === sidNum || String(s.id) === String(schedule.id),
+      (s) => s.id === sidNum || String(s.id) === String(session.id) || String(s.id) === cleanSess,
       (s: any) =>
         s.id === sidNum ||
         String(s.id) === String(schedule.id) ||
@@ -240,6 +244,7 @@ export default function ProctorExaminationTabScreen() {
     if (selectedSlot.isOpened) {
       setOpenModalVisible(false);
       router.push(`/(proctor)/lobby?${new URLSearchParams(queryParams).toString()}` as any);
+      router.replace(`/(proctor)/lobby?${new URLSearchParams(queryParams).toString()}` as any);
       return;
     }
 
@@ -305,6 +310,7 @@ export default function ProctorExaminationTabScreen() {
 
       setOpenModalVisible(false);
       router.push(`/(proctor)/lobby?${new URLSearchParams(queryParams).toString()}` as any);
+      router.replace(`/(proctor)/lobby?${new URLSearchParams(queryParams).toString()}` as any);
     } catch (err) {
       console.error('Failed to open examination room:', err);
       Alert.alert(
@@ -333,6 +339,16 @@ export default function ProctorExaminationTabScreen() {
               : 'Download Pack Required'
         }
         onBack={() => router.navigate('/(proctor)/dashboard' as any)}
+        right={
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Logout"
+            onPress={() => confirmProctorLogout(router)}
+            hitSlop={8}
+          >
+            <LogOut size={18} color="#B42318" />
+          </Pressable>
+        }
       />
 
       <Breadcrumbs segments={[{ label: 'Entrance Examination' }]} />

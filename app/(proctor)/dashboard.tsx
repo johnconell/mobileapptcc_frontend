@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,7 @@ import {
   Modal,
   Alert,
 } from 'react-native';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import {
   Users,
   UserCheck,
@@ -32,6 +32,7 @@ import { useProctorStore } from '@/stores';
 import { useAppTheme } from '@/hooks/useAppTheme';
 import { OfflineStore } from '@/services/offlineStore';
 import { AuthRepository } from '@/repositories';
+import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
 
 type ActiveLobbyDetails = {
   sessionId: string;
@@ -262,6 +263,7 @@ export default function ProctorDashboardScreen() {
         },
       ],
     );
+    confirmProctorLogout(router);
   };
 
   return (

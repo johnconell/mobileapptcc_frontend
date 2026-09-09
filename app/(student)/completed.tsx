@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { Button } from '@/components/ui';
 import { SuccessIllustration } from '@/features/exam/SuccessIllustration';
+import { clearApplicantExamMaterial } from '@/services/applicantExamCleanup';
 import { useExamStore, useStudentStore } from '@/stores';
 import { colors } from '@/theme';
 
@@ -20,6 +21,7 @@ export default function CompletedScreen() {
   const timeExpired = terminationReason === 'time_expired';
 
   const goHome = React.useCallback(() => {
+    void clearApplicantExamMaterial();
     resetExam();
     resetStudent();
     router.replace('/');

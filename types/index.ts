@@ -143,6 +143,10 @@ export interface LobbyStudent {
   reconnectCode?: string | null;
   reconnectCodeExpiresAt?: string | null;
   isReady?: boolean;
+  downloadPercent?: number;
+  hashVerified?: boolean;
+  moduleReady?: boolean;
+  startPhase?: 'waiting' | 'received' | 'entered';
 }
 
 export interface LobbySnapshot {

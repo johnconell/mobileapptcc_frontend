@@ -1,0 +1,219 @@
+diff --git a/node_modules/expo-http-server/android/src/main/java/expo/modules/httpserver/ExpoHttpServerModule.kt b/node_modules/expo-http-server/android/src/main/java/expo/modules/httpserver/ExpoHttpServerModule.kt
+index 53ad622..0871bb5 100644
+--- a/node_modules/expo-http-server/android/src/main/java/expo/modules/httpserver/ExpoHttpServerModule.kt
++++ b/node_modules/expo-http-server/android/src/main/java/expo/modules/httpserver/ExpoHttpServerModule.kt
+@@ -40,8 +40,10 @@ class ExpoHttpServerModule : Module() {
+         val headers: Map<String, String> = request.headers()
+         val params: Map<String, String> = request.params()
+         val cookies: Map<String, String> = request.cookies().associate { it.name() to it.value() }
++        val requestId = uuid + ":" + java.util.UUID.randomUUID().toString()
+         sendEvent("onRequest", bundleOf(
+-          "uuid" to uuid,
++          "uuid" to requestId,
++          "routeUuid" to uuid,
+           "method" to request.method().name,
+           "path" to request.url(),
+           "body" to request.content(),
+@@ -49,18 +51,26 @@ class ExpoHttpServerModule : Module() {
+           "paramsJson" to JSONObject(params).toString(),
+           "cookiesJson" to JSONObject(cookies).toString(),
+         ))
+-        while (!responses.containsKey(uuid)) {
+-          Thread.sleep(10)
++        val deadline = System.currentTimeMillis() + 15000
++        while (!responses.containsKey(requestId) && System.currentTimeMillis() < deadline) {
++          Thread.sleep(5)
++        }
++        val res = responses.remove(requestId)
++        if (res == null) {
++          val timeoutBody = "{\"success\":false,\"message\":\"Gateway Timeout\"}"
++          response.setBodyText(timeoutBody)
++          response.setStatus(504)
++          response.addHeader("Content-Length", "" + timeoutBody.toByteArray(Charsets.UTF_8).size)
++          response.addHeader("Content-Type", "application/json")
++          return@request response
+         }
+-        val res = responses[uuid]!!
+         response.setBodyText(res.body)
+         response.setStatus(res.statusCode)
+-        response.addHeader("Content-Length", "" + res.body.length)
++        response.addHeader("Content-Length", "" + res.body.toByteArray(Charsets.UTF_8).size)
+         response.addHeader("Content-Type", res.contentType)
+         for ((key, value) in res.headers) {
+           response.addHeader(key, value)
+         }
+-        responses.remove(uuid);
+         return@request response
+       };
+     }
+diff --git a/node_modules/expo-http-server/build/index.js b/node_modules/expo-http-server/build/index.js
+index 0b0afd6..98fab5b 100644
+--- a/node_modules/expo-http-server/build/index.js
++++ b/node_modules/expo-http-server/build/index.js
+@@ -2,16 +2,27 @@ import { EventEmitter } from "expo-modules-core";
+ import ExpoHttpServerModule from "./ExpoHttpServerModule";
+ const emitter = new EventEmitter(ExpoHttpServerModule);
+ const requestCallbacks = [];
++let requestListenerAttached = false;
++function routeUuidFromEvent(event) {
++    if (event?.routeUuid) return event.routeUuid;
++    const uuid = String(event?.uuid ?? "");
++    const sep = uuid.indexOf(":");
++    return sep === -1 ? uuid : uuid.slice(0, sep);
++}
+ export const start = () => {
+-    emitter.addListener("onRequest", async (event) => {
+-        const responseHandler = requestCallbacks.find((c) => c.uuid === event.uuid);
+-        if (!responseHandler) {
+-            ExpoHttpServerModule.respond(event.uuid, 404, "Not Found", "application/json", {}, JSON.stringify({ error: "Handler not found" }));
+-            return;
+-        }
+-        const response = await responseHandler.callback(event);
+-        ExpoHttpServerModule.respond(event.uuid, response.statusCode || 200, response.statusDescription || "OK", response.contentType || "application/json", response.headers || {}, response.body || "{}");
+-    });
++    if (!requestListenerAttached) {
++        requestListenerAttached = true;
++        emitter.addListener("onRequest", async (event) => {
++            const routeUuid = routeUuidFromEvent(event);
++            const responseHandler = requestCallbacks.find((c) => c.uuid === routeUuid || c.uuid === event.uuid);
++            if (!responseHandler) {
++                ExpoHttpServerModule.respond(event.uuid, 404, "Not Found", "application/json", {}, JSON.stringify({ error: "Handler not found" }));
++                return;
++            }
++            const response = await responseHandler.callback(event);
++            ExpoHttpServerModule.respond(event.uuid, response.statusCode || 200, response.statusDescription || "OK", response.contentType || "application/json", response.headers || {}, response.body || "{}");
++        });
++    }
+     ExpoHttpServerModule.start();
+ };
+ export const route = (path, method, callback) => {
+@@ -33,4 +44,3 @@ export const setup = (port, onStatusUpdate) => {
+     ExpoHttpServerModule.setup(port);
+ };
+ export const stop = () => ExpoHttpServerModule.stop();
+-//# sourceMappingURL=index.js.map
+\ No newline at end of file
+diff --git a/node_modules/expo-http-server/ios/ExpoHttpServerModule.swift b/node_modules/expo-http-server/ios/ExpoHttpServerModule.swift
+index eec7d9a..191e92d 100644
+--- a/node_modules/expo-http-server/ios/ExpoHttpServerModule.swift
++++ b/node_modules/expo-http-server/ios/ExpoHttpServerModule.swift
+@@ -41,9 +41,11 @@ public class ExpoHttpServerModule: Module {
+                 if let body = req.body, let bodyData = try? JSONSerialization.data(withJSONObject: body) {
+                     bodyString = String(data: bodyData, encoding: .utf8) ?? "{}"
+                 }
+-                self.responses[uuid] = res
++                let requestId = uuid + ":" + UUID().uuidString
++                self.responses[requestId] = res
+                 self.sendEvent("onRequest", [
+-                    "uuid": uuid,
++                    "uuid": requestId,
++                    "routeUuid": uuid,
+                     "method": req.method.toString(),
+                     "path": path,
+                     "body": bodyString,
+@@ -65,7 +67,7 @@ public class ExpoHttpServerModule: Module {
+             if let response = self.responses[udid] {
+                 response.setStatusCode(UInt(statusCode), description: statusDescription)
+                 response.setValue(contentType, forHTTPHeaderField: "Content-type")
+-                response.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
++                response.setValue("\(body.utf8.count)", forHTTPHeaderField: "Content-Length")
+                 for (key, value) in headers {
+                     response.setValue(value, forHTTPHeaderField: key)
+                 }
+diff --git a/node_modules/expo-http-server/src/index.ts b/node_modules/expo-http-server/src/index.ts
+index da15689..c3120d6 100644
+--- a/node_modules/expo-http-server/src/index.ts
++++ b/node_modules/expo-http-server/src/index.ts
+@@ -4,6 +4,14 @@ import ExpoHttpServerModule from "./ExpoHttpServerModule";
+ 
+ const emitter = new EventEmitter(ExpoHttpServerModule);
+ const requestCallbacks: Callback[] = [];
++let requestListenerAttached = false;
++
++function routeUuidFromEvent(event: RequestEvent & { routeUuid?: string }): string {
++  if (event.routeUuid) return event.routeUuid;
++  const uuid = String(event.uuid ?? "");
++  const sep = uuid.indexOf(":");
++  return sep === -1 ? uuid : uuid.slice(0, sep);
++}
+ 
+ export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "OPTIONS";
+ /**
+@@ -18,6 +26,7 @@ export interface StatusEvent {
+ 
+ export interface RequestEvent {
+   uuid: string;
++  routeUuid?: string;
+   method: string;
+   path: string;
+   body: string;
+@@ -42,29 +51,35 @@ export interface Callback {
+ }
+ 
+ export const start = () => {
+-  emitter.addListener<RequestEvent>("onRequest", async (event) => {
+-    const responseHandler = requestCallbacks.find((c) => c.uuid === event.uuid);
+-    if (!responseHandler) {
++  if (!requestListenerAttached) {
++    requestListenerAttached = true;
++    emitter.addListener<RequestEvent>("onRequest", async (event) => {
++      const routeUuid = routeUuidFromEvent(event);
++      const responseHandler = requestCallbacks.find(
++        (c) => c.uuid === routeUuid || c.uuid === event.uuid,
++      );
++      if (!responseHandler) {
++        ExpoHttpServerModule.respond(
++          event.uuid,
++          404,
++          "Not Found",
++          "application/json",
++          {},
++          JSON.stringify({ error: "Handler not found" }),
++        );
++        return;
++      }
++      const response = await responseHandler.callback(event);
+       ExpoHttpServerModule.respond(
+         event.uuid,
+-        404,
+-        "Not Found",
+-        "application/json",
+-        {},
+-        JSON.stringify({ error: "Handler not found" }),
++        response.statusCode || 200,
++        response.statusDescription || "OK",
++        response.contentType || "application/json",
++        response.headers || {},
++        response.body || "{}",
+       );
+-      return;
+-    }
+-    const response = await responseHandler.callback(event);
+-    ExpoHttpServerModule.respond(
+-      event.uuid,
+-      response.statusCode || 200,
+-      response.statusDescription || "OK",
+-      response.contentType || "application/json",
+-      response.headers || {},
+-      response.body || "{}",
+-    );
+-  });
++    });
++  }
+   ExpoHttpServerModule.start();
+ };
+ 
+diff --git a/node_modules/expo-http-server/tsconfig.json b/node_modules/expo-http-server/tsconfig.json
+index a24ec0f..f679359 100644
+--- a/node_modules/expo-http-server/tsconfig.json
++++ b/node_modules/expo-http-server/tsconfig.json
+@@ -2,7 +2,8 @@
+ {
+   "extends": "expo-module-scripts/tsconfig.base",
+   "compilerOptions": {
+-    "outDir": "./build"
++    "outDir": "./build",
++    "rootDir": "./src"
+   },
+   "include": ["./src"],
+   "exclude": ["**/__mocks__/*", "**/__tests__/*"]

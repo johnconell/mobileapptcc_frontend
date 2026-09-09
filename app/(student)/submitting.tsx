@@ -3,6 +3,7 @@ import { Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Button, Loader } from '@/components/ui';
 import { LobbyRepository, QuestionRepository } from '@/repositories';
+import { clearApplicantExamMaterial } from '@/services/applicantExamCleanup';
 import { ExamProgressStore } from '@/services/examProgressStore';
 import { appStorage } from '@/services/storage';
 import { useExamStore, useStudentStore } from '@/stores';
@@ -64,6 +65,7 @@ export default function SubmittingScreen() {
         }
 
         await ExamProgressStore.clear();
+        await clearApplicantExamMaterial();
         markSubmitted(reason);
         try {
           const appCode = verifiedStudent?.studentId || verifiedStudent?.id;
@@ -89,6 +91,7 @@ export default function SubmittingScreen() {
     // Answers were autosaved throughout the exam, so a failed final send must not
     // hold a forced-end student on this screen — close it out and let sync finish it.
     if (isForcedEnd) {
+      await clearApplicantExamMaterial();
       markSubmitted(reason);
       router.replace('/(student)/completed');
       return;

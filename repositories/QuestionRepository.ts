@@ -25,15 +25,12 @@ export const QuestionRepository = {
         if (local.length > 0) return local;
       }
 
-      // 2. Try the Global Offline Module (Downloaded from Home/Cloud)
-      if (await OfflineStore.hasPack()) {
-        if (__DEV__) console.log("[LOBBY DEBUG] Using questions from Global Offline Module.");
-        return OfflineExamRepository.getQuestions();
-      }
-
-      // 3. Fallback to network fetch if NO local module exists (LAN fetch from proctor)
+      // Applicant devices must load the proctor-issued pack, not a leftover admin module.
       if (__DEV__) console.log("[LOBBY DEBUG] Requesting questions from Proctor with resilient retry...");
       const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      if (!token) {
+        throw new Error('Exam Pack Incomplete');
+      }
       let json: { questions: Question[] } | null = null;
       let lastErr: unknown = null;
 
@@ -41,9 +38,16 @@ export const QuestionRepository = {
         try {
           if (__DEV__) console.log(`[LOBBY DEBUG] Fetch attempt ${attempt}/3...`);
           json = await PeerExamClient.request<{ questions: Question[] }>('/questions', {
-            query: { participation_token: token ?? undefined },
+            query: { participation_token: token },
             timeoutMs: 25000,
           });
+          if (!json?.questions?.length) {
+            json = await PeerExamClient.request<{ questions: Question[] }>('/questions', {
+              method: 'POST',
+              body: { participation_token: token },
+              timeoutMs: 25000,
+            });
+          }
           if (json?.questions?.length) {
             break;
           }
@@ -59,7 +63,7 @@ export const QuestionRepository = {
       if (!json?.questions?.length) {
         throw lastErr instanceof Error
           ? lastErr
-          : new Error('Proctor server did not return questions for this examination.');
+          : new Error('Question Bank Not Found');
       }
 
       if (__DEV__) console.log("[LOBBY DEBUG] Received questions from Proctor. Count:", json.questions.length);

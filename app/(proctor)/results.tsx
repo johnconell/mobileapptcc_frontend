@@ -28,10 +28,12 @@ import {
   Users,
   FileText,
   AlertCircle,
+  LogOut,
 } from 'lucide-react-native';
 import { Header, Card, Button } from '@/components/ui';
 import { OfflineStore, type OfflineQueuedResult, type OfflinePack } from '@/services/offlineStore';
 import { colors, radii, shadows } from '@/theme';
+import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
 
 type LobbyStudentItem = {
   id: string;
@@ -395,6 +397,16 @@ export default function ProctorResultsScreen() {
           title={selectedLobby.roomName}
           subtitle={`${selectedLobby.scheduleTitle} · Examinees`}
           onBack={() => setSelectedLobbyId(null)}
+          right={
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Logout"
+              onPress={() => confirmProctorLogout(router)}
+              hitSlop={8}
+            >
+              <LogOut size={18} color="#B42318" />
+            </Pressable>
+          }
         />
 
         <ScrollView
@@ -742,6 +754,16 @@ export default function ProctorResultsScreen() {
             router.navigate('/(proctor)/dashboard' as any);
           }
         }}
+        right={
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Logout"
+            onPress={() => confirmProctorLogout(router)}
+            hitSlop={8}
+          >
+            <LogOut size={18} color="#B42318" />
+          </Pressable>
+        }
       />
 
       <ScrollView
@@ -1083,7 +1105,6 @@ export default function ProctorResultsScreen() {
                 {lobby.hasUnsynced && (
                   <View style={[styles.lobbyFooterItem, styles.unsyncedFootBadge]}>
                     <RefreshCw size={11} color="#D97706" />
-                    <View style={styles.notificationRedDotSmall} />
                     <Text style={styles.unsyncedFootText}>Sync Required</Text>
                   </View>
                 )}
