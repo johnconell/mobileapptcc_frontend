@@ -26,7 +26,7 @@ export default function SessionsScreen() {
   const scheduleName = schedule?.name ?? 'Schedule';
 
   const breadcrumbs = [
-    { label: 'Schedules', onPress: () => router.replace('/(proctor)/examination' as any) },
+    { label: 'Schedules', onPress: () => router.replace('/(proctor)/(tabs)/examination') },
     { label: scheduleName },
   ];
 
@@ -36,7 +36,7 @@ export default function SessionsScreen() {
         <Header
           title="Examination Time"
           subtitle={schedule?.name ?? 'Loading…'}
-          onBack={() => safeBack(router, '/(proctor)/examination' as any)}
+          onBack={() => safeBack(router, '/(proctor)/(tabs)/examination')}
         />
         <Breadcrumbs segments={breadcrumbs} />
         <View style={styles.list}>
@@ -51,7 +51,7 @@ export default function SessionsScreen() {
       <Header
         title="Examination Time"
         subtitle={schedule?.name ?? 'Select a session'}
-        onBack={() => safeBack(router, '/(proctor)/examination' as any)}
+        onBack={() => safeBack(router, '/(proctor)/(tabs)/examination')}
       />
 
       {/* BREADCRUMBS */}

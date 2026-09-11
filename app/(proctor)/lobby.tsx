@@ -323,7 +323,7 @@ export default function ProctorLobbyScreen() {
       router.back();
       return;
     }
-    router.replace('/(proctor)/examination' as any);
+    router.replace('/(proctor)/(tabs)/examination');
   };
 
   if (!ready) {
@@ -850,7 +850,7 @@ export default function ProctorLobbyScreen() {
                     text: 'Go to Download',
                     onPress: () => {
                       setStartOpen(false);
-                      router.push('/(proctor)/examination' as any);
+                      router.push('/(proctor)/(tabs)/examination');
                     },
                   },
                 ],
@@ -984,7 +984,7 @@ export default function ProctorLobbyScreen() {
                 ? 'This room is closed but not ended. You can open it again when ready.'
                 : 'All active examinees were submitted and the session is closed.',
             );
-            router.replace('/(proctor)/examination' as any);
+            router.replace('/(proctor)/(tabs)/examination');
           } catch (error) {
             Alert.alert(
               'Unable to close',

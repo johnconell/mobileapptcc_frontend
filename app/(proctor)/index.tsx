@@ -7,5 +7,5 @@ export default function ProctorIndex() {
   if (!profile) {
     return <Redirect href="/(proctor)/login" />;
   }
-  return <Redirect href="/(proctor)/dashboard" />;
+  return <Redirect href="/(proctor)/(tabs)/dashboard" />;
 }

@@ -85,13 +85,6 @@ function useLobbyController() {
 
   useEffect(() => ExamPreloader.subscribe(setProgress), []);
 
-  useEffect(() => {
-    const status = storedSnapshot?.status;
-    if (status === 'in_progress' || status === 'ended') {
-      void applyLiveStatus(status);
-    }
-  }, [storedSnapshot?.status, applyLiveStatus]);
-
   const ensurePackDownload = useCallback(async () => {
     if (!scannedSessionId || downloading.current) return;
     downloading.current = true;
@@ -120,6 +113,13 @@ function useLobbyController() {
     setAuthority(record.status);
     return record.status;
   }, [scannedSessionId]);
+
+  useEffect(() => {
+    const status = storedSnapshot?.status;
+    if (status === 'in_progress' || status === 'ended') {
+      void applyLiveStatus(status);
+    }
+  }, [storedSnapshot?.status, applyLiveStatus]);
 
   useEffect(() => {
     void ExamLifecycle.hydrate();

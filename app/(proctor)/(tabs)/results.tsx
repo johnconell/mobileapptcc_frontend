@@ -961,7 +961,7 @@ export default function ProctorResultsScreen() {
               title="Go to Examination"
               variant="outline"
               size="sm"
-              onPress={() => router.push('/(proctor)/examination' as any)}
+              onPress={() => router.push('/(proctor)/(tabs)/examination')}
               style={{ marginTop: 10 }}
             />
           </View>

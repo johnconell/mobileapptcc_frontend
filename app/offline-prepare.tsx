@@ -92,7 +92,7 @@ export default function OfflinePrepareScreen() {
       <Header
         title="Offline exam cache"
         subtitle="Synchronize with Admin"
-        onBack={() => (router.canGoBack() ? router.back() : router.replace('/(proctor)/dashboard' as any))}
+        onBack={() => (router.canGoBack() ? router.back() : router.replace('/(proctor)/(tabs)/dashboard'))}
       />
       <View style={styles.body}>
         <Button

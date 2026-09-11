@@ -79,11 +79,11 @@ export default function RoomsScreen() {
   const breadcrumbs = [
     {
       label: 'Examination',
-      onPress: () => router.replace('/(proctor)/examination' as any),
+      onPress: () => router.replace('/(proctor)/(tabs)/examination'),
     },
     {
       label: scheduleName,
-      onPress: () => router.replace('/(proctor)/examination' as any),
+      onPress: () => router.replace('/(proctor)/(tabs)/examination'),
     },
     {
       label: sessionLabel,
@@ -143,7 +143,7 @@ export default function RoomsScreen() {
               text: 'Go to Download',
               onPress: () => {
                 setModalVisible(false);
-                router.push('/(proctor)/examination' as any);
+                router.push('/(proctor)/(tabs)/examination');
               },
             },
           ],
@@ -238,7 +238,7 @@ export default function RoomsScreen() {
         <Header
           title="Select Examination Room"
           subtitle={session?.timeLabel ?? 'Loading rooms…'}
-          onBack={() => safeBack(router, '/(proctor)/examination' as any)}
+          onBack={() => safeBack(router, '/(proctor)/(tabs)/examination')}
         />
         <Breadcrumbs segments={breadcrumbs} />
         <View style={styles.list}>
@@ -253,7 +253,7 @@ export default function RoomsScreen() {
       <Header
         title="Select Examination Room"
         subtitle={session ? `${session.timeLabel} · ${session.venue}` : 'Available Rooms'}
-        onBack={() => safeBack(router, '/(proctor)/examination' as any)}
+        onBack={() => safeBack(router, '/(proctor)/(tabs)/examination')}
       />
 
       {/* STEP 3: DYNAMIC BREADCRUMBS */}

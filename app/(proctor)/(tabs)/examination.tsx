@@ -224,7 +224,7 @@ export default function ProctorExaminationTabScreen() {
     setSelectedSlot({
       schedule,
       session,
-      sidNum: sidNum ?? Number(cleanSess.split('-')[0]) || 0,
+      sidNum: sidNum ?? (Number(cleanSess.split('-')[0]) || 0),
       roomId,
       roomName,
       capacity,
@@ -262,7 +262,7 @@ export default function ProctorExaminationTabScreen() {
     // If already ended, go to results
     if (selectedSlot.isEnded) {
       setOpenModalVisible(false);
-      router.push('/(proctor)/results' as any);
+      router.push('/(proctor)/(tabs)/results');
       return;
     }
 

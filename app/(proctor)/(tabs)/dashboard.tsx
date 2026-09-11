@@ -242,7 +242,7 @@ export default function ProctorDashboardScreen() {
       }).toString();
       router.push(`/(proctor)/lobby?${query}` as any);
     } else {
-      router.push('/(proctor)/examination' as any);
+      router.push('/(proctor)/(tabs)/examination');
     }
   };
 
@@ -844,7 +844,7 @@ export default function ProctorDashboardScreen() {
               styles.actionBtn,
               { backgroundColor: colors.card, borderColor: colors.cardBorder },
             ]}
-            onPress={() => router.push('/(proctor)/results' as any)}
+            onPress={() => router.push('/(proctor)/(tabs)/results')}
             hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
             android_ripple={{ color: colors.cardBorder }}
             accessibilityRole="button"

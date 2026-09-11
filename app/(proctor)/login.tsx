@@ -39,7 +39,7 @@ export default function ProctorLoginScreen() {
 
   useEffect(() => {
     if (profile) {
-      router.replace('/(proctor)/dashboard' as any);
+      router.replace('/(proctor)/(tabs)/dashboard');
     }
   }, [profile, router]);
   const [formError, setFormError] = useState<string | null>(null);
@@ -70,7 +70,7 @@ export default function ProctorLoginScreen() {
   const completeLogin = useCallback(
     (profile: NonNullable<Awaited<ReturnType<typeof AuthRepository.login>>['profile']>) => {
       setProfile(profile);
-      router.replace('/(proctor)/dashboard' as any);
+      router.replace('/(proctor)/(tabs)/dashboard');
     },
     [router, setProfile],
   );

@@ -254,10 +254,10 @@ export default function RoomDetailScreen() {
 
       <Breadcrumbs
         segments={[
-          { label: 'Examination', onPress: () => router.replace('/(proctor)/examination' as any) },
+          { label: 'Examination', onPress: () => router.replace('/(proctor)/(tabs)/examination') },
           {
             label: (selectedSchedule ?? schedulesQuery.data?.find((s) => s.id === (scheduleId ?? session?.scheduleId)))?.name ?? 'Schedule',
-            onPress: () => router.replace('/(proctor)/examination' as any),
+            onPress: () => router.replace('/(proctor)/(tabs)/examination'),
           },
           {
             label: session?.timeLabel ?? 'Time Slot',

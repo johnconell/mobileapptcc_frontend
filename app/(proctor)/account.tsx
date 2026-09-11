@@ -206,7 +206,7 @@ export default function ProctorAccountScreen() {
       router.back();
       return;
     }
-    router.replace('/(proctor)/settings' as any);
+    router.replace('/(proctor)/(tabs)/settings');
   };
 
   // Log out of this device

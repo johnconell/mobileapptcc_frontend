@@ -46,7 +46,7 @@ export default function HomeScreen() {
         const session = await AuthRepository.getCachedSessionFast();
         if (session && active) {
           useProctorStore.getState().setProfile(session);
-          router.replace('/(proctor)/dashboard' as any);
+          router.replace('/(proctor)/(tabs)/dashboard');
           return;
         }
       } catch (err) {
