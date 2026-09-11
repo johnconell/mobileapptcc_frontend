@@ -3,7 +3,7 @@
 ## Auth
 
 - `POST /api/v1/proctor/login` via `AuthRepository`.
-- Google: `services/proctorGoogleAuth.ts` + backend `/api/v1/proctor/google/*`.
+- Google: `features/authentication/services/proctorGoogleAuth.ts` + backend `/api/v1/proctor/google/*`.
 - After pack download, session is bundled (`OfflineStore.bundleProctorSession`). Logout clears it.
 
 ## Navigation
@@ -14,14 +14,19 @@
 
 ## Exam engine (do not rewrite casually)
 
-- Start mapping: `examStartCoordinator.ts`, `examAuthority.ts`, `examLifecycle.ts`.
+All of it lives in `features/examinations/`.
+
+- Start mapping: `services/examStartCoordinator.ts`, `services/examAuthority.ts`, `services/examLifecycle.ts`.
 - Lobby polls: student `app/(student)/lobby.tsx` + peer heartbeat.
-- Security: `ExamSecurityService.ts`, `hooks/useExamSecurity.ts`, native plugin `plugins/withExamSecurity.js`.
+- Security: `services/ExamSecurityService.ts`, `hooks/useExamSecurity.ts`, native plugin `plugins/withExamSecurity.js`.
 
 ## Tests
 
 ```bash
-npm test
+npm test          # node:test suites
+npm run typecheck # tsc --noEmit
 ```
 
-Files: `services/examStartCoordinator.test.ts`, `services/passkeyClassification.test.ts`, `utils/examScheduleStatus.test.ts`.
+Files: `features/examinations/services/examStartCoordinator.test.ts`,
+`features/examinations/services/passkeyClassification.test.ts`,
+`features/schedules/utils/examScheduleStatus.test.ts`.
