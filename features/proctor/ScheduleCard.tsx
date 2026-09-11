@@ -9,11 +9,22 @@ import {
   UIManager,
   ActivityIndicator,
 } from 'react-native';
-import { ChevronDown, ChevronRight, Clock } from 'lucide-react-native';
+import { CheckCircle2, ChevronDown, ChevronRight, Clock } from 'lucide-react-native';
 import type { ExamSchedule, ExamSession } from '@/types';
 import { colors, shadows } from '@/theme';
 import { Card } from '@/components/ui';
 import { useSessions } from '@/hooks/useRepositories';
+import { useFocusEffect } from 'expo-router';
+import {
+  deriveExamSlotStatus,
+  examWindowHint,
+  examWindowHintLabel,
+  EXAM_STATUS_HINTS,
+  EXAM_STATUS_LABELS,
+  matchOpenedRoom,
+  summarizeScheduleStatus,
+  type ExamSlotVisualStatus,
+} from '@/utils/examScheduleStatus';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -38,8 +49,17 @@ export function ScheduleCard({
   delay = 0,
   openedRooms,
 }: ScheduleCardProps) {
-  const sessionsQuery = useSessions(isExpanded ? schedule.id : undefined);
+  const sessionsQuery = useSessions(schedule.id);
   const [headerPressed, setHeaderPressed] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+
+  useFocusEffect(
+    React.useCallback(() => {
+      setNow(new Date());
+      const id = setInterval(() => setNow(new Date()), 15000);
+      return () => clearInterval(id);
+    }, []),
+  );
 
   // Animated rotation for the dropdown chevron
   const rotateAnim = useRef(new Animated.Value(isExpanded ? 1 : 0)).current;
@@ -97,6 +117,27 @@ export function ScheduleCard({
   };
 
   const sessionCount = sessionsQuery.data?.length ?? schedule.batchCount;
+  const dateIso = schedule.examinationDateIso || schedule.examinationDate;
+
+  const openedStatusForSession = (session: ExamSession) =>
+    matchOpenedRoom(openedRooms, session)?.status ?? null;
+
+  const slotStatus = (session: ExamSession): ExamSlotVisualStatus =>
+    deriveExamSlotStatus({
+      openedStatus: openedStatusForSession(session),
+    });
+
+  const sessions = sessionsQuery.data ?? [];
+  const headerStatus: ExamSlotVisualStatus = sessions.length
+    ? summarizeScheduleStatus(sessions.map((session) => slotStatus(session)))
+    : 'not_opened';
+  const windowHint = examWindowHintLabel(
+    examWindowHint({
+      dateIso,
+      timeLabel: schedule.timeLabel,
+      now,
+    }),
+  );
 
   return (
     <Card delay={delay} style={{ ...styles.card, ...(isExpanded ? styles.cardExpanded : {}) }}>
@@ -172,6 +213,12 @@ export function ScheduleCard({
                 {sessionCount} Available Time Slot{sessionCount === 1 ? '' : 's'}
               </Text>
             </View>
+            <View style={styles.statusRow}>
+              <ScheduleStatusBadge status={headerStatus} />
+              {windowHint && headerStatus === 'not_opened' ? (
+                <Text style={styles.windowHint}>{windowHint}</Text>
+              ) : null}
+            </View>
           </View>
 
           {/* Dropdown Chevron (Right-aligned, never pushed down) */}
@@ -201,7 +248,7 @@ export function ScheduleCard({
               numberOfLines={1}
               maxFontSizeMultiplier={1.15}
             >
-              Select a time slot to open or enter lobby
+              Not opened yet? Tap the slot to open it. Ended only after you finish the exam.
             </Text>
           </View>
 
@@ -221,16 +268,9 @@ export function ScheduleCard({
           ) : (
             <View style={styles.timeSlotsList}>
               {sessionsQuery.data!.map((session, sIdx) => {
-                const cleanSess = String(session.id).replace(/^offline-/, '');
-                const sessSchedId = parseInt(cleanSess.split('-')[0] || '', 10) || 0;
-                const matchingRooms = Object.entries(openedRooms || {}).filter(([k]) => {
-                  const [s] = k.split(':').map(Number);
-                  return s === sessSchedId || String(k).startsWith(`${sessSchedId}:`);
-                });
-                const isLobbyOpen = matchingRooms.some(
-                  ([, v]) => v.status === 'lobby_open' || v.status === 'in_progress',
-                );
-                const isEnded = !isLobbyOpen && matchingRooms.some(([, v]) => v.status === 'ended');
+                const visual = slotStatus(session);
+                const isActive = visual === 'open' || visual === 'in_progress';
+                const isEnded = visual === 'ended';
 
                 return (
                 <Pressable
@@ -238,46 +278,39 @@ export function ScheduleCard({
                   onPress={() => onSelectTimeSlot?.(session)}
                 >
                   {({ pressed }) => (
-                    <View style={[styles.timeSlotRow, pressed && styles.timeSlotPressed]}>
-                      <View
-                        style={[
-                          styles.timeSlotIconWrap,
-                          isLobbyOpen && { backgroundColor: '#E6F4EA' },
-                          isEnded && { backgroundColor: '#F1F5F9' },
-                        ]}
-                      >
-                        <Clock
-                          size={16}
-                          color={isLobbyOpen ? '#28A745' : isEnded ? '#64748B' : '#003366'}
-                        />
-                      </View>
+                    <View
+                      style={[
+                        styles.timeSlotRow,
+                        pressed && styles.timeSlotPressed,
+                        isActive && styles.timeSlotRowOpen,
+                        isEnded && styles.timeSlotRowEnded,
+                      ]}
+                    >
+                      <ScheduleStatusDot status={visual} />
 
                       <View style={styles.timeSlotInfo}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <View style={styles.timeSlotTitleRow}>
                           <Text
                             style={[
                               styles.timeSlotTitle,
-                              isLobbyOpen && { color: '#16A34A', fontWeight: '800' },
-                              isEnded && { color: '#475569', fontWeight: '700' },
+                              isActive && { color: '#C2410C' },
+                              visual === 'in_progress' && { color: '#1D4ED8' },
+                              isEnded && { color: '#15803D' },
                             ]}
                             numberOfLines={1}
                             maxFontSizeMultiplier={1.2}
                           >
                             {session.timeLabel}
                           </Text>
-                          {isLobbyOpen && (
-                            <View style={styles.lobbyOpenBadge}>
-                              <View style={styles.lobbyOpenDot} />
-                              <Text style={styles.lobbyOpenBadgeText}>LOBBY OPEN</Text>
-                            </View>
-                          )}
-                          {isEnded && (
-                            <View style={styles.endedBadge}>
-                              <View style={styles.endedDot} />
-                              <Text style={styles.endedBadgeText}>ENDED</Text>
-                            </View>
-                          )}
+                          <ScheduleStatusBadge status={visual} compact />
                         </View>
+                        <Text
+                          style={styles.timeSlotAction}
+                          numberOfLines={1}
+                          maxFontSizeMultiplier={1.15}
+                        >
+                          {EXAM_STATUS_HINTS[visual]}
+                        </Text>
                         <View style={styles.timeSlotDetails}>
                           <Text
                             style={styles.timeSlotBatch}
@@ -308,7 +341,15 @@ export function ScheduleCard({
                       <View style={styles.timeSlotArrow}>
                         <ChevronRight
                           size={18}
-                          color={isLobbyOpen ? '#28A745' : isEnded ? '#94A3B8' : '#0055A4'}
+                          color={
+                            visual === 'in_progress'
+                              ? '#2563EB'
+                              : isActive
+                                ? '#EA580C'
+                                : isEnded
+                                  ? '#16A34A'
+                                  : '#64748B'
+                          }
                         />
                       </View>
                     </View>
@@ -321,6 +362,68 @@ export function ScheduleCard({
         </View>
       )}
     </Card>
+  );
+}
+
+function ScheduleStatusDot({ status }: { status: ExamSlotVisualStatus }) {
+  if (status === 'ended') {
+    return (
+      <View style={[styles.statusDot, styles.statusDotEnded]}>
+        <CheckCircle2 size={16} color="#16A34A" strokeWidth={2.4} />
+      </View>
+    );
+  }
+  if (status === 'in_progress') {
+    return <View style={[styles.statusDot, styles.statusDotProgress]} />;
+  }
+  if (status === 'open') {
+    return <View style={[styles.statusDot, styles.statusDotOpen]} />;
+  }
+  return <View style={[styles.statusDot, styles.statusDotClosed]} />;
+}
+
+function ScheduleStatusBadge({
+  status,
+  compact = false,
+}: {
+  status: ExamSlotVisualStatus;
+  compact?: boolean;
+}) {
+  return (
+    <View
+      style={[
+        styles.statusBadge,
+        status === 'ended' && styles.statusBadgeEnded,
+        status === 'open' && styles.statusBadgeOpen,
+        status === 'in_progress' && styles.statusBadgeProgress,
+        status === 'not_opened' && styles.statusBadgeClosed,
+        compact && { marginLeft: 8, marginTop: 0 },
+      ]}
+    >
+      {status === 'ended' ? (
+        <CheckCircle2 size={11} color="#15803D" strokeWidth={2.4} />
+      ) : (
+        <View
+          style={[
+            styles.statusBadgeDot,
+            status === 'open' && styles.statusBadgeDotOpen,
+            status === 'in_progress' && styles.statusBadgeDotProgress,
+            status === 'not_opened' && styles.statusBadgeDotClosed,
+          ]}
+        />
+      )}
+      <Text
+        style={[
+          styles.statusBadgeText,
+          status === 'ended' && { color: '#15803D' },
+          status === 'open' && { color: '#C2410C' },
+          status === 'in_progress' && { color: '#1D4ED8' },
+          status === 'not_opened' && { color: '#475569' },
+        ]}
+      >
+        {EXAM_STATUS_LABELS[status]}
+      </Text>
+    </View>
   );
 }
 
@@ -422,6 +525,18 @@ const styles = StyleSheet.create({
     color: '#0055A4',
     fontWeight: '700',
   },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 2,
+  },
+  windowHint: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+  },
   chevronWrap: {
     width: 32,
     height: 32,
@@ -496,6 +611,25 @@ const styles = StyleSheet.create({
   timeSlotPressed: {
     backgroundColor: '#EBF3FE',
     borderColor: '#93C5FD',
+  },
+  timeSlotRowOpen: {
+    borderColor: '#FDBA74',
+    backgroundColor: '#FFF7ED',
+  },
+  timeSlotRowEnded: {
+    borderColor: '#86EFAC',
+    backgroundColor: '#F0FDF4',
+  },
+  timeSlotTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  timeSlotAction: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+    marginTop: 1,
   },
   timeSlotIconWrap: {
     width: 32,
@@ -594,6 +728,85 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '800',
     color: '#475569',
+    letterSpacing: 0.5,
+  },
+  statusDot: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  statusDotEnded: {
+    backgroundColor: '#DCFCE7',
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+  },
+  statusDotOpen: {
+    backgroundColor: '#F97316',
+    borderWidth: 1,
+    borderColor: '#EA580C',
+  },
+  statusDotProgress: {
+    backgroundColor: '#2563EB',
+    borderWidth: 1,
+    borderColor: '#1D4ED8',
+  },
+  statusDotClosed: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#94A3B8',
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 7,
+    marginTop: 6,
+  },
+  statusBadgeEnded: {
+    backgroundColor: '#DCFCE7',
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+  },
+  statusBadgeOpen: {
+    backgroundColor: '#FFEDD5',
+    borderWidth: 1,
+    borderColor: '#FDBA74',
+  },
+  statusBadgeProgress: {
+    backgroundColor: '#DBEAFE',
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+  },
+  statusBadgeClosed: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#94A3B8',
+  },
+  statusBadgeDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  statusBadgeDotOpen: {
+    backgroundColor: '#EA580C',
+  },
+  statusBadgeDotProgress: {
+    backgroundColor: '#2563EB',
+  },
+  statusBadgeDotClosed: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#64748B',
+  },
+  statusBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
     letterSpacing: 0.5,
   },
 });

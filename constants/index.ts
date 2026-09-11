@@ -43,6 +43,8 @@ export const STORAGE_KEYS = {
   /** SecureStore: proctor email + bcrypt hashes for offline login */
   proctorAuthCache: 'tcc.proctor.auth.cache',
   proctorAuthCacheAt: 'tcc.proctor.auth.cache.at',
+  /** Session copied into the exam pack so this proctor can stay signed in offline */
+  bundledProctorSession: 'tcc.proctor.bundled.session',
 } as const;
 
 export const STATUS_LABELS = {

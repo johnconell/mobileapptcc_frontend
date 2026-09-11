@@ -8,7 +8,6 @@ import {
   LayoutAnimation,
   Platform,
   UIManager,
-  BackHandler,
   Modal,
   Pressable,
 } from 'react-native';
@@ -35,9 +34,37 @@ import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
 import { shadows } from '@/theme';
 import type { ExamSchedule, ExamSession } from '@/types';
 import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
+import { useHardwareBack } from '@/hooks/useHardwareBack';
+import { extractNumericScheduleId, matchOpenedRoom } from '@/utils/examScheduleStatus';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+function LegendSwatch({
+  tone,
+  label,
+}: {
+  tone: 'idle' | 'open' | 'progress' | 'ended';
+  label: string;
+}) {
+  return (
+    <View style={styles.legendItem}>
+      {tone === 'ended' ? (
+        <CheckCircle2 size={12} color="#16A34A" strokeWidth={2.4} />
+      ) : (
+        <View
+          style={[
+            styles.legendDot,
+            tone === 'open' && styles.legendDotOpen,
+            tone === 'progress' && styles.legendDotProgress,
+            tone === 'idle' && styles.legendDotIdle,
+          ]}
+        />
+      )}
+      <Text style={styles.legendLabel}>{label}</Text>
+    </View>
+  );
 }
 
 type PackSummary = Awaited<ReturnType<typeof OfflineStore.getPackSummary>>;
@@ -117,18 +144,13 @@ export default function ProctorExaminationTabScreen() {
     }, [refreshPackData]),
   );
 
-  // HIERARCHICAL NAVIGATION: Back button and hardware back press return to Dashboard
-  useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (openModalVisible) {
-        setOpenModalVisible(false);
-        return true;
-      }
-      router.navigate('/(proctor)/dashboard' as any);
+  useHardwareBack(() => {
+    if (openModalVisible) {
+      setOpenModalVisible(false);
       return true;
-    });
-    return () => sub.remove();
-  }, [openModalVisible, router]);
+    }
+    return false;
+  });
 
   const downloadPack = async () => {
     setRefreshing(true);
@@ -143,7 +165,7 @@ export default function ProctorExaminationTabScreen() {
       Alert.alert(
         result.ok ? "Today's Exam Pack Ready" : 'Download Failed',
         result.ok
-          ? `${summary.students} student(s) and ${summary.questions} questionnaire items cached successfully for today.`
+          ? `${summary.students} student(s) and ${summary.questions} questionnaire items cached for today. Your proctor session is included so this phone can stay offline afterward.`
           : result.message,
       );
     } finally {
@@ -172,38 +194,26 @@ export default function ProctorExaminationTabScreen() {
     // Resolve room and schedule numeric ID
     // Resolve room and schedule numeric ID from session.id
     const offlinePack = await OfflineStore.getPack();
+    const sidNum = extractNumericScheduleId(session.id, session.scheduleId);
     const cleanSess = String(session.id).replace(/^offline-/, '');
-    const sidNum =
-      parseInt(cleanSess.split('-')[0] || '', 10) ||
-      Number(String(schedule.id).replace(/^date-/, '').replace(/^offline-/, '').split('-')[0]) ||
-      Number(String(session.id).replace(/^offline-/, '').split('-')[0]) ||
-      1;
 
-    const schedMatch = (offlinePack?.schedules ?? []).find(
-      (s) => s.id === sidNum || String(s.id) === String(schedule.id),
-      (s) => s.id === sidNum || String(s.id) === String(session.id) || String(s.id) === cleanSess,
-      (s: any) =>
-        s.id === sidNum ||
-        String(s.id) === String(schedule.id) ||
-        String(s.id) === String(session.id) ||
-        String(s.id) === cleanSess,
-    );
+    const schedMatch = (offlinePack?.schedules ?? []).find((row) => {
+      if (sidNum && Number(row.id) === sidNum) return true;
+      return String(row.id) === cleanSess.split('-')[0];
+    });
     const roomObj = schedMatch?.rooms?.[0];
-    const roomId = roomObj?.id ?? 1;
-    const roomName = roomObj?.room_name ?? session.venue ?? 'Room 101';
+    const roomId = Number(session.roomId || roomObj?.id || 0) || 1;
+    const roomName = session.roomName || roomObj?.room_name || session.venue || 'Room 101';
     const capacity = roomObj?.capacity ?? 60;
 
-    // Check if this room/schedule is already opened
     const currentOpened = await OfflineStore.getOpenedRooms();
     setOpenedRooms(currentOpened);
 
-    const exactKey = `${sidNum}:${roomId}`;
-    const matchingEntry =
-      currentOpened[exactKey] ||
-      Object.entries(currentOpened).find(([k]) => {
-        const [s] = k.split(':').map(Number);
-        return s === sidNum || String(k).startsWith(`${sidNum}:`);
-      })?.[1];
+    const matchingEntry = matchOpenedRoom(currentOpened, {
+      id: session.id,
+      scheduleId: session.scheduleId,
+      roomId: session.roomId ?? (roomObj?.id != null ? String(roomObj.id) : null),
+    });
 
     const isOpened = Boolean(
       matchingEntry && (matchingEntry.status === 'lobby_open' || matchingEntry.status === 'in_progress'),
@@ -213,7 +223,7 @@ export default function ProctorExaminationTabScreen() {
     setSelectedSlot({
       schedule,
       session,
-      sidNum,
+      sidNum: sidNum ?? Number(cleanSess.split('-')[0]) || 0,
       roomId,
       roomName,
       capacity,
@@ -338,12 +348,12 @@ export default function ProctorExaminationTabScreen() {
               ? "Update Required for Today's Exam"
               : 'Download Pack Required'
         }
-        onBack={() => router.navigate('/(proctor)/dashboard' as any)}
+        hideBackSlot
         right={
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Logout"
-            onPress={() => confirmProctorLogout(router)}
+            onPress={() => confirmProctorLogout()}
             hitSlop={8}
           >
             <LogOut size={18} color="#B42318" />
@@ -406,8 +416,14 @@ export default function ProctorExaminationTabScreen() {
             </Card>
 
             <Text style={styles.intro} maxFontSizeMultiplier={1.2}>
-              Tap any schedule below to expand available time slots. Tap a time slot to directly open the examination room and manage examinees.
+              Tap a schedule to see its time slots. A slot is Not opened until you open the room. Ended appears only after you finish that exam.
             </Text>
+            <View style={styles.legend}>
+              <LegendSwatch tone="idle" label="Not opened" />
+              <LegendSwatch tone="open" label="Lobby open" />
+              <LegendSwatch tone="progress" label="In progress" />
+              <LegendSwatch tone="ended" label="Ended" />
+            </View>
           </View>
         }
         ListEmptyComponent={<EmptyState title="No examination schedules available" />}
@@ -514,7 +530,7 @@ export default function ProctorExaminationTabScreen() {
                         : 'Lobby Open'
                       : selectedSlot?.isEnded
                         ? 'Ended'
-                        : 'Ready to Open'
+                        : 'Not opened'
                   }
                   tone={
                     selectedSlot?.isOpened
@@ -573,6 +589,38 @@ const styles = StyleSheet.create({
   list: { padding: 16, gap: 12, paddingBottom: 40 },
   headerBlock: { gap: 12, marginBottom: 8 },
   intro: { fontSize: 13, lineHeight: 20, color: '#64748B', fontWeight: '500' },
+  legend: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    paddingVertical: 4,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  legendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  legendDotIdle: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#94A3B8',
+  },
+  legendDotOpen: {
+    backgroundColor: '#F97316',
+  },
+  legendDotProgress: {
+    backgroundColor: '#2563EB',
+  },
+  legendLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+  },
   packCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 14,

@@ -7,7 +7,6 @@ import {
   Pressable,
   Modal,
   Alert,
-  BackHandler,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -90,15 +89,6 @@ export default function RoomsScreen() {
       label: sessionLabel,
     },
   ];
-
-  // HIERARCHICAL NAVIGATION: Android hardware back button returns to Examination tab
-  useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      safeBack(router, '/(proctor)/examination' as any);
-      return true;
-    });
-    return () => sub.remove();
-  }, [router]);
 
   /**
    * STEP 6 & 7: Comprehensive Validation and Direct Navigation to Existing Lobby

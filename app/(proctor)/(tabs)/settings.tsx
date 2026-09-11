@@ -26,7 +26,6 @@ import {
 import { Header, Button } from '@/components/ui';
 import { useProctorStore } from '@/stores';
 import { useAppTheme } from '@/hooks/useAppTheme';
-import { AuthRepository } from '@/repositories';
 import { VersionInfo } from '@/components/VersionInfo';
 import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
 import type { ThemeMode, AppFontSize } from '@/stores/settingsStore';
@@ -34,14 +33,13 @@ import type { ThemeMode, AppFontSize } from '@/stores/settingsStore';
 export default function ProctorSettingsScreen() {
   const router = useRouter();
   const profile = useProctorStore((s) => s.profile);
-  const reset = useProctorStore((s) => s.reset);
   const { colors, isDark, themeMode, fontSize, setThemeMode, setFontSize, fontMultiplier } =
     useAppTheme();
 
   const [appearanceModalOpen, setAppearanceModalOpen] = useState(false);
 
   const doLogout = () => {
-    confirmProctorLogout(router);
+    confirmProctorLogout();
   };
 
   return (

@@ -9,9 +9,8 @@ import {
   Alert,
   Modal,
   Platform,
-  BackHandler,
 } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter } from 'expo-router';
 import {
   User,
   Shield,
@@ -35,6 +34,7 @@ import { Header, Button, Card } from '@/components/ui';
 import { useProctorStore } from '@/stores';
 import { useAppTheme } from '@/hooks/useAppTheme';
 import { AuthRepository } from '@/repositories';
+import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
 import { appStorage } from '@/services/storage';
 import { STORAGE_KEYS } from '@/constants';
 import { ProctorAuthCache } from '@/services/proctorAuthCache';
@@ -201,46 +201,17 @@ export default function ProctorAccountScreen() {
     }
   };
 
-  const params = useLocalSearchParams<{ from?: string }>();
-
   const handleBack = () => {
-    if (params.from === 'settings') {
-      router.replace('/(proctor)/settings' as any);
-    } else if (params.from === 'dashboard') {
-      router.replace('/(proctor)/dashboard' as any);
-    } else if (router.canGoBack()) {
+    if (router.canGoBack()) {
       router.back();
-    } else {
-      router.replace('/(proctor)/settings' as any);
+      return;
     }
+    router.replace('/(proctor)/settings' as any);
   };
-
-  useEffect(() => {
-    const onHardwareBack = () => {
-      handleBack();
-      return true;
-    };
-    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
-    return () => sub.remove();
-  }, [params.from]);
 
   // Log out of this device
   const handleLogOutThisDevice = () => {
-    Alert.alert(
-      'Sign Out',
-      'Are you sure you want to sign out of this device and return to the main landing page?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Sign Out',
-          style: 'destructive',
-          onPress: async () => {
-            await AuthRepository.logout();
-            router.replace({ pathname: '/', params: { stay: '1', from: 'logout' } } as any);
-          },
-        },
-      ],
-    );
+    confirmProctorLogout();
   };
 
   // Log out of all other sessions (like Facebook)
@@ -275,8 +246,11 @@ export default function ProctorAccountScreen() {
           text: 'Log Out Everywhere',
           style: 'destructive',
           onPress: async () => {
-            await AuthRepository.logout();
-            router.replace({ pathname: '/', params: { stay: '1', from: 'logout' } } as any);
+            try {
+              await AuthRepository.logout();
+            } catch (err) {
+              console.warn('[PROCTOR] Logout all devices failed:', err);
+            }
           },
         },
       ],

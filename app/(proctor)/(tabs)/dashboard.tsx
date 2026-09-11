@@ -31,7 +31,6 @@ import { Header, Button } from '@/components/ui';
 import { useProctorStore } from '@/stores';
 import { useAppTheme } from '@/hooks/useAppTheme';
 import { OfflineStore } from '@/services/offlineStore';
-import { AuthRepository } from '@/repositories';
 import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
 
 type ActiveLobbyDetails = {
@@ -248,22 +247,7 @@ export default function ProctorDashboardScreen() {
   };
 
   const handleLogout = () => {
-    Alert.alert(
-      'Sign Out',
-      'Are you sure you want to sign out and return to the main landing page?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Sign Out',
-          style: 'destructive',
-          onPress: async () => {
-            await AuthRepository.logout();
-            router.replace('/');
-          },
-        },
-      ],
-    );
-    confirmProctorLogout(router);
+    confirmProctorLogout();
   };
 
   return (

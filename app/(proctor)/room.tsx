@@ -9,7 +9,8 @@ import { Header } from '@/components/ui/Header';
 import { SkeletonDetail } from '@/components/ui/Skeleton';
 import { StatusChip } from '@/components/ui/StatusChip';
 import { useRooms, useSchedules, useSessions } from '@/hooks/useRepositories';
-import { AuthRepository, LobbyRepository } from '@/repositories';
+import { LobbyRepository } from '@/repositories';
+import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
 import { QUERY_KEYS, STATUS_LABELS } from '@/constants';
 import { useProctorStore } from '@/stores';
 import { Breadcrumbs } from '@/components/ui/Breadcrumbs';
@@ -47,7 +48,6 @@ export default function RoomDetailScreen() {
   const selectedSession = useProctorStore((s) => s.selectedSession);
   const selectedSchedule = useProctorStore((s) => s.selectedSchedule);
   const schedulesQuery = useSchedules();
-  const reset = useProctorStore((s) => s.reset);
   const sessionsQuery = useSessions(selectedSession?.scheduleId);
   const roomsQuery = useRooms(sessionId, Boolean(sessionId));
   const [busy, setBusy] = useState(false);
@@ -241,20 +241,7 @@ export default function RoomDetailScreen() {
             title="Logout"
             variant="ghost"
             size="sm"
-            onPress={() => {
-              Alert.alert('Are you sure you want to log out?', undefined, [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Yes, Logout',
-                  style: 'destructive',
-                  onPress: async () => {
-                    await AuthRepository.logout();
-                    reset();
-                    router.replace({ pathname: '/', params: { stay: '1', from: 'logout' } } as any);
-                  },
-                },
-              ]);
-            }}
+            onPress={() => confirmProctorLogout()}
           />
         }
         onBack={() =>

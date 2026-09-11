@@ -7,9 +7,9 @@ import {
   RefreshControl,
   TextInput,
   Pressable,
-  BackHandler,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useHardwareBack } from '@/hooks/useHardwareBack';
 import {
   BarChart3,
   CheckCircle2,
@@ -107,22 +107,13 @@ export default function ProctorResultsScreen() {
     void loadData();
   }, []);
 
-  // HIERARCHICAL NAVIGATION: Hardware back button returns from Level 2 to Level 1, or Level 1 to Dashboard
-  useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (selectedLobbyId) {
-        setSelectedLobbyId(null);
-        return true;
-      }
-      if (router.canGoBack()) {
-        router.back();
-      } else {
-        router.navigate('/(proctor)/dashboard' as any);
-      }
+  useHardwareBack(() => {
+    if (selectedLobbyId) {
+      setSelectedLobbyId(null);
       return true;
-    });
-    return () => sub.remove();
-  }, [selectedLobbyId, router]);
+    }
+    return false;
+  });
 
   // Build the list of RECENT examination lobbies that ALREADY STARTED or ENDED
   const lobbies: ExamLobby[] = useMemo(() => {
@@ -401,7 +392,7 @@ export default function ProctorResultsScreen() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Logout"
-              onPress={() => confirmProctorLogout(router)}
+              onPress={() => confirmProctorLogout()}
               hitSlop={8}
             >
               <LogOut size={18} color="#B42318" />
@@ -747,18 +738,12 @@ export default function ProctorResultsScreen() {
       <Header
         title="Examination Results"
         subtitle="Recent Examination Transactions"
-        onBack={() => {
-          if (router.canGoBack()) {
-            router.back();
-          } else {
-            router.navigate('/(proctor)/dashboard' as any);
-          }
-        }}
+        hideBackSlot
         right={
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Logout"
-            onPress={() => confirmProctorLogout(router)}
+            onPress={() => confirmProctorLogout()}
             hitSlop={8}
           >
             <LogOut size={18} color="#B42318" />

@@ -373,6 +373,15 @@ export const OfflineExamRepository = {
     const { proctors: _proctors, ...safePack } = json.data;
     report(80, 'Saving securely on this phone…');
     await OfflineStore.savePack(safePack as OfflinePack);
+    try {
+      const { useProctorStore } = await import('@/stores/proctorStore');
+      const live = useProctorStore.getState().profile;
+      if (live?.token) {
+        await OfflineStore.bundleProctorSession(live);
+      }
+    } catch {
+      // Pack is still usable without a bundled session.
+    }
     report(100, 'Download complete');
     return safePack as OfflinePack;
   },

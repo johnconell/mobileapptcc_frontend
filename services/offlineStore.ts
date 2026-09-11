@@ -722,5 +722,56 @@ export const OfflineStore = {
     await appStorage.deleteItem(STORAGE_KEYS.offlinePackReady);
     await appStorage.deleteItem(STORAGE_KEYS.offlinePackAt);
     await appStorage.deleteItem('tcc.offline.pack.sha256');
+    await this.clearBundledProctorSession();
+  },
+
+  async bundleProctorSession(profile: {
+    id: string;
+    username: string;
+    displayName: string;
+    roleLabel: string;
+    token?: string;
+  }): Promise<void> {
+    if (!profile?.token) return;
+    await appStorage.setItem(
+      STORAGE_KEYS.bundledProctorSession,
+      JSON.stringify({ ...profile, offlineSession: true, bundledAt: new Date().toISOString() }),
+    );
+  },
+
+  async getBundledProctorSession(): Promise<{
+    id: string;
+    username: string;
+    displayName: string;
+    roleLabel: string;
+    token: string;
+    offlineSession: true;
+  } | null> {
+    try {
+      const raw = await appStorage.getItem(STORAGE_KEYS.bundledProctorSession);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as {
+        id?: string;
+        username?: string;
+        displayName?: string;
+        roleLabel?: string;
+        token?: string;
+      };
+      if (!parsed?.token || !parsed.id) return null;
+      return {
+        id: String(parsed.id),
+        username: String(parsed.username || ''),
+        displayName: String(parsed.displayName || parsed.username || 'Proctor'),
+        roleLabel: String(parsed.roleLabel || 'Proctor'),
+        token: String(parsed.token),
+        offlineSession: true,
+      };
+    } catch {
+      return null;
+    }
+  },
+
+  async clearBundledProctorSession(): Promise<void> {
+    await appStorage.deleteItem(STORAGE_KEYS.bundledProctorSession);
   },
 };

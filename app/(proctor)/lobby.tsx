@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, Modal, Pressable, Text, View, StyleSheet, Alert, BackHandler } from 'react-native';
+import { FlatList, Modal, Pressable, Text, View, StyleSheet, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
@@ -318,17 +318,12 @@ export default function ProctorLobbyScreen() {
   }, [lobby?.status, lobby?.session?.examSessionId, lobby?.finishedCount]);
 
   const goBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
     router.replace('/(proctor)/examination' as any);
   };
-
-  // HIERARCHICAL NAVIGATION: Hardware back button returns to Rooms / Time slot
-  useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      goBack();
-      return true;
-    });
-    return () => sub.remove();
-  }, [sessionId, roomId, scheduleId, lobby?.session?.scheduleId, selectedSchedule?.id]);
 
   if (!ready) {
     return (
@@ -341,7 +336,7 @@ export default function ProctorLobbyScreen() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Logout"
-              onPress={() => confirmProctorLogout(router)}
+              onPress={() => confirmProctorLogout()}
               hitSlop={8}
             >
               <LogOut size={18} color={colors.danger} />
@@ -370,7 +365,7 @@ export default function ProctorLobbyScreen() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Logout"
-              onPress={() => confirmProctorLogout(router)}
+              onPress={() => confirmProctorLogout()}
               hitSlop={8}
             >
               <LogOut size={18} color={colors.danger} />
@@ -422,7 +417,7 @@ export default function ProctorLobbyScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Logout"
-            onPress={() => confirmProctorLogout(router)}
+            onPress={() => confirmProctorLogout()}
             hitSlop={8}
           >
             <LogOut size={18} color={colors.danger} />

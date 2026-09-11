@@ -2,7 +2,6 @@ import { STORAGE_KEYS } from '@/constants';
 import { ApiError, apiRequest, getAuthApiBaseUrl } from '@/services/api';
 import { OfflineStore } from '@/services/offlineStore';
 import { PeerExamClient } from '@/services/peerExamClient';
-import { ProctorAuthCache } from '@/services/proctorAuthCache';
 import { appStorage } from '@/services/storage';
 import { useProctorStore } from '@/stores/proctorStore';
 import { useStudentStore } from '@/stores/studentStore';
@@ -41,37 +40,10 @@ async function persistSession(profile: ProctorProfile, token: string): Promise<A
   return { success: true, profile: stored, token };
 }
 
-async function loginOffline(username: string, password: string): Promise<AuthResult> {
-  const account = await ProctorAuthCache.verify(username, password);
-  if (!account) {
-    const hasCache = await ProctorAuthCache.hasAccounts();
-    return {
-      success: false,
-      message: hasCache
-        ? 'Invalid email or password (offline cache).'
-        : 'No internet and no proctor accounts cached on this phone. Connect online once to download accounts, then try again.',
-    };
-  }
-
-  const token = `offline-local-${account.id}`;
-  const profile: ProctorProfile = {
-    id: String(account.id),
-    username: account.email,
-    displayName: account.name,
-    roleLabel: 'Proctor',
-    token,
-    offlineSession: true,
-  };
-
-  // Offline session works against the local exam pack only.
-  await OfflineStore.setOfflineMode(true);
-  return persistSession(profile, token);
-}
-
 /**
- * AuthRepository — Laravel Sanctum proctor login, with offline cache fallback.
- * Online: POST /api/v1/proctor/login
- * Offline: verify email/password against SecureStore bcrypt cache from exam pack.
+ * AuthRepository — online-only Laravel Sanctum proctor login.
+ * Offline use starts after the logged-in proctor downloads an exam pack
+ * (the pack stores this session so the phone can reopen later without internet).
  */
 export const AuthRepository = {
   async login(username: string, password: string): Promise<AuthResult> {
@@ -96,33 +68,48 @@ export const AuthRepository = {
       await OfflineStore.setOfflineMode(false);
       return persistSession({ ...profile, offlineSession: false }, token);
     } catch (error) {
-      // Network / unreachable server → try local proctor auth cache.
-      const isNetwork =
-        error instanceof ApiError
-          ? error.status === 0
-          : error instanceof Error &&
-            /network|reach|Failed to fetch|Aborted|timeout/i.test(error.message);
-
-      if (isNetwork || (error instanceof ApiError && error.status === 0)) {
-        return loginOffline(username, password);
-      }
-
       if (error instanceof ApiError) {
-        // Wrong password online should not fall through to offline (could confuse).
-        // Only fall back offline when server is unreachable.
-        return { success: false, message: error.message };
+        const unreachable = error.status === 0;
+        return {
+          success: false,
+          message: unreachable
+            ? 'Connect to the internet to sign in. Offline access starts after you download the exam pack.'
+            : error.message,
+        };
       }
-
-      // Unknown errors: attempt offline as last resort.
-      const offline = await loginOffline(username, password);
-      if (offline.success) return offline;
 
       return {
         success: false,
         message:
           error instanceof Error
             ? error.message
-            : 'Unable to reach the server. Check EXPO_PUBLIC_CLOUD_API_URL.',
+            : 'Unable to reach the server. Check your internet connection and try again.',
+      };
+    }
+  },
+
+  async loginWithToken(token: string): Promise<AuthResult> {
+    const trimmed = token.trim();
+    if (!trimmed) {
+      return { success: false, message: 'Google sign-in did not return a session.' };
+    }
+    try {
+      const me = await apiRequest<{ success: boolean; data?: { profile: ProctorProfile } }>(
+        '/proctor/me',
+        { token: trimmed, baseUrl: getAuthApiBaseUrl() },
+      );
+      if (!me.data?.profile) {
+        return { success: false, message: 'Google sign-in could not load your proctor profile.' };
+      }
+      await OfflineStore.setOfflineMode(false);
+      return persistSession({ ...me.data.profile, offlineSession: false }, trimmed);
+    } catch (error) {
+      return {
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Google sign-in failed. Connect to the internet and try again.',
       };
     }
   },
@@ -135,8 +122,16 @@ export const AuthRepository = {
     try {
       const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
       const raw = await appStorage.getItem(STORAGE_KEYS.proctorSession);
-      if (!token || !raw || !token.trim() || !raw.trim()) return null;
-      return { ...(JSON.parse(raw) as ProctorProfile), token };
+      if (token && raw && token.trim() && raw.trim()) {
+        return { ...(JSON.parse(raw) as ProctorProfile), token };
+      }
+      const bundled = await OfflineStore.getBundledProctorSession();
+      if (bundled) {
+        await persistSession(bundled, bundled.token);
+        await OfflineStore.setOfflineMode(true);
+        return bundled;
+      }
+      return null;
     } catch {
       return null;
     }
@@ -146,7 +141,15 @@ export const AuthRepository = {
     try {
       const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
       const raw = await appStorage.getItem(STORAGE_KEYS.proctorSession);
-      if (!token || !raw || !token.trim() || !raw.trim()) return null;
+      if (!token || !raw || !token.trim() || !raw.trim()) {
+        const bundled = await OfflineStore.getBundledProctorSession();
+        if (bundled) {
+          await persistSession(bundled, bundled.token);
+          await OfflineStore.setOfflineMode(true);
+          return bundled;
+        }
+        return null;
+      }
 
       const cached = { ...(JSON.parse(raw) as ProctorProfile), token };
 
@@ -202,6 +205,7 @@ export const AuthRepository = {
         appStorage.deleteItem(STORAGE_KEYS.studentProgress),
         appStorage.deleteItem(STORAGE_KEYS.examCheckpoint),
         appStorage.deleteItem('tcc.student.preload.ready'),
+        OfflineStore.clearBundledProctorSession(),
         PeerExamClient.clear(),
       ]);
 

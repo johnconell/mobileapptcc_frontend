@@ -15,7 +15,8 @@ export type EnsurePackResult = {
  * Download / refresh the offline exam pack from the configured API.
  * Used after proctor login and before a student joins an offline exam.
  *
- * includeAuth: also cache proctor bcrypt hashes for offline login (proctor phones).
+ * includeAuth: also cache proctor hashes inside the pack (not used on the login screen).
+ * The signed-in proctor session is bundled with the pack so this phone can stay offline later.
  */
 export async function ensureExamPackCached(options?: {
   force?: boolean;
@@ -28,6 +29,11 @@ export async function ensureExamPackCached(options?: {
   const hasAuth = await ProctorAuthCache.hasAccounts();
 
   if (!force && meta.ready && (!includeAuth || hasAuth)) {
+    const { useProctorStore } = await import('@/stores/proctorStore');
+    const live = useProctorStore.getState().profile;
+    if (live?.token) {
+      await OfflineStore.bundleProctorSession(live);
+    }
     options?.onProgress?.({ percent: 100, label: 'Already on this phone' });
     return {
       ok: true,
@@ -41,12 +47,19 @@ export async function ensureExamPackCached(options?: {
       includeAuth,
       onProgress: options?.onProgress,
     });
+    const { useProctorStore } = await import('@/stores/proctorStore');
+    const live = useProctorStore.getState().profile;
+    if (live?.token) {
+      await OfflineStore.bundleProctorSession(live);
+    }
     const authCount = includeAuth ? (await ProctorAuthCache.list()).length : undefined;
     return {
       ok: true,
-      message: includeAuth
-        ? `Exam cache updated. ${authCount ?? 0} proctor account(s) ready for offline login.`
-        : 'Exam schedules and questions updated on this device.',
+      message: live?.token
+        ? 'Exam pack updated. Your proctor session is saved on this phone for offline use.'
+        : includeAuth
+          ? `Exam cache updated. ${authCount ?? 0} proctor account(s) cached.`
+          : 'Exam schedules and questions updated on this device.',
       fromCache: false,
       authAccountsCached: authCount,
     };

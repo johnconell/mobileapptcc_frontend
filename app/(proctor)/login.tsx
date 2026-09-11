@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Text,
   View,
@@ -6,69 +6,57 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  BackHandler,
-  Alert,
-  Pressable,
-  ActivityIndicator,
 } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Shield, Wifi } from 'lucide-react-native';
+import * as Linking from 'expo-linking';
+import { Shield } from 'lucide-react-native';
 import { Button } from '@/components/ui/Button';
 import { Header } from '@/components/ui/Header';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
-import { SkeletonForm } from '@/components/ui/Skeleton';
 import {
   proctorLoginSchema,
   type ProctorLoginValues,
 } from '@/features/proctor/proctorLoginSchema';
+import { useHardwareBack } from '@/hooks/useHardwareBack';
 import { AuthRepository } from '@/repositories';
+import {
+  getProctorGoogleRedirectUrl,
+  isProctorGoogleCallback,
+  parseProctorGoogleCallback,
+} from '@/services/proctorGoogleAuth';
 import { useProctorStore } from '@/stores';
-import { MOCK_PROCTOR } from '@/constants';
-import {
-  clearLanApiUrl,
-  getAuthApiBaseUrl,
-  getApiBaseUrl,
-  hydrateApiBaseUrl,
-  setLanApiUrl,
-} from '@/services/api';
-import {
-  discoverLanExamServers,
-  getWifiHint,
-  type DiscoveredServer,
-} from '@/services/lanDiscovery';
-import { ensureExamPackCached } from '@/services/ensureExamPack';
-import { OfflineStore } from '@/services/offlineStore';
-import { ProctorAuthCache } from '@/services/proctorAuthCache';
 import { colors } from '@/theme';
-import { VersionInfo } from '@/components/VersionInfo';
+
+let lastConsumedGoogleUrl: string | null = null;
 
 export default function ProctorLoginScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ from?: string }>();
+  const profile = useProctorStore((s) => s.profile);
   const setProfile = useProctorStore((s) => s.setProfile);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [preparing, setPreparing] = useState(false);
-  const [prepareLabel, setPrepareLabel] = useState('Please wait…');
-  const [booting, setBooting] = useState(true);
-  const [authCacheReady, setAuthCacheReady] = useState(false);
-  const [scanning, setScanning] = useState(false);
-  const [scanProgress, setScanProgress] = useState('');
-  const [wifiHint, setWifiHint] = useState('');
-  const [servers, setServers] = useState<DiscoveredServer[]>([]);
-  const [lanUrl, setLanUrl] = useState(getApiBaseUrl());
 
-  // Hardware back returns cleanly to landing page
   useEffect(() => {
-    const handleBack = () => {
-      router.replace({ pathname: '/', params: { stay: '1', from: 'login' } } as any);
-      return true;
-    };
-    const sub = BackHandler.addEventListener('hardwareBackPress', handleBack);
-    return () => sub.remove();
+    if (profile) {
+      router.replace('/(proctor)/dashboard' as any);
+    }
+  }, [profile, router]);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [googleLoading, setGoogleLoading] = useState(false);
+
+  const goToLanding = useCallback(() => {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace({ pathname: '/', params: { stay: '1', from: 'login' } });
   }, [router]);
+
+  useHardwareBack(() => {
+    goToLanding();
+    return true;
+  });
 
   const {
     control,
@@ -79,84 +67,52 @@ export default function ProctorLoginScreen() {
     defaultValues: { username: '', password: '' },
   });
 
-  const finishLogin = async (offlineSession: boolean) => {
-    setPreparing(true);
-    if (offlineSession) {
-      const meta = await OfflineStore.getPackMeta();
-      if (!meta.ready) {
-        setPreparing(false);
-        setFormError(
-          'Logged in offline, but this phone has no exam cache yet. Connect to the internet once to download schedules and questions.',
-        );
-        return;
-      }
-      setPrepareLabel('Opening dashboard…');
+  const completeLogin = useCallback(
+    (profile: NonNullable<Awaited<ReturnType<typeof AuthRepository.login>>['profile']>) => {
+      setProfile(profile);
       router.replace('/(proctor)/dashboard' as any);
-      return;
-    }
+    },
+    [router, setProfile],
+  );
 
-    setPrepareLabel('Please wait — updating exam cache and proctor accounts…');
-    const pack = await ensureExamPackCached({ force: true, includeAuth: true });
-    if (!pack.ok) {
-      setPreparing(false);
-      setFormError(pack.message);
-      return;
-    }
-    setPrepareLabel('Opening dashboard…');
-    router.replace('/(proctor)/dashboard' as any);
-  };
+  const consumeGoogleUrl = useCallback(
+    async (url: string | null) => {
+      if (!url || !isProctorGoogleCallback(url) || url === lastConsumedGoogleUrl) return;
+      lastConsumedGoogleUrl = url;
+      const { token, error } = parseProctorGoogleCallback(url);
+      setGoogleLoading(true);
+      setFormError(null);
+      try {
+        if (error) {
+          setFormError(error);
+          return;
+        }
+        if (!token) {
+          setFormError('Google sign-in did not return a session.');
+          return;
+        }
+        const result = await AuthRepository.loginWithToken(token);
+        if (!result.success || !result.profile) {
+          setFormError(result.message ?? 'Google sign-in failed.');
+          return;
+        }
+        completeLogin(result.profile);
+      } finally {
+        setGoogleLoading(false);
+      }
+    },
+    [completeLogin],
+  );
 
   useEffect(() => {
-    void (async () => {
-      await hydrateApiBaseUrl();
-
-      // While online on the login screen: pre-download exam pack + proctor accounts
-      // so this phone can log in later without internet.
-      setPrepareLabel('Please wait — preparing offline login cache…');
-      const warmed = await ensureExamPackCached({ force: false, includeAuth: true });
-      if (!warmed.fromCache || !(await ProctorAuthCache.hasAccounts())) {
-        await ensureExamPackCached({ force: true, includeAuth: true });
-      }
-      setAuthCacheReady(await ProctorAuthCache.hasAccounts());
-      setLanUrl(getApiBaseUrl());
-      setWifiHint(await getWifiHint());
-      setBooting(false);
-    })();
-  }, []);
-
-  const findServers = async () => {
-    setScanning(true);
-    setFormError(null);
-    setServers([]);
-    try {
-      setWifiHint(await getWifiHint());
-      const found = await discoverLanExamServers((done, total) => {
-        setScanProgress(`Scanning Wi‑Fi… ${done}/${total}`);
-      });
-      setServers(found);
-      if (!found.length) {
-        Alert.alert(
-          'No exam server found',
-          'Join the exam Wi‑Fi, keep Laravel on 0.0.0.0:8000, then try again. Or type the LAN URL below.',
-        );
-      }
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : 'Scan failed');
-    } finally {
-      setScanning(false);
-      setScanProgress('');
-    }
-  };
-
-  const saveFoundServer = async (url: string) => {
-    try {
-      const saved = await setLanApiUrl(url);
-      setLanUrl(saved);
-      Alert.alert('Exam server saved', saved);
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : 'Invalid LAN URL');
-    }
-  };
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      void consumeGoogleUrl(url);
+    });
+    void Linking.getInitialURL().then((url) => {
+      void consumeGoogleUrl(url);
+    });
+    return () => sub.remove();
+  }, [consumeGoogleUrl]);
 
   const onSubmit = handleSubmit(async (values) => {
     setFormError(null);
@@ -165,31 +121,35 @@ export default function ProctorLoginScreen() {
       setFormError(result.message ?? 'Login failed');
       return;
     }
-    setProfile(result.profile);
-    await finishLogin(Boolean(result.profile.offlineSession));
+    completeLogin(result.profile);
   });
 
-  if (booting || preparing) {
-    return (
-      <View style={styles.screen}>
-        <Header title="Proctor Login" subtitle={prepareLabel} />
-        <SkeletonForm fields={2} />
-      </View>
-    );
-  }
+  const onGoogle = async () => {
+    setFormError(null);
+    setGoogleLoading(true);
+    try {
+      const url = await getProctorGoogleRedirectUrl();
+      const opened = await Linking.openURL(url);
+      if (!opened) {
+        setFormError('Could not open Google sign-in. Check your internet connection.');
+      }
+    } catch (error) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : 'Google sign-in is unavailable. Connect to the internet and try again.',
+      );
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
 
   return (
     <KeyboardAvoidingView
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Header
-        title="Proctor Login"
-        subtitle="Online or offline (after first cache)"
-        onBack={() => {
-          router.replace({ pathname: '/', params: { stay: '1', from: 'login' } } as any);
-        }}
-      />
+      <Header title="Proctor Login" subtitle="Internet required to sign in" onBack={goToLanding} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Card>
           <View style={styles.iconWrap}>
@@ -197,68 +157,9 @@ export default function ProctorLoginScreen() {
           </View>
           <Text style={styles.title}>Sign in</Text>
           <Text style={styles.sub}>
-            When this phone has internet, proctor accounts and exam data are cached
-            automatically. After that you can log in offline and run OFF- schedule exams
-            from the cache. Live LAN lobby still needs the exam computer online.
+            Sign in online with your proctor account. Offline exam access starts after you
+            download the exam pack from the Examination tab.
           </Text>
-          <Text style={styles.cacheStatus}>
-            {authCacheReady
-              ? 'Offline login cache: ready'
-              : 'Offline login cache: not ready (needs internet once)'}
-          </Text>
-
-          <Text style={styles.wifiHint}>{wifiHint || 'Connect to exam Wi‑Fi to find the room server.'}</Text>
-          <Button
-            title={scanning ? 'Scanning this Wi‑Fi…' : 'Find servers on this Wi‑Fi'}
-            variant="outline"
-            fullWidth
-            loading={scanning}
-            icon={<Wifi size={16} color={colors.primary} />}
-            onPress={() => void findServers()}
-          />
-          {scanning ? (
-            <View style={styles.scanRow}>
-              <ActivityIndicator color={colors.primary} />
-              <Text style={styles.scanText}>{scanProgress}</Text>
-            </View>
-          ) : null}
-          {servers.map((s) => (
-            <Pressable
-              key={s.ip}
-              style={styles.serverItem}
-              onPress={() => void saveFoundServer(s.url)}
-            >
-              <Wifi size={16} color={colors.primary} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.serverTitle}>{s.label}</Text>
-                <Text style={styles.serverUrl}>{s.url}</Text>
-              </View>
-            </Pressable>
-          ))}
-          <Input
-            label="LAN exam server URL"
-            placeholder="http://10.x.x.x:8000/api/v1"
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={lanUrl}
-            onChangeText={setLanUrl}
-          />
-          <View style={styles.urlActions}>
-            <Button
-              title="Save server"
-              variant="outline"
-              onPress={() => void saveFoundServer(lanUrl)}
-              style={{ flex: 1 }}
-            />
-            <Button
-              title="Reset"
-              variant="ghost"
-              onPress={async () => {
-                await clearLanApiUrl();
-                setLanUrl(getApiBaseUrl());
-              }}
-            />
-          </View>
 
           <Controller
             control={control}
@@ -297,24 +198,23 @@ export default function ProctorLoginScreen() {
           {formError ? <Text style={styles.error}>{formError}</Text> : null}
 
           <Button
-            title="Login"
+            title="Sign in"
             size="lg"
             fullWidth
             loading={isSubmitting}
             onPress={onSubmit}
             style={{ marginTop: 16 }}
           />
-
-          <Text style={styles.hint}>
-            Demo: {MOCK_PROCTOR.username} / {MOCK_PROCTOR.password}
-            {'\n'}
-            Server: {getAuthApiBaseUrl()}
-          </Text>
+          <Button
+            title="Continue with Google"
+            variant="outline"
+            size="lg"
+            fullWidth
+            loading={googleLoading}
+            onPress={() => void onGoogle()}
+            style={{ marginTop: 12 }}
+          />
         </Card>
-
-        <View style={{ paddingHorizontal: 20, paddingBottom: 40 }}>
-           <VersionInfo />
-        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -333,42 +233,6 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   title: { fontSize: 22, fontWeight: '700', color: colors.ink, marginBottom: 6 },
-  sub: { fontSize: 14, lineHeight: 21, color: colors.inkSecondary, marginBottom: 8 },
-  cacheStatus: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.primary,
-    marginBottom: 14,
-  },
-  wifiHint: {
-    fontSize: 12,
-    color: colors.inkMuted,
-    marginBottom: 8,
-    fontWeight: '600',
-    lineHeight: 18,
-  },
-  scanRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8, marginBottom: 8 },
-  serverItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    backgroundColor: colors.surface,
-    marginTop: 8,
-  },
-  serverTitle: { fontSize: 14, fontWeight: '700', color: colors.ink },
-  serverUrl: { fontSize: 12, color: colors.inkMuted, marginTop: 2 },
-  urlActions: { flexDirection: 'row', gap: 8, marginBottom: 8, marginTop: 8 },
+  sub: { fontSize: 14, lineHeight: 21, color: colors.inkSecondary, marginBottom: 16 },
   error: { marginTop: 10, color: colors.danger, fontWeight: '600', fontSize: 13 },
-  hint: {
-    marginTop: 14,
-    fontSize: 12,
-    color: colors.inkMuted,
-    textAlign: 'center',
-    fontWeight: '500',
-    lineHeight: 18,
-  },
 });

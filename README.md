@@ -1,17 +1,19 @@
-# TCC Mobile Entrance Examination — Frontend
+# METCC Mobile — TCC Entrance Examination
 
-Expo Go (**SDK 54**) frontend for Tagoloan Community College entrance examinations.
+Expo (SDK 54) app for **proctors** and **applicants**. Administrators use `metcc_frontend`. API: `metcc_backend`.
+
+**Start here**
+
+- [docs/architecture.md](docs/architecture.md) — folder rules (do not move `app/` routes)
+- [docs/FEATURE_MAP.md](docs/FEATURE_MAP.md) — feature barrels under `features/`
+- [docs/user-manual.md](docs/user-manual.md)
+- [docs/technical-manual.md](docs/technical-manual.md)
 
 ## Flows
 
-**Proctor:** Login → Schedules → Sessions → Lobby (QR + Exam Code + Start)
+**Proctor:** Login (online) → Download exam pack → Open room → QR / lobby → Start → Sync results  
 
-**Student:** Home → Scan QR **or** Enter Code → Verify → Confirm (read-only) → Waiting Lobby → Exam → Submitted
-
-## Demo credentials
-
-- Username: `proctor`
-- Password: `tcc2026`
+**Applicant:** Home → Scan QR or enter code → Passkey → Lobby → Exam → Submit (questions wiped)
 
 ## Run
 
@@ -20,9 +22,7 @@ npm install
 npx expo start
 ```
 
-## Architecture
-
-Screens call repositories only (`Auth`, `Schedule`, `Student`, `Lobby`, `Question`). Mock JSON today; Laravel REST later without UI rewrites.
+JS updates: `eas update --branch production`. Native/plugin changes need a new APK.
 
 ---
 

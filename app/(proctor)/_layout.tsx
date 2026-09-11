@@ -1,83 +1,41 @@
 import React, { useEffect, useState } from 'react';
 import { View, ActivityIndicator } from 'react-native';
-import { Tabs, useRouter, useSegments } from 'expo-router';
-import { Home, ClipboardList, BarChart3, Settings } from 'lucide-react-native';
+import { Stack } from 'expo-router';
 import { useAppTheme } from '@/hooks/useAppTheme';
 import { useProctorStore } from '@/stores';
 import { AuthRepository } from '@/repositories';
-import { OfflineStore } from '@/services/offlineStore';
 
+/**
+ * Auth switch: logged-out proctors stay on a real Stack (Login only) so hardware
+ * back can pop to Landing. Logged-in proctors see tabs + pushed screens.
+ * Do not render Login as a detached child — that broke goBack() after logout.
+ */
 export default function ProctorRootLayout() {
-  const { colors, isDark } = useAppTheme();
-  const router = useRouter();
-  const segments = useSegments();
+  const { colors } = useAppTheme();
   const profile = useProctorStore((s) => s.profile);
-  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [ready, setReady] = useState(false);
 
-  // Route Guard: Protected proctor screens require active session
   useEffect(() => {
     let active = true;
-    const currentLeaf = segments[segments.length - 1];
-
-    // Login screen is public within the proctor group
-    if (currentLeaf === 'login') {
-      setCheckingAuth(false);
-      return;
-    }
-
     void (async () => {
       try {
-        if (profile) {
-          if (active) setCheckingAuth(false);
-          return;
-        }
-
+        if (useProctorStore.getState().profile) return;
         const session = await AuthRepository.getCachedSessionFast();
         if (session && active) {
           useProctorStore.getState().setProfile(session);
-          setCheckingAuth(false);
-          return;
         }
-
-        // Unauthenticated access attempt to proctor area -> immediately redirect to Landing Page!
-        if (active) {
-          router.replace('/');
-        }
-      } catch {
-        if (active) router.replace('/');
+      } catch (err) {
+        console.warn('[PROCTOR AUTH] Session hydrate failed:', err);
       } finally {
-        if (active) setCheckingAuth(false);
+        if (active) setReady(true);
       }
     })();
-
     return () => {
       active = false;
     };
-  }, [profile, segments, router]);
+  }, []);
 
-  const [pendingSyncCount, setPendingSyncCount] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    const checkPending = async () => {
-      try {
-        const pending = await OfflineStore.pendingResults();
-        if (!cancelled) setPendingSyncCount(pending.length);
-      } catch {
-        if (!cancelled) setPendingSyncCount(0);
-      }
-    };
-
-    void checkPending();
-    const interval = setInterval(checkPending, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [segments]);
-
-  const currentLeaf = segments[segments.length - 1];
-  if (checkingAuth && currentLeaf !== 'login') {
+  if (!ready) {
     return (
       <View
         style={{
@@ -92,91 +50,38 @@ export default function ProctorRootLayout() {
     );
   }
 
+  const stackOptions = {
+    headerShown: false,
+    contentStyle: { flex: 1, backgroundColor: colors.background },
+    animation: 'slide_from_right' as const,
+  };
+
+  if (!profile) {
+    return (
+      <Stack screenOptions={stackOptions}>
+        <Stack.Screen name="login" />
+        <Stack.Screen name="index" />
+      </Stack>
+    );
+  }
+
   return (
-    <Tabs
+    <Stack
       screenOptions={{
         headerShown: false,
-        tabBarAllowFontScaling: false,
-        tabBarStyle: {
-          backgroundColor: colors.tabBarBg,
-          borderTopColor: colors.tabBarBorder,
-          height: 64,
-          paddingBottom: 8,
-          paddingTop: 6,
-          elevation: 12,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: -4 },
-          shadowOpacity: isDark ? 0.3 : 0.08,
-          shadowRadius: 12,
-        },
-        tabBarActiveTintColor: colors.tabBarActive,
-        tabBarInactiveTintColor: colors.tabBarInactive,
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '700',
-        },
-        tabBarItemStyle: {
-          paddingHorizontal: 2,
-        },
+        contentStyle: { flex: 1, backgroundColor: colors.background },
+        animation: 'slide_from_right',
       }}
     >
-      <Tabs.Screen
-        name="dashboard"
-        options={{
-          title: 'Dashboard',
-          tabBarIcon: ({ color, size }) => <Home size={size} color={color} strokeWidth={2.5} />,
-        }}
-      />
-      <Tabs.Screen
-        name="examination"
-        options={{
-          title: 'Examination',
-          tabBarIcon: ({ color, size }) => <ClipboardList size={size} color={color} strokeWidth={2.5} />,
-        }}
-      />
-      <Tabs.Screen
-        name="results"
-        options={{
-          title: 'Results',
-          tabBarIcon: ({ color, size }) => <BarChart3 size={size} color={color} strokeWidth={2.5} />,
-          tabBarIcon: ({ color, size }) => (
-            <View style={{ width: size + 8, height: size, alignItems: 'center', justifyContent: 'center' }}>
-              <BarChart3 size={size} color={color} strokeWidth={2.5} />
-              {pendingSyncCount > 0 && (
-                <View
-                  style={{
-                    position: 'absolute',
-                    top: -2,
-                    right: 0,
-                    width: 9,
-                    height: 9,
-                    borderRadius: 4.5,
-                    backgroundColor: '#DC3545',
-                    borderWidth: 1.5,
-                    borderColor: colors.tabBarBg,
-                  }}
-                />
-              )}
-            </View>
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: 'Settings',
-          tabBarIcon: ({ color, size }) => <Settings size={size} color={color} strokeWidth={2.5} />,
-        }}
-      />
-      {/* Hidden screens (no bottom tab icon, pushable via router) */}
-      <Tabs.Screen name="index" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="login" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="account" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="room" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="lobby" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="sessions" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="notifications" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="rooms" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-    </Tabs>
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="index" />
+      <Stack.Screen name="login" />
+      <Stack.Screen name="account" />
+      <Stack.Screen name="lobby" />
+      <Stack.Screen name="room" />
+      <Stack.Screen name="rooms" />
+      <Stack.Screen name="sessions" />
+      <Stack.Screen name="notifications" />
+    </Stack>
   );
 }
