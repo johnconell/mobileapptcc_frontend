@@ -2,11 +2,12 @@ import React from 'react';
 import { Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import Animated, { FadeInDown } from 'react-native-reanimated';
-import { Button } from '@/components/ui';
-import { SuccessIllustration } from '@/features/exam/SuccessIllustration';
-import { clearApplicantExamMaterial } from '@/services/applicantExamCleanup';
-import { useExamStore, useStudentStore } from '@/stores';
-import { colors } from '@/theme';
+import { Button } from '@/shared/components/ui';
+import { SuccessIllustration } from '@/features/examinations/components/SuccessIllustration';
+import { clearApplicantExamMaterial } from '@/features/applicants/services/applicantExamCleanup';
+import { useStudentStore } from '@/features/applicants/stores/studentStore';
+import { useExamStore } from '@/features/examinations/stores/examStore';
+import { colors } from '@/shared/theme';
 
 const AUTO_HOME_SECONDS = 10;
 

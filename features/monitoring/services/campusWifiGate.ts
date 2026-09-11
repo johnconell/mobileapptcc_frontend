@@ -1,0 +1,219 @@
+import * as Network from 'expo-network';
+import { getApiBaseUrl } from '@/shared/services/api';
+import { isLoopbackApiHost, requiresLanApiHost } from '@/shared/services/apiReachability';
+import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
+import { parsePeerQr } from '@/features/examinations/services/peerExamServer';
+
+export type CampusWifiGateResult = {
+  ok: boolean;
+  wifiConnected: boolean;
+  serverReachable: boolean | null;
+  message: string | null;
+};
+
+/** Rule 2A: any Wi‑Fi interface connected (not cellular-only). */
+export async function isWifiConnected(): Promise<boolean> {
+  try {
+    const state = await Network.getNetworkStateAsync();
+    return (
+      Boolean(state.isConnected) && state.type === Network.NetworkStateType.WIFI
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Probe the configured exam Hub. Any HTTP response (including 4xx) means the
+ * phone can reach the LAN/cloud API — i.e. it is on a usable exam network.
+ */
+export async function probeExamServerReachable(
+  timeoutMs = 4500,
+): Promise<boolean> {
+  const base = getApiBaseUrl().replace(/\/$/, '');
+  if (requiresLanApiHost() && isLoopbackApiHost(base)) {
+    return false;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    await fetch(`${base}/exam/resolve`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ code: '__wifi_probe__' }),
+      signal: controller.signal,
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isOfflinePackCode(code: string): boolean {
+  return /^OFF-\d+(?:-R\d+)?$/i.test(code.trim());
+}
+
+/**
+ * Validate network AFTER a QR scan or examination-code submit, or before Proctor room open:
+ * 1) Must be on Wi‑Fi (not mobile data alone).
+ * 2) Proctor actions: verify Wi-Fi is on; DO NOT check or ping student peer targets.
+ * 3) Student Peer QR → ping the proctor phone on LAN.
+ * 4) Live Hub codes → probe Laravel. Offline codes skip the Hub probe.
+ */
+export async function assertCampusWifiForJoin(options?: {
+  /** When verifying a typed code; OFF-* skips Hub probe. */
+  examinationCode?: string;
+  /** Scan screen always probes Hub (QR is live lobby). */
+  requireServer?: boolean;
+  /** Raw scanned QR, so a peer QR is probed against the proctor phone. */
+  scannedPayload?: string;
+  /** Set true for Proctor actions so student peer targets are NEVER pinged. */
+  isProctor?: boolean;
+}): Promise<CampusWifiGateResult> {
+  const netState = await Network.getNetworkStateAsync();
+  const wifiConnected = netState.type === Network.NetworkStateType.WIFI;
+
+  const mismatchMessage =
+    'You are connected to a different examination network. Please connect to the same Wi‑Fi network as the proctor and scan again.';
+  const officialWifiMessage =
+    'You must connect to the official examination Wi-Fi network before joining this examination.';
+
+  if (!wifiConnected) {
+    const msg = options?.isProctor
+      ? 'This phone has no Wi‑Fi connection. Connect to the examination Wi‑Fi or turn on a mobile hotspot and try again.'
+      : officialWifiMessage;
+    return {
+      ok: false,
+      wifiConnected: false,
+      serverReachable: null,
+      message: msg,
+    };
+  }
+
+  // PROCTOR ROLE ISOLATION: A Proctor opening a room must NEVER ping a Student peer target!
+  if (options?.isProctor) {
+    if (__DEV__) console.log('[WIFI GATE] Proctor validation passed: Wi-Fi interface connected.');
+    return {
+      ok: true,
+      wifiConnected: true,
+      serverReachable: true,
+      message: null,
+    };
+  }
+
+  // Student Peer mode: "matching the proctor" means reaching the proctor's phone on the same Wi-Fi LAN.
+  const peerTarget =
+    (options?.scannedPayload ? parsePeerQr(options.scannedPayload) : null) ??
+    (await PeerExamClient.getTarget());
+
+  if (peerTarget) {
+    // 1. Strict SSID validation: If both SSIDs are known, require exact match
+    const currentSsid = (netState as any).ssid;
+    const cleanExpected = (peerTarget.wifiSsid || '').replace(/^"|"$/g, '').trim();
+    const cleanCurrent = (currentSsid || '').replace(/^"|"$/g, '').trim();
+
+    if (
+      cleanExpected &&
+      cleanCurrent &&
+      cleanCurrent !== '<unknown ssid>' &&
+      cleanCurrent.toLowerCase() !== cleanExpected.toLowerCase()
+    ) {
+      return {
+        ok: false,
+        wifiConnected: true,
+        serverReachable: false,
+        message: `${officialWifiMessage}\n\nConnected to '${cleanCurrent}'. Required official network: '${cleanExpected}'.`,
+      };
+    }
+
+    // 2. Strict Subnet validation: Student and Proctor host must share local LAN prefix
+    const deviceIp = await Network.getIpAddressAsync().catch(() => null);
+    if (
+      deviceIp &&
+      peerTarget.host &&
+      !peerTarget.host.startsWith('127.') &&
+      !peerTarget.host.startsWith('localhost')
+    ) {
+      const devParts = deviceIp.split('.');
+      const hostParts = peerTarget.host.split('.');
+      if (devParts.length === 4 && hostParts.length === 4) {
+        // Standard private IP check: /24 for 192.168.x.x, /16 for others
+        const isClassC = devParts[0] === '192' && devParts[1] === '168';
+        const subnetMatch = isClassC
+          ? devParts[0] === hostParts[0] && devParts[1] === hostParts[1] && devParts[2] === hostParts[2]
+          : devParts[0] === hostParts[0] && devParts[1] === hostParts[1];
+
+        if (!subnetMatch) {
+          return {
+            ok: false,
+            wifiConnected: true,
+            serverReachable: false,
+            message: `${officialWifiMessage}\n\nCross-network connection detected (Your IP: ${deviceIp}, Proctor: ${peerTarget.host}).`,
+          };
+        }
+      }
+    }
+
+    // 3. Direct LAN Reachability Probe (ping proctor phone)
+    const reachable = await PeerExamClient.ping(peerTarget);
+    if (!reachable) {
+      return {
+        ok: false,
+        wifiConnected: true,
+        serverReachable: false,
+        message: `${officialWifiMessage}\n\nCannot reach the proctor examination session at ${peerTarget.host}.`,
+      };
+    }
+
+    return { ok: true, wifiConnected: true, serverReachable: true, message: null };
+  }
+
+  const code = options?.examinationCode?.trim() ?? '';
+  let skipServer =
+    options?.requireServer === false ||
+    (code.length > 0 && isOfflinePackCode(code));
+
+  // Opened local lobbies use normal codes (K7M2P9QX) — skip Laravel hub probe.
+  if (!skipServer && code.length > 0) {
+    try {
+      const { OfflineStore } = await import('@/features/synchronization/services/offlineStore');
+      const opened = await OfflineStore.findOpenedRoomByCode(code);
+      if (opened) skipServer = true;
+      if (!skipServer && await OfflineStore.isOfflineMode()) skipServer = true;
+    } catch {
+      // ignore
+    }
+  }
+
+  if (skipServer || options?.requireServer === false) {
+    return {
+      ok: true,
+      wifiConnected: true,
+      serverReachable: null,
+      message: null,
+    };
+  }
+
+  const serverReachable = await probeExamServerReachable();
+  if (!serverReachable) {
+    return {
+      ok: false,
+      wifiConnected: true,
+      serverReachable: false,
+      message: officialWifiMessage,
+    };
+  }
+
+  return {
+    ok: true,
+    wifiConnected: true,
+    serverReachable: true,
+    message: null,
+  };
+}

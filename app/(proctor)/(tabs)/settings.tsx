@@ -23,12 +23,12 @@ import {
   X,
   History,
 } from 'lucide-react-native';
-import { Header, Button } from '@/components/ui';
-import { useProctorStore } from '@/stores';
-import { useAppTheme } from '@/hooks/useAppTheme';
-import { VersionInfo } from '@/components/VersionInfo';
-import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
-import type { ThemeMode, AppFontSize } from '@/stores/settingsStore';
+import { Header, Button } from '@/shared/components/ui';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
+import { VersionInfo } from '@/shared/components/VersionInfo';
+import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
+import type { ThemeMode, AppFontSize } from '@/features/settings/stores/settingsStore';
 
 export default function ProctorSettingsScreen() {
   const router = useRouter();

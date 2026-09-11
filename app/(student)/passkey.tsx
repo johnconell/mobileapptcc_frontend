@@ -11,16 +11,16 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { KeyRound } from 'lucide-react-native';
-import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
-import { Header } from '@/components/ui/Header';
-import { Input } from '@/components/ui/Input';
-import { SkeletonForm } from '@/components/ui/Skeleton';
-import { LobbyRepository } from '@/repositories';
-import { useStudentStore } from '@/stores';
-import { OfflineStore } from '@/services/offlineStore';
-import { appStorage } from '@/services/storage';
-import { colors } from '@/theme';
+import { Button } from '@/shared/components/ui/Button';
+import { Card } from '@/shared/components/ui/Card';
+import { Header } from '@/shared/components/ui/Header';
+import { Input } from '@/shared/components/ui/Input';
+import { SkeletonForm } from '@/shared/components/ui/Skeleton';
+import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { useStudentStore } from '@/features/applicants/stores/studentStore';
+import { OfflineStore } from '@/features/synchronization/services/offlineStore';
+import { appStorage } from '@/shared/services/storage';
+import { colors } from '@/shared/theme';
 
 const schema = z.object({
   passkey: z

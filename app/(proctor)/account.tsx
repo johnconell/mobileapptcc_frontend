@@ -30,14 +30,14 @@ import {
   Eye,
   EyeOff,
 } from 'lucide-react-native';
-import { Header, Button, Card } from '@/components/ui';
-import { useProctorStore } from '@/stores';
-import { useAppTheme } from '@/hooks/useAppTheme';
-import { AuthRepository } from '@/repositories';
-import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
-import { appStorage } from '@/services/storage';
-import { STORAGE_KEYS } from '@/constants';
-import { ProctorAuthCache } from '@/services/proctorAuthCache';
+import { Header, Button, Card } from '@/shared/components/ui';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
+import { AuthRepository } from '@/features/authentication/repositories/AuthRepository';
+import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
+import { appStorage } from '@/shared/services/storage';
+import { STORAGE_KEYS } from '@/shared/constants';
+import { ProctorAuthCache } from '@/features/authentication/services/proctorAuthCache';
 
 type LoginSessionLog = {
   id: string;

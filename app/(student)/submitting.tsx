@@ -1,13 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Button, Loader } from '@/components/ui';
-import { LobbyRepository, QuestionRepository } from '@/repositories';
-import { clearApplicantExamMaterial } from '@/services/applicantExamCleanup';
-import { ExamProgressStore } from '@/services/examProgressStore';
-import { appStorage } from '@/services/storage';
-import { useExamStore, useStudentStore } from '@/stores';
-import { colors } from '@/theme';
+import { Button, Loader } from '@/shared/components/ui';
+import { QuestionRepository } from '@/features/examinations/repositories/QuestionRepository';
+import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { clearApplicantExamMaterial } from '@/features/applicants/services/applicantExamCleanup';
+import { ExamProgressStore } from '@/features/examinations/services/examProgressStore';
+import { appStorage } from '@/shared/services/storage';
+import { useStudentStore } from '@/features/applicants/stores/studentStore';
+import { useExamStore } from '@/features/examinations/stores/examStore';
+import { colors } from '@/shared/theme';
 
 const MAX_ATTEMPTS = 3;
 

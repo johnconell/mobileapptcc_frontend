@@ -16,21 +16,22 @@ import {
   Header,
   ProgressBar,
   QuestionCard,
-} from '@/components/ui';
-import { ExamSecurityOverlay } from '@/features/exam/ExamSecurityOverlay';
-import { ExamWifiDisconnectOverlay } from '@/features/exam/ExamWifiDisconnectOverlay';
-import { useExamStore, useStudentStore } from '@/stores';
-import { useExamTimer } from '@/hooks/useExamTimer';
-import { useExamSecurity } from '@/hooks/useExamSecurity';
-import { useWifiExamGate } from '@/hooks/useWifiExamGate';
-import { LobbyRepository } from '@/repositories';
-import { QuestionRepository } from '@/repositories/QuestionRepository';
-import { ExamProgressStore } from '@/services/examProgressStore';
-import { ExamLifecycle } from '@/services/examLifecycle';
-import { PeerExamClient } from '@/services/peerExamClient';
-import { parseStartPulse } from '@/services/examStartCoordinator';
-import { colors } from '@/theme';
-import type { ChoiceKey } from '@/types';
+} from '@/shared/components/ui';
+import { ExamSecurityOverlay } from '@/features/examinations/components/ExamSecurityOverlay';
+import { ExamWifiDisconnectOverlay } from '@/features/examinations/components/ExamWifiDisconnectOverlay';
+import { useStudentStore } from '@/features/applicants/stores/studentStore';
+import { useExamStore } from '@/features/examinations/stores/examStore';
+import { useExamTimer } from '@/features/examinations/hooks/useExamTimer';
+import { useExamSecurity } from '@/features/examinations/hooks/useExamSecurity';
+import { useWifiExamGate } from '@/features/monitoring/hooks/useWifiExamGate';
+import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { QuestionRepository } from '@/features/examinations/repositories/QuestionRepository';
+import { ExamProgressStore } from '@/features/examinations/services/examProgressStore';
+import { ExamLifecycle } from '@/features/examinations/services/examLifecycle';
+import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
+import { parseStartPulse } from '@/features/examinations/services/examStartCoordinator';
+import { colors } from '@/shared/theme';
+import type { ChoiceKey } from '@/shared/types';
 
 export default function ExamScreen() {
   useKeepAwake();

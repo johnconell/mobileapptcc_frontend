@@ -4,17 +4,18 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { Keyboard, QrCode, Shield } from 'lucide-react-native';
-import { APP_NAME, SCHOOL_NAME } from '@/constants';
-import { colors, shadows } from '@/theme';
-import { Card } from '@/components/ui/Card';
-import { FloatingButton } from '@/components/ui/FloatingButton';
-import { SchoolLogo } from '@/features/student/SchoolLogo';
-import { AuthRepository } from '@/repositories';
+import { APP_NAME, SCHOOL_NAME } from '@/shared/constants';
+import { colors, shadows } from '@/shared/theme';
+import { Card } from '@/shared/components/ui/Card';
+import { FloatingButton } from '@/shared/components/ui/FloatingButton';
+import { SchoolLogo } from '@/shared/components/SchoolLogo';
+import { AuthRepository } from '@/features/authentication/repositories/AuthRepository';
 import * as Updates from 'expo-updates';
 import * as Network from 'expo-network';
-import { useSettingsStore, useProctorStore } from '@/stores';
-import { VersionInfo } from '@/components/VersionInfo';
-import { clearApplicantExamMaterial } from '@/services/applicantExamCleanup';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { useSettingsStore } from '@/features/settings/stores/settingsStore';
+import { VersionInfo } from '@/shared/components/VersionInfo';
+import { clearApplicantExamMaterial } from '@/features/applicants/services/applicantExamCleanup';
 
 /** Tracks whether the application process was just cold launched from OS */
 let isAppColdBoot = true;
@@ -67,8 +68,8 @@ export default function HomeScreen() {
     void (async () => {
       const session = await AuthRepository.getCachedSessionFast();
       if (session) return;
-      const { appStorage } = await import('@/services/storage');
-      const { STORAGE_KEYS } = await import('@/constants');
+      const { appStorage } = await import('@/shared/services/storage');
+      const { STORAGE_KEYS } = await import('@/shared/constants');
       const inSession = await appStorage.getItem(STORAGE_KEYS.participationToken);
       if (inSession) return;
       await clearApplicantExamMaterial();

@@ -8,7 +8,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "generate:mock": "npx ts-node --compiler-options \"{\\\"module\\\":\\\"commonjs\\\"}\" scripts/generate-mock-data.ts",
-    "test": "npx --yes tsx --test services/examStartCoordinator.test.ts services/passkeyClassification.test.ts utils/examScheduleStatus.test.ts",
+    "test": "npx --yes tsx --test features/examinations/services/examStartCoordinator.test.ts features/examinations/services/passkeyClassification.test.ts features/schedules/utils/examScheduleStatus.test.ts",
+    "typecheck": "tsc --noEmit",
     "postinstall": "patch-package"
   },
   "dependencies": {

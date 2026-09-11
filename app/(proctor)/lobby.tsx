@@ -4,30 +4,31 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
 import { useKeepAwake } from 'expo-keep-awake';
-import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
-import { ConfirmationModal } from '@/components/ui/Dialog';
-import { Header } from '@/components/ui/Header';
-import { QrCodePanel } from '@/components/ui/QrCodePanel';
+import { Button } from '@/shared/components/ui/Button';
+import { Card } from '@/shared/components/ui/Card';
+import { ConfirmationModal } from '@/shared/components/ui/Dialog';
+import { Header } from '@/shared/components/ui/Header';
+import { QrCodePanel } from '@/shared/components/ui/QrCodePanel';
 import {
   Skeleton,
   SkeletonCard,
   SkeletonList,
   SkeletonText,
-} from '@/components/ui/Skeleton';
-import { StatusChip } from '@/components/ui/StatusChip';
-import { StatisticCard } from '@/components/ui/StatisticCard';
-import { LobbyStudentCard } from '@/features/proctor/LobbyStudentCard';
-import { useLobby } from '@/hooks/useRepositories';
-import { LobbyRepository } from '@/repositories';
-import { QUERY_KEYS } from '@/constants';
-import { PeerExamServer } from '@/services/peerExamServer';
-import { OfflineStore } from '@/services/offlineStore';
-import { useLobbyStore, useProctorStore } from '@/stores';
-import { colors } from '@/theme';
-import type { LobbyStudent } from '@/types';
-import { safeBack } from '@/utils';
-import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
+} from '@/shared/components/ui/Skeleton';
+import { StatusChip } from '@/shared/components/ui/StatusChip';
+import { StatisticCard } from '@/shared/components/ui/StatisticCard';
+import { LobbyStudentCard } from '@/features/lobby/components/LobbyStudentCard';
+import { useLobby } from '@/features/lobby/hooks/useLobby';
+import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { QUERY_KEYS } from '@/shared/constants';
+import { PeerExamServer } from '@/features/examinations/services/peerExamServer';
+import { OfflineStore } from '@/features/synchronization/services/offlineStore';
+import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { colors } from '@/shared/theme';
+import type { LobbyStudent } from '@/shared/types';
+import { safeBack } from '@/shared/utils';
+import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
 import {
   // keep existing imports below — do not break the rest of this file
   Copy,
@@ -129,7 +130,7 @@ export default function ProctorLobbyScreen() {
         );
         if (cancelled) return;
         if (!snapshot) {
-          const { OfflineStore } = await import('@/services/offlineStore');
+          const { OfflineStore } = await import('@/features/synchronization/services/offlineStore');
           if (await OfflineStore.hasPack()) {
             try {
               snapshot = await LobbyRepository.ensureLobby(sessionId, undefined, roomId);
@@ -837,7 +838,7 @@ export default function ProctorLobbyScreen() {
           if (!sessionId) return;
           // Validate required data and LAN connectivity before starting the exam.
           try {
-            const { OfflineStore } = await import('@/services/offlineStore');
+            const { OfflineStore } = await import('@/features/synchronization/services/offlineStore');
             const todayCheck = await OfflineStore.isPackDownloadedToday();
             if (!todayCheck.downloadedToday) {
               Alert.alert(
@@ -910,7 +911,7 @@ export default function ProctorLobbyScreen() {
 
             // Wi‑Fi / LAN validation
             // If already hosting locally (peerHost is active), we don't need to reach the central server.
-            const { assertCampusWifiForJoin } = await import('@/services/campusWifiGate');
+            const { assertCampusWifiForJoin } = await import('@/features/monitoring/services/campusWifiGate');
             const wifi = await assertCampusWifiForJoin({ requireServer: !peerHost, isProctor: true });
             if (!wifi.ok) {
               Alert.alert(

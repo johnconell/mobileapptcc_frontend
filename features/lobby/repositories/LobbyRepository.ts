@@ -1,0 +1,1372 @@
+import { MAX_EXAM_VIOLATIONS, STORAGE_KEYS } from '@/shared/constants';
+import { apiRequest, ApiError } from '@/shared/services/api';
+import {
+  extractExaminationCode,
+  OfflineExamRepository,
+} from '@/features/synchronization/services/offlineExamRepository';
+import { OfflineStore, computePackHash, computePackHashAsync } from '@/features/synchronization/services/offlineStore';
+import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
+import { parsePeerQr, PeerExamServer } from '@/features/examinations/services/peerExamServer';
+import { appStorage } from '@/shared/services/storage';
+import type {
+  ExamCodeValidation,
+  LobbySnapshot,
+  LobbyStudent,
+  StudentRecord,
+} from '@/shared/types';
+
+type LobbyResponse = {
+  success: boolean;
+  message?: string;
+  data?: LobbySnapshot & {
+    exam_session_id?: number;
+  };
+};
+
+async function getStoredCode(): Promise<string | null> {
+  return appStorage.getItem(STORAGE_KEYS.examinationCode);
+}
+
+async function setStoredCode(code: string | null | undefined) {
+  if (code) await appStorage.setItem(STORAGE_KEYS.examinationCode, code);
+  else await appStorage.deleteItem(STORAGE_KEYS.examinationCode);
+}
+
+function lobbyQueryKey(sessionId: string, roomId?: string) {
+  return roomId ? `${sessionId}:room:${roomId}` : sessionId;
+}
+
+/** True when a peer-hosted lobby belongs to the requested schedule/room. */
+function peerMatchesRequest(
+  hosted: LobbySnapshot,
+  sessionId?: string,
+  roomId?: string,
+): boolean {
+  if (roomId != null && String(roomId).trim() !== '') {
+    if (String(hosted.roomId ?? '') !== String(roomId)) return false;
+  }
+  if (sessionId != null && String(sessionId).trim() !== '') {
+    const sid = String(sessionId).replace(/^offline-/, '');
+    const hostedScheduleId = String(hosted.session?.scheduleId ?? '').replace(/^offline-/, '');
+    const hostedScheduleGroupId = String(hosted.schedule?.id ?? '').replace(/^offline-/, '');
+
+    // session.id is usually "offline-{numericScheduleId}-r{roomId}"
+    const hostedNumericId = String(hosted.session?.id ?? '').replace(/^offline-/, '').split('-')[0];
+
+    if (sid !== hostedScheduleId && sid !== hostedScheduleGroupId && sid !== hostedNumericId) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * LobbyRepository — Laravel exam session lobby + QR code workflow.
+ * `sessionId` = examination_schedules.id; `roomId` = examination_rooms.id.
+ */
+export const LobbyRepository = {
+  async openLobby(
+    sessionId: string,
+    questionBankId?: number,
+    roomId?: string,
+  ): Promise<LobbySnapshot> {
+    const startPeerHost = async (): Promise<LobbySnapshot> => {
+      if (!roomId) {
+        throw new Error('Select a room first. Each room has its own examination code and QR.');
+      }
+      const sid = String(sessionId).replace(/^offline-/, '');
+      const opened = await OfflineStore.getOpenedRooms();
+      const existing = opened[OfflineStore.roomKey(sid, roomId)];
+      const usedCodes = new Set(Object.values(opened).map((r) => r.code));
+      const examCode =
+        existing?.code && existing.status !== 'ended'
+          ? existing.code
+          : OfflineExamRepository.generateExamCode(usedCodes);
+
+      await OfflineStore.setOpenedRoom(sid, roomId, examCode, 'lobby_open');
+      await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, sid);
+      await appStorage.setItem(STORAGE_KEYS.offlineExamCode, examCode);
+      await setStoredCode(examCode);
+
+      if (!PeerExamServer.isSupported()) {
+        throw new Error(
+          'This build cannot host an examination offline. Install the development build APK (Expo Go cannot run the proctor LAN server).',
+        );
+      }
+
+      // Reuse a live server for the same room instead of restarting (was very slow).
+      const info = PeerExamServer.info();
+      const hostedNow = await PeerExamServer.snapshot();
+      if (
+        info.running &&
+        hostedNow &&
+        String(hostedNow.roomId ?? '') === String(roomId) &&
+        hostedNow.examinationCode === examCode
+      ) {
+        return hostedNow;
+      }
+
+      await PeerExamServer.start({ scheduleId: sid, roomId, examCode });
+      const hosted = await PeerExamServer.snapshot();
+      if (!hosted) throw new Error('Unable to start the local examination server on this phone.');
+      return hosted;
+    };
+
+    if (await OfflineStore.isOfflineMode()) {
+      return startPeerHost();
+    }
+
+    if (!roomId) {
+      throw new Error('Select a room first. Each room has its own examination code and QR.');
+    }
+
+    try {
+      const netState = await import('expo-network').then((m) => m.getNetworkStateAsync());
+      const hostIp = await import('expo-network').then((m) => m.getIpAddressAsync());
+
+      const body: Record<string, unknown> = {
+        examination_schedule_id: Number(sessionId),
+        wifi_ssid: netState.type === 'WIFI' ? (netState as any).ssid : null,
+        local_server_ip: hostIp && hostIp !== '0.0.0.0' ? hostIp : null,
+      };
+      if (questionBankId) body.question_bank_id = questionBankId;
+      if (roomId) body.examination_room_id = Number(roomId);
+
+      const json = await apiRequest<LobbyResponse>('/proctor/sessions', {
+        method: 'POST',
+        body,
+      });
+      if (!json.data) throw new Error(json.message || 'Unable to open lobby.');
+      await setStoredCode(json.data.examinationCode);
+      return json.data;
+    } catch (error) {
+      // Pack already on phone + Laravel unreachable → host on this device.
+      if (await OfflineStore.hasPack()) {
+        await OfflineStore.setOfflineMode(true);
+        return startPeerHost();
+      }
+      throw error instanceof Error
+        ? error
+        : new Error('Unable to open lobby. Download the offline pack while online first.');
+    }
+  },
+
+  /** Open lobby once if none exists; otherwise return the active lobby. */
+  async ensureLobby(
+    sessionId: string,
+    questionBankId?: number,
+    roomId?: string,
+  ): Promise<LobbySnapshot> {
+    // Offline / peer: always (re)start the local server so a QR with a live host IP exists.
+    if (await OfflineStore.isOfflineMode()) {
+      return this.openLobby(sessionId, questionBankId, roomId);
+    }
+
+    try {
+      const existing = await this.fetchProctorLobby(sessionId, roomId);
+      if (existing) return existing;
+      return this.openLobby(sessionId, questionBankId, roomId);
+    } catch (error) {
+      if (await OfflineStore.hasPack()) {
+        await OfflineStore.setOfflineMode(true);
+        return this.openLobby(sessionId, questionBankId, roomId);
+      }
+      throw error;
+    }
+  },
+
+  /** Kept for compatibility; opens/reuses real lobby (no demo seeding). */
+  async seedDemoStudents(sessionId: string): Promise<LobbySnapshot> {
+    return this.ensureLobby(sessionId);
+  },
+
+  async fetchProctorLobby(
+    sessionId: string,
+    roomId?: string,
+    examSessionId?: string,
+  ): Promise<LobbySnapshot | null> {
+    // 1. LOCAL-FIRST: Always check the peer server cache first, especially for offline/ended.
+    // Restoration ensures memory is populated from the last encrypted session file.
+    const restored = await PeerExamServer.restore();
+    if (restored) {
+      const hosted = await PeerExamServer.snapshot();
+      if (hosted && peerMatchesRequest(hosted, sessionId, roomId)) {
+        if (__DEV__) console.debug('[LobbyRepository] Found matching local session', { status: hosted.status });
+        return hosted;
+      }
+    }
+
+    // 2. OFFLINE GUARD: If we're strictly offline, we don't fallback to API.
+    if (await OfflineStore.isOfflineMode()) {
+      return null;
+    }
+
+    // 3. CLOUD FALLBACK: If not found locally or matching failed, try the server.
+    try {
+      const qs = roomId
+        ? `?examination_room_id=${encodeURIComponent(roomId)}`
+        : '';
+      const bySchedule = await apiRequest<LobbyResponse>(
+        `/proctor/schedules/${sessionId}/lobby${qs}`,
+      );
+
+      if (bySchedule?.data) {
+        await setStoredCode(bySchedule.data.examinationCode);
+        return bySchedule.data;
+      }
+    } catch {
+      if (await OfflineStore.hasPack()) {
+        await OfflineStore.setOfflineMode(true);
+        return null;
+      }
+    }
+
+    // Ended sessions: load by exam session id (view results / sync).
+    if (examSessionId) {
+      const byId = await apiRequest<LobbyResponse>(
+        `/proctor/sessions/${examSessionId}`,
+      ).catch(() => null);
+      if (byId?.data) {
+        await setStoredCode(byId.data.examinationCode);
+        return byId.data;
+      }
+    }
+
+    return null;
+  },
+
+  async getLobby(sessionId?: string, roomId?: string): Promise<LobbySnapshot | null> {
+    if (__DEV__) console.debug('[LobbyRepository.getLobby] called', { sessionId, roomId });
+
+    // Proctor phone hosting: it owns the lobby state, so read it directly.
+    const hosted = await PeerExamServer.snapshot();
+    if (hosted && peerMatchesRequest(hosted, sessionId, roomId)) {
+      if (__DEV__) console.debug('[LobbyRepository.getLobby] returning hosted peer snapshot', { status: hosted.status });
+      return hosted;
+    }
+
+    // Student joined to a proctor phone: poll that phone.
+    if (await PeerExamClient.isActive()) {
+      if (__DEV__) console.debug('[LobbyRepository.getLobby] PeerExamClient active — will poll proctor phone');
+      let participation = await appStorage.getItem(STORAGE_KEYS.participationToken);
+
+      // Defensive fallback: some joins may have saved progress but not the participation token.
+      if (!participation) {
+        try {
+          const raw = await appStorage.getItem(STORAGE_KEYS.studentProgress);
+          if (raw) {
+            const parsed = JSON.parse(raw) as any;
+            if (parsed?.participationToken) participation = parsed.participationToken;
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+
+      if (participation) {
+        if (__DEV__) console.debug('[LobbyRepository.getLobby] using participation token (snippet)', { participation: String(participation).slice(0, 8) });
+        try {
+          const pulse = await PeerExamClient.request<{
+            roomStatus?: string;
+            authorityStatus?: string;
+            myStatus?: string;
+          }>('/status', {
+            method: 'POST',
+            body: { participation_token: participation },
+            timeoutMs: 4000,
+          });
+          const { ExamLifecycle } = await import('@/features/examinations/services/examLifecycle');
+          const roomStatus = pulse?.roomStatus || 'lobby_open';
+          await ExamLifecycle.applyFromServer(roomStatus);
+          const { useLobbyStore } = await import('@/features/lobby/stores/lobbyStore');
+          const cached = useLobbyStore.getState().snapshot;
+          const status =
+            ExamLifecycle.peek().status === 'ACTIVE'
+              ? 'in_progress'
+              : ExamLifecycle.peek().status === 'ENDED'
+                ? 'ended'
+                : roomStatus === 'in_progress'
+                  ? 'in_progress'
+                  : roomStatus === 'ended'
+                    ? 'ended'
+                    : cached?.status ?? 'lobby_open';
+          if (cached) {
+            return { ...cached, status, my_status: pulse?.myStatus as any };
+          }
+          return {
+            status,
+            students: [],
+            registeredCount: 0,
+            connectedCount: 0,
+            waitingCount: 0,
+            takingCount: 0,
+            finishedCount: 0,
+            warningCount: 0,
+            terminatedCount: 0,
+            violationsDetected: 0,
+            notYetConnectedCount: 0,
+          } as LobbySnapshot;
+        } catch (err) {
+          if (__DEV__) console.warn('[LOBBY DEBUG] Peer poll failed:', err);
+          throw err;
+        }
+      }
+
+      // FALLBACK: If no participation token yet, get basic lobby info via /resolve
+      const code = await getStoredCode();
+      if (code) {
+          try {
+              const resolved = await PeerExamClient.request<any>('/resolve', {
+                  method: 'POST',
+                  body: { code }
+              });
+              return {
+                  schedule: resolved.schedule,
+                  session: resolved.session,
+                  status: resolved.status || 'lobby_open',
+                  examinationCode: resolved.examinationCode,
+                  students: [],
+                  registeredCount: resolved.session?.registeredStudents ?? 0,
+                  connectedCount: 0,
+              } as unknown as LobbySnapshot;
+          } catch {
+              return null;
+          }
+      }
+      if (__DEV__) console.debug('[LobbyRepository.getLobby] PeerExamClient active but no participation token found');
+    }
+
+    if (await OfflineStore.isOfflineMode()) {
+      // Without a live peer host there is no waiting list yet — openLobby starts hosting.
+      const scheduleId =
+        (await appStorage.getItem(STORAGE_KEYS.offlineScheduleId)) ||
+        String(sessionId || '').replace(/^offline-/, '');
+      const opened = await OfflineStore.getOpenedRooms();
+      const openedEntry = roomId
+        ? opened[OfflineStore.roomKey(scheduleId, roomId)]
+        : Object.values(opened).find((r) => r.status !== 'ended');
+      const examCode =
+        openedEntry?.code ||
+        (await appStorage.getItem(STORAGE_KEYS.offlineExamCode)) ||
+        (await getStoredCode());
+      if (!examCode) return null;
+
+      const resolved = await OfflineExamRepository.resolveOfflineCode(examCode);
+      if (!resolved) return null;
+      const canonical = resolved.examinationCode || examCode;
+      await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, resolved.schedule.id);
+      await appStorage.setItem(STORAGE_KEYS.offlineExamCode, canonical);
+      await setStoredCode(canonical);
+      const registered = Number(resolved.session.registeredStudents ?? 0);
+      return {
+        schedule: resolved.schedule,
+        session: resolved.session,
+        status: openedEntry?.status || 'lobby_open',
+        examinationCode: canonical,
+        qrValue: canonical,
+        roomName: resolved.session.roomName,
+        roomId: resolved.session.roomId ? Number(resolved.session.roomId) : undefined,
+        registeredCount: registered,
+        connectedCount: 0,
+        notYetConnectedCount: registered,
+        waitingCount: 0,
+        takingCount: 0,
+        finishedCount: 0,
+        warningCount: 0,
+        terminatedCount: 0,
+        violationsDetected: 0,
+        students: [],
+        can_control: true,
+      } as LobbySnapshot;
+    }
+
+    const proctorToken = await appStorage.getItem(STORAGE_KEYS.proctorToken);
+
+    // Proctor path first when authenticated as proctor (do not auto-create).
+    if (proctorToken && sessionId) {
+      return this.fetchProctorLobby(sessionId, roomId);
+    }
+
+    // Student path: poll with participation token.
+    try {
+      const participation = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      if (participation) {
+        const json = await apiRequest<{ success: boolean; data?: LobbySnapshot }>(
+          `/exam/lobby?participation_token=${encodeURIComponent(participation)}`,
+          { auth: false },
+        );
+        return json.data ?? null;
+      }
+    } catch {
+      // fall through
+    }
+
+    if (!sessionId) {
+      const code = await getStoredCode();
+      if (code) return this.getLobbyByCode(code);
+      return null;
+    }
+
+    const lobby = await this.fetchProctorLobby(sessionId, roomId);
+    return lobby ?? null;
+  },
+
+  async getLobbyByCode(rawCode: string): Promise<LobbySnapshot | null> {
+    const code = rawCode.trim().toUpperCase();
+    const json = await apiRequest<{ success: boolean; data?: LobbySnapshot }>(
+      `/exam/lobby?code=${encodeURIComponent(code)}`,
+      { auth: false },
+    );
+    if (!json.data) return null;
+    await setStoredCode(code);
+    return json.data;
+  },
+
+  async regenerateQr(sessionId: string, roomId?: string): Promise<LobbySnapshot> {
+    const current = await this.ensureLobby(sessionId, undefined, roomId);
+    const examSessionId = current?.session?.examSessionId;
+    if (!examSessionId) {
+      return this.openLobby(sessionId, undefined, roomId);
+    }
+
+    const json = await apiRequest<LobbyResponse>(
+      `/proctor/sessions/${examSessionId}/regenerate-code`,
+      { method: 'POST' },
+    );
+    if (!json.data) throw new Error(json.message || 'Unable to regenerate code.');
+    await setStoredCode(json.data.examinationCode);
+    return json.data;
+  },
+
+  async verifyExaminationCode(rawCode: string): Promise<ExamCodeValidation> {
+    // Peer QR: the proctor phone is the exam server. Its LAN address travels in
+    // the QR, so no Laravel and no pack on this phone are needed.
+    const isPeerPayload = rawCode.trim().startsWith('{') && rawCode.includes('"metcc_peer"');
+    const peer = parsePeerQr(rawCode);
+    if (peer) {
+      await PeerExamClient.setTarget(peer);
+      const resolved = await PeerExamClient.request<{
+        schedule: ExamCodeValidation['schedule'];
+        session: ExamCodeValidation['session'];
+        examinationCode: string;
+      }>('/resolve', { method: 'POST', body: { code: peer.code } });
+
+      await setStoredCode(resolved.examinationCode || peer.code);
+      await OfflineStore.setOfflineMode(false);
+      return {
+        valid: true,
+        message: 'Connected to the proctor phone.',
+        schedule: resolved.schedule,
+        session: resolved.session,
+        examinationCode: resolved.examinationCode || peer.code,
+      };
+    }
+
+    if (isPeerPayload) {
+      throw new Error('Invalid or unreadable Proctor examination QR. Please scan again.');
+    }
+
+    const code = extractExaminationCode(rawCode);
+
+    // If there is an active peer target, resolve via PeerExamClient
+    if (await PeerExamClient.isActive()) {
+      try {
+        const resolved = await PeerExamClient.request<{
+          schedule: ExamCodeValidation['schedule'];
+          session: ExamCodeValidation['session'];
+          examinationCode: string;
+        }>('/resolve', { method: 'POST', body: { code } });
+
+        await setStoredCode(resolved.examinationCode || code);
+        return {
+          valid: true,
+          message: 'Connected to the proctor phone.',
+          schedule: resolved.schedule,
+          session: resolved.session,
+          examinationCode: resolved.examinationCode || code,
+        };
+      } catch (err) {
+        console.warn('[LobbyRepository] Peer resolve failed:', err);
+      }
+    }
+
+    // A stale peer target must not hijack a plain code entered later.
+    await PeerExamClient.clear();
+
+    // Only Proctor role can resolve offline codes locally without LAN peer server
+    const isProctorUser = Boolean(await appStorage.getItem(STORAGE_KEYS.proctorToken));
+    if (isProctorUser) {
+      const offline = await OfflineExamRepository.resolveOfflineCode(code);
+      if (offline) {
+        const canonical = offline.examinationCode || code;
+        await setStoredCode(canonical);
+        await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, offline.schedule.id);
+        await appStorage.setItem(STORAGE_KEYS.offlineExamCode, canonical);
+        await OfflineStore.setOfflineMode(true);
+        return {
+          valid: true,
+          message: offline.message,
+          schedule: offline.schedule as ExamCodeValidation['schedule'],
+          session: offline.session as ExamCodeValidation['session'],
+          examinationCode: canonical,
+        };
+      }
+    }
+
+    const json = await apiRequest<{
+      success: boolean;
+      valid?: boolean;
+      message?: string;
+      examinationCode?: string;
+      data?: {
+        schedule?: ExamCodeValidation['schedule'];
+        session?: ExamCodeValidation['session'];
+      };
+      schedule?: ExamCodeValidation['schedule'];
+      session?: ExamCodeValidation['session'];
+    }>('/exam/resolve', {
+      method: 'POST',
+      auth: false,
+      body: { code },
+    });
+
+    const schedule = json.data?.schedule ?? json.schedule;
+    const session = json.data?.session ?? json.session;
+    const valid = Boolean(json.valid ?? json.success) && Boolean(schedule && session);
+    if (valid && schedule && session) {
+      await setStoredCode(json.examinationCode || code);
+      await OfflineStore.setOfflineMode(false);
+    }
+    return {
+      valid,
+      message: json.message,
+      schedule: schedule ?? undefined,
+      session: session ?? undefined,
+      examinationCode: json.examinationCode || code,
+    };
+  },
+
+  async validatePasskey(passkey: string): Promise<{
+    classification: 'valid' | 'wrong_schedule' | 'already_completed';
+    message?: string;
+    student?: StudentRecord;
+    schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
+  }> {
+    const code = (await getStoredCode()) || '';
+    if (!code) throw new Error('Missing examination code. Scan QR again.');
+
+    if (await PeerExamClient.isActive()) {
+      const response = await PeerExamClient.request<{
+        classification?: 'valid' | 'wrong_schedule' | 'already_completed';
+        message?: string;
+        student?: StudentRecord;
+        schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
+      }>('/passkey', {
+        method: 'POST',
+        body: {
+          code,
+          passkey: passkey.trim().toUpperCase(),
+        },
+      });
+      if (response.classification === 'wrong_schedule') {
+        return {
+          classification: 'wrong_schedule',
+          message: response.message || 'This examination key belongs to a different schedule.',
+          schedule: response.schedule,
+        };
+      }
+      if (response.classification === 'already_completed') {
+        return {
+          classification: 'already_completed',
+          message:
+            response.message ||
+            'Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.',
+          student: response.student,
+          schedule: response.schedule,
+        };
+      }
+      if (__DEV__) {
+        console.debug('[LobbyRepository.validatePasskey] peer response', { classification: response.classification, hasStudent: Boolean(response.student), schedule: response.schedule });
+      }
+      if (!response.student) {
+        throw new Error(response.message || 'Invalid examination key.');
+      }
+      return {
+        classification: 'valid',
+        student: response.student,
+        schedule: response.schedule,
+        message: response.message,
+      };
+    }
+
+    if (await OfflineStore.isOfflineMode()) {
+      const offline = await OfflineExamRepository.validatePasskey(code, passkey);
+      if (!offline) throw new Error('Invalid examination key for this offline session.');
+      if (offline.classification === 'wrong_schedule') {
+        return {
+          classification: 'wrong_schedule',
+          message: offline.message || 'This examination key belongs to a different examination schedule.',
+        };
+      }
+      if (offline.classification === 'already_completed') {
+        return {
+          classification: 'already_completed',
+          message:
+            offline.message ||
+            'Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.',
+          student: offline.student,
+          schedule: offline.schedule,
+        };
+      }
+      if (!offline.student) {
+        throw new Error(offline.message || 'Invalid examination key for this offline session.');
+      }
+      return {
+        classification: 'valid',
+        student: offline.student,
+        schedule: offline.schedule,
+        message: offline.message,
+      };
+    }
+
+    try {
+      const json = await apiRequest<{
+        success: boolean;
+        message?: string;
+        data?: {
+          student: StudentRecord & { hasGmail?: boolean; gmail?: string | null };
+          schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
+        };
+      }>('/exam/passkey/validate', {
+        method: 'POST',
+        auth: false,
+        body: { code, passkey: passkey.trim().toUpperCase() },
+      });
+
+      if (!json.data?.student) {
+        // Server may indicate the passkey belongs to a different schedule
+        const sched = json.data?.schedule ?? (json as any).schedule;
+        if (sched) {
+          return {
+            classification: 'wrong_schedule',
+            message: json.message || 'This examination key belongs to a different schedule.',
+            schedule: sched,
+          };
+        }
+        if (json.message?.toLowerCase().includes('already')) {
+          return {
+            classification: 'already_completed',
+            message: json.message || 'Examination Already Completed\nYou have already taken this examination.',
+          };
+        }
+        throw new Error(json.message || 'Invalid examination key.');
+      }
+
+      const s = json.data.student;
+    const name = s.fullName || 'Student';
+    const parts = name.trim().split(/\s+/);
+      return {
+        classification: 'valid',
+        student: {
+          id: String(s.id),
+          studentId: s.studentId,
+          firstName: parts[0] || name,
+          middleName: '',
+          lastName: parts.slice(1).join(' ') || '',
+          fullName: name,
+          email: s.email || s.gmail || '',
+          programId: s.programCode || '',
+          programCode: s.programCode || '',
+          programName: s.programName || s.programCode || '',
+          sex: 'Male',
+          avatarInitials: s.avatarInitials || 'ST',
+          registration_id: s.registration_id,
+          selectionStatus: 'ready',
+          selectable: true,
+        },
+        schedule: json.data.schedule,
+      };
+    } catch (e) {
+      if (e instanceof ApiError && e.payload) {
+        const payload = e.payload as any;
+        const sched = payload?.data?.schedule ?? payload?.schedule;
+        if (sched) {
+          return {
+            classification: 'wrong_schedule',
+            message: payload?.message || 'This examination key belongs to a different schedule.',
+            schedule: sched,
+          };
+        }
+      }
+      throw e instanceof Error ? e : new Error(String(e));
+    }
+  },
+
+  async joinWithPasskey(
+    student: StudentRecord,
+    sessionId: string,
+    passkey: string,
+  ): Promise<LobbySnapshot> {
+    const code = (await getStoredCode()) || '';
+    if (!code) throw new Error('Missing examination code. Scan QR again.');
+
+    if (await PeerExamClient.isActive()) {
+      const preloadedHash = (await appStorage.getItem('tcc.student.preload.sha256')) || '';
+      const joined = await PeerExamClient.request<{
+        registration_id: number;
+        participation_token: string;
+        lobby: LobbySnapshot;
+      }>('/join', {
+        method: 'POST',
+        body: {
+          code,
+          passkey: passkey.trim().toUpperCase(),
+          gmail: student.email || undefined,
+          student_pack_hash: preloadedHash,
+          package_hash: preloadedHash,
+          is_ready: Boolean(preloadedHash),
+          download_percent: preloadedHash ? 100 : 0,
+          hash_verified: Boolean(preloadedHash),
+          module_ready: Boolean(preloadedHash),
+        },
+      });
+
+      await appStorage.setItem(
+        STORAGE_KEYS.participationToken,
+        joined.participation_token,
+      );
+      await appStorage.setItem(
+        STORAGE_KEYS.studentProgress,
+        JSON.stringify({
+          registrationId: joined.registration_id,
+          applicantId: student.id,
+          applicantCode: student.studentId,
+          sessionId,
+          participationToken: joined.participation_token,
+          peer: true,
+        }),
+      );
+      if (__DEV__) {
+        console.debug('[LobbyRepository.joinWithPasskey] peer joined', { registration_id: joined.registration_id, participation_snippet: String(joined.participation_token).slice(0, 8) });
+      }
+      return joined.lobby;
+    }
+
+    if (await OfflineStore.isOfflineMode()) {
+      return this.joinStudent(student, sessionId);
+    }
+
+    const json = await apiRequest<{
+      success: boolean;
+      message?: string;
+      data?: {
+        registration_id: number;
+        participation_token: string;
+        lobby: LobbySnapshot;
+      };
+    }>('/exam/join-passkey', {
+      method: 'POST',
+      auth: false,
+      body: {
+        code,
+        passkey: passkey.trim().toUpperCase(),
+        gmail: student.email || undefined,
+      },
+    });
+
+    if (!json.data) throw new Error(json.message || 'Unable to join examination.');
+
+    await appStorage.setItem(
+      STORAGE_KEYS.participationToken,
+      json.data.participation_token,
+    );
+    await appStorage.setItem(
+      STORAGE_KEYS.studentProgress,
+      JSON.stringify({
+        registrationId: json.data.registration_id,
+        applicantId: student.id,
+        sessionId,
+        participationToken: json.data.participation_token,
+      }),
+    );
+    if (__DEV__) {
+      console.debug('[LobbyRepository.joinWithPasskey] server joined', { registration_id: json.data.registration_id, participation_snippet: String(json.data.participation_token).slice(0, 8) });
+    }
+
+    return json.data.lobby;
+  },
+
+  async joinStudent(student: StudentRecord, sessionId: string): Promise<LobbySnapshot> {
+    const code = (await getStoredCode()) || '';
+    if (!code) throw new Error('Missing examination code. Scan QR again.');
+
+    if (await OfflineStore.isOfflineMode()) {
+      const token = `offline-${student.id}-${Date.now()}`;
+      const scheduleId =
+        (await appStorage.getItem(STORAGE_KEYS.offlineScheduleId)) ||
+        String(sessionId).replace(/^offline-/, '');
+      await appStorage.setItem(STORAGE_KEYS.participationToken, token);
+      await appStorage.setItem(
+        STORAGE_KEYS.studentProgress,
+        JSON.stringify({
+          registrationId: student.registration_id,
+          applicantId: student.id,
+          applicantCode: student.studentId,
+          sessionId,
+          scheduleId,
+          participationToken: token,
+          offline: true,
+        }),
+      );
+      const lobby = await this.getLobby(sessionId);
+      if (!lobby) throw new Error('Offline lobby unavailable. Download the exam pack first.');
+      const now = new Date().toISOString();
+      const students: LobbyStudent[] = lobby.students.map((s) =>
+        s.studentId === student.studentId || s.id === String(student.registration_id)
+          ? {
+              ...s,
+              status: 'taking_exam' as const,
+              startedAt: now,
+              lastActivityAt: now,
+            }
+          : s,
+      );
+      return {
+        ...lobby,
+        connectedCount: 1,
+        waitingCount: Math.max(0, students.filter((s) => s.status === 'waiting').length),
+        takingCount: students.filter((s) => s.status === 'taking_exam').length,
+        students,
+      };
+    }
+
+    const json = await apiRequest<{
+      success: boolean;
+      message?: string;
+      data?: {
+        registration_id: number;
+        participation_token: string;
+        lobby: LobbySnapshot;
+      };
+    }>('/exam/join', {
+      method: 'POST',
+      auth: false,
+      body: {
+        code,
+        applicant_id: Number(student.id),
+        gmail: student.email || undefined,
+      },
+    });
+
+    if (!json.data) throw new Error(json.message || 'Unable to join examination.');
+
+    await appStorage.setItem(
+      STORAGE_KEYS.participationToken,
+      json.data.participation_token,
+    );
+    await appStorage.setItem(
+      STORAGE_KEYS.studentProgress,
+      JSON.stringify({
+        registrationId: json.data.registration_id,
+        applicantId: student.id,
+        sessionId,
+        participationToken: json.data.participation_token,
+      }),
+    );
+
+    return json.data.lobby;
+  },
+
+  async startExamination(sessionId: string, roomId?: string): Promise<LobbySnapshot> {
+    const current = await this.ensureLobby(sessionId, undefined, roomId);
+
+    // Peer mode: flipping local state releases the questions to every joined phone.
+    if (await PeerExamServer.snapshot()) {
+      console.log('[PROCTOR] Examination Started');
+      return PeerExamServer.startExam();
+    }
+
+    if (await OfflineStore.isOfflineMode()) {
+      if (!PeerExamServer.isSupported()) {
+        throw new Error(
+          'This build cannot host student phones. Install a development build (EAS) — Expo Go and the web preview cannot run peer mode.',
+        );
+      }
+      const sid = String(sessionId).replace(/^offline-/, '');
+      const examCode = current.examinationCode;
+      if (!examCode) {
+        throw new Error('Open the room lobby first to generate an examination code.');
+      }
+      await PeerExamServer.start({ scheduleId: sid, roomId: roomId ?? null, examCode });
+      return PeerExamServer.startExam();
+    }
+
+    const examSessionId = current?.session?.examSessionId;
+    if (!examSessionId) throw new Error('Examination session not found.');
+
+    const json = await apiRequest<LobbyResponse>(
+      `/proctor/sessions/${examSessionId}/start`,
+      { method: 'POST' },
+    );
+    if (!json.data) throw new Error(json.message || 'Unable to start examination.');
+    return json.data;
+  },
+
+  async closeLobby(sessionId: string, roomId?: string): Promise<void> {
+    const sid = String(sessionId).replace(/^offline-/, '');
+
+    // 1. Peer server closure (local hosting)
+    const peer = await PeerExamServer.snapshot();
+    if (peer && peerMatchesRequest(peer, sessionId, roomId)) {
+      if (peer.status === 'in_progress') {
+        throw new Error('Examination has started. Use End Examination instead.');
+      }
+      await PeerExamServer.closeLobby();
+      // If we're strictly in offline mode, we can stop here.
+      if (await OfflineStore.isOfflineMode()) {
+        await setStoredCode(null);
+        return;
+      }
+    }
+
+    // 2. Central server closure (online)
+    let examSessionId: number | null = null;
+    let lobbyStatus: string | null = null;
+
+    if (!(await OfflineStore.isOfflineMode())) {
+      try {
+        const qs = roomId ? `?examination_room_id=${encodeURIComponent(roomId)}` : '';
+        const bySchedule = await apiRequest<LobbyResponse>(`/proctor/schedules/${sessionId}/lobby${qs}`);
+        const lobby = bySchedule?.data;
+        lobbyStatus = lobby?.status ?? null;
+        if (lobbyStatus === 'in_progress') {
+          throw new Error('Examination has started. Use End Examination instead.');
+        }
+        examSessionId = lobby?.session?.examSessionId ?? null;
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('End Examination')) {
+          throw err;
+        }
+        // If the server is unreachable or lobby not found on server, continue to clear local flags.
+      }
+    }
+
+    try {
+      if (examSessionId && lobbyStatus === 'lobby_open') {
+        await apiRequest(`/proctor/sessions/${examSessionId}/close`, { method: 'POST' });
+      } else if (!(await OfflineStore.isOfflineMode())) {
+        const qs = roomId ? `?examination_room_id=${encodeURIComponent(roomId)}` : '';
+        await apiRequest(`/proctor/schedules/${sessionId}/close${qs}`, { method: 'POST' });
+      }
+    } catch {
+      // Best-effort for server closure; local clearing below is more critical for UI state.
+    }
+
+    if (roomId) {
+      await OfflineStore.clearOpenedRoom(sid, roomId);
+    }
+
+    await setStoredCode(null);
+
+    if (roomId) {
+      await OfflineStore.clearOpenedRoom(sid, roomId);
+    }
+
+    await setStoredCode(null);
+  },
+
+  async endExamination(sessionId: string, roomId?: string): Promise<LobbySnapshot> {
+    const peer = await PeerExamServer.snapshot();
+    let peerSnapshot: LobbySnapshot | null = null;
+    if (peer && peerMatchesRequest(peer, sessionId, roomId)) {
+      if (peer.status === 'lobby_open') {
+        throw new Error('Examination has not started. Close the lobby instead.');
+      }
+      peerSnapshot =
+        peer.status === 'ended' ? peer : await PeerExamServer.endExam();
+    }
+
+    let examSessionId = peerSnapshot?.session?.examSessionId ?? null;
+    if (!examSessionId && !(await OfflineStore.isOfflineMode())) {
+      try {
+        const qs = roomId
+          ? `?examination_room_id=${encodeURIComponent(roomId)}`
+          : '';
+        const bySchedule = await apiRequest<LobbyResponse>(
+          `/proctor/schedules/${sessionId}/lobby${qs}`,
+        );
+        const lobby = bySchedule?.data;
+        if (lobby?.status === 'lobby_open') {
+          throw new Error('Examination has not started. Close the lobby instead.');
+        }
+        examSessionId = lobby?.session?.examSessionId ?? null;
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('Close the lobby')) {
+          throw err;
+        }
+        examSessionId = null;
+      }
+    }
+
+    if (examSessionId) {
+      try {
+        const json = await apiRequest<LobbyResponse>(
+          `/proctor/sessions/${examSessionId}/end`,
+          { method: 'POST' },
+        );
+        if (json.data) {
+          if (!peerSnapshot && roomId) {
+            const code = json.data.examinationCode || 'ENDED';
+            await OfflineStore.setOpenedRoom(
+              String(sessionId).replace(/^offline-/, ''),
+              roomId,
+              code,
+              'ended',
+            );
+          }
+          return json.data;
+        }
+      } catch {
+        // Fall through to peer snapshot if Laravel is unreachable.
+      }
+    }
+
+    if (peerSnapshot) return peerSnapshot;
+    throw new Error('Examination session not found.');
+  },
+
+  async finishStudent(
+    studentId: string,
+    reason: string = 'submitted',
+  ): Promise<void> {
+    void studentId;
+    void reason;
+    // Submission endpoint already marks finished; keep as no-op compatibility.
+  },
+
+  async resumeStudent(studentId: string): Promise<LobbySnapshot | null> {
+    void studentId;
+    return null;
+  },
+
+  async terminateStudent(studentId: string): Promise<LobbySnapshot | null> {
+    if (await PeerExamServer.snapshot()) {
+      return PeerExamServer.terminateStudent(studentId);
+    }
+    // studentId in lobby cards is registration id string.
+    await apiRequest(`/proctor/registrations/${studentId}/terminate`, {
+      method: 'POST',
+    });
+    return null;
+  },
+
+  async removeStudent(studentId: string): Promise<LobbySnapshot | null> {
+    const peer = await PeerExamServer.snapshot();
+    if (peer) {
+      return PeerExamServer.removeStudent(studentId);
+    }
+    // studentId in lobby cards is registration id string.
+    await apiRequest(`/proctor/registrations/${studentId}/remove`, {
+      method: 'POST',
+    });
+    return null;
+  },
+
+  async syncPendingCount(examSessionId?: string | number): Promise<{
+    pending: number;
+    configured: boolean;
+  }> {
+    // For purely offline sessions, we check the local result outbox.
+    if (!examSessionId || String(examSessionId).startsWith('offline-')) {
+        const pending = await OfflineStore.pendingResults();
+        return {
+            pending: pending.length,
+            configured: true // Local sync is always "configured"
+        };
+    }
+
+    const q = examSessionId != null ? `?exam_session_id=${examSessionId}` : '';
+    const json = await apiRequest<{
+      success: boolean;
+      data?: { pending: number; configured: boolean };
+    }>(`/proctor/sync/pending${q}`);
+    return {
+      pending: json.data?.pending ?? 0,
+      configured: Boolean(json.data?.configured),
+    };
+  },
+
+  async syncToAdmin(examSessionId?: string | number): Promise<{
+    synced: number;
+    failed: number;
+    message: string;
+  }> {
+    // Logic for purely offline results (Root Cause: Orphaned Offline Data)
+    if (!examSessionId || String(examSessionId).startsWith('offline-')) {
+        const { OfflineExamRepository } = await import('@/features/synchronization/services/offlineExamRepository');
+        const res = await OfflineExamRepository.syncQueuedToCloud();
+        return { synced: res.synced, failed: 0, message: res.message };
+    }
+
+    const json = await apiRequest<{
+      success: boolean;
+      message?: string;
+      data?: { synced: number; failed: number; message?: string };
+    }>('/proctor/sync/push', {
+      method: 'POST',
+      body: examSessionId != null ? { exam_session_id: Number(examSessionId) } : {},
+    });
+    if (json.success) console.log('[SYNC] Sync to cloud successful.');
+    return {
+      synced: json.data?.synced ?? 0,
+      failed: json.data?.failed ?? 0,
+      message: json.message || json.data?.message || 'Sync complete.',
+    };
+  },
+
+  /** Option B: while LAN server has internet, pull schedules/banks/students from central admin. */
+  async pullFromAdmin(examDate?: string): Promise<{ message: string; counts: Record<string, number> }> {
+    const json = await apiRequest<{
+      success: boolean;
+      message?: string;
+      data?: { message?: string; counts?: Record<string, number> };
+    }>('/proctor/sync/pull', {
+      method: 'POST',
+      body: examDate ? { exam_date: examDate } : {},
+    });
+    return {
+      message: json.message || json.data?.message || 'Pull complete.',
+      counts: json.data?.counts ?? {},
+    };
+  },
+
+  async recordStudentViolation(
+    studentId: string,
+    type: string,
+    message?: string,
+  ): Promise<{ violationCount: number; terminated: boolean }> {
+    void studentId;
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) {
+      return { violationCount: 0, terminated: false };
+    }
+
+    // Peer mode: the proctor phone shows the violation live in its lobby.
+    if (await PeerExamClient.isActive()) {
+      try {
+        const json = await PeerExamClient.request<{
+          violation_count: number;
+          lobby_status?: string;
+        }>('/violation', {
+          method: 'POST',
+          body: { participation_token: token, type, message: message || undefined },
+        });
+        const count = Number(json.violation_count ?? 0);
+        return {
+          violationCount: count,
+          terminated: count >= MAX_EXAM_VIOLATIONS || json.lobby_status === 'terminated',
+        };
+      } catch {
+        return { violationCount: 0, terminated: false };
+      }
+    }
+
+    if (await OfflineStore.isOfflineMode()) {
+      return { violationCount: 0, terminated: false };
+    }
+    try {
+      const json = await apiRequest<{
+        success: boolean;
+        data?: {
+          violation_count: number;
+          lobby_status?: string;
+        };
+      }>('/exam/violation', {
+        method: 'POST',
+        auth: false,
+        body: {
+          participation_token: token,
+          type,
+          message: message || undefined,
+        },
+      });
+      const count = Number(json.data?.violation_count ?? 0);
+      return {
+        violationCount: count,
+        terminated: count >= MAX_EXAM_VIOLATIONS || json.data?.lobby_status === 'terminated',
+      };
+    } catch {
+      return { violationCount: 0, terminated: false };
+    }
+  },
+
+  async touchActivity(studentId: string): Promise<void> {
+    void studentId;
+  },
+
+  async acknowledgeStart(phase: 'received' | 'entered'): Promise<void> {
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token || !(await PeerExamClient.isActive())) return;
+    try {
+      await PeerExamClient.request('/ack-start', {
+        method: 'POST',
+        body: { participation_token: token, phase },
+        timeoutMs: 4000,
+      });
+    } catch (err) {
+      console.warn('[STUDENT] Start ACK failed:', phase, err);
+    }
+  },
+
+  async sendHeartbeat(): Promise<{
+    ok: boolean;
+    message?: string;
+    status?: string;
+    roomStatus?: string;
+    authorityStatus?: string;
+    startSeq?: number;
+  }> {
+    // Peer LAN is the exam network. Never skip it because cloud is offline.
+    if (await PeerExamClient.isActive()) {
+      const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      if (!token) return { ok: false, message: 'Missing participation token.' };
+      try {
+        const { ExamPreloader } = await import('@/features/examinations/services/examPreloader');
+        const readiness = ExamPreloader.getProgress();
+        const hash = (await ExamPreloader.getPreloadedHash()) || '';
+        const pulse = await PeerExamClient.request<{
+          status?: string;
+          authorityStatus?: string;
+          startSeq?: number;
+        }>('/heartbeat', {
+          method: 'POST',
+          body: {
+            participation_token: token,
+            download_percent: readiness.percent,
+            hash_verified: readiness.hashVerified,
+            module_ready: readiness.moduleReady,
+            package_hash: hash,
+          },
+          timeoutMs: 4000,
+        });
+        return {
+          ok: true,
+          status: pulse?.status,
+          roomStatus: pulse?.status,
+          authorityStatus: pulse?.authorityStatus,
+          startSeq: pulse?.startSeq,
+        };
+      } catch (e) {
+        return {
+          ok: false,
+          message: e instanceof Error ? e.message : 'Lost the proctor phone.',
+        };
+      }
+    }
+
+    if (await OfflineStore.isOfflineMode()) {
+      return { ok: true };
+    }
+
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) return { ok: false, message: 'Missing participation token.' };
+
+    try {
+      await apiRequest('/exam/heartbeat', {
+        method: 'POST',
+        auth: false,
+        body: { participation_token: token },
+      });
+      return { ok: true };
+    } catch (e) {
+      return {
+        ok: false,
+        message: e instanceof Error ? e.message : 'Heartbeat failed.',
+      };
+    }
+  },
+
+  async reportWifiDisconnect(): Promise<void> {
+    if (await OfflineStore.isOfflineMode()) return;
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) return;
+    try {
+      await apiRequest('/exam/wifi-disconnect', {
+        method: 'POST',
+        auth: false,
+        body: { participation_token: token },
+      });
+    } catch {
+      // Best-effort; local lock still applies.
+    }
+  },
+
+  async reconnectWithCode(code: string): Promise<{ ok: boolean; message?: string }> {
+    if (await OfflineStore.isOfflineMode()) {
+      return { ok: false, message: 'Reconnect requires the campus exam server.' };
+    }
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) return { ok: false, message: 'Missing participation token.' };
+
+    if (await PeerExamClient.isActive()) {
+        try {
+            await PeerExamClient.request('/reconnect', {
+                method: 'POST',
+                body: { participation_token: token, reconnect_code: code },
+            });
+            return { ok: true };
+        } catch (e) {
+            return { ok: false, message: e instanceof Error ? e.message : 'Reconnect failed.' };
+        }
+    }
+
+    try {
+      await apiRequest('/exam/reconnect', {
+        method: 'POST',
+        auth: false,
+        body: {
+          participation_token: token,
+          reconnect_code: code,
+        },
+      });
+      return { ok: true };
+    } catch (e) {
+      return {
+        ok: false,
+        message: e instanceof Error ? e.message : 'Reconnect failed.',
+      };
+    }
+  },
+
+  async allowStudentReconnect(
+    registrationId: string,
+  ): Promise<{ reconnectCode: string; expiresAt: string; studentName?: string }> {
+    const hosted = await PeerExamServer.snapshot();
+    if (hosted) {
+        const res = await PeerExamServer.allowReconnect(registrationId);
+        if (res) return res;
+    }
+
+    const json = await apiRequest<{
+      success: boolean;
+      message?: string;
+      data?: {
+        reconnect_code: string;
+        expires_at: string;
+        student_name?: string;
+      };
+    }>(`/proctor/registrations/${registrationId}/allow-reconnect`, {
+      method: 'POST',
+    });
+    if (!json.data?.reconnect_code) {
+      throw new Error(json.message || 'Unable to issue reconnect code.');
+    }
+    return {
+      reconnectCode: json.data.reconnect_code,
+      expiresAt: json.data.expires_at,
+      studentName: json.data.student_name,
+    };
+  },
+
+  lobbyKey: lobbyQueryKey,
+};

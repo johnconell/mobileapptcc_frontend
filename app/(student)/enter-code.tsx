@@ -5,13 +5,14 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { KeyRound } from 'lucide-react-native';
-import { Button, Card, Header, Input } from '@/components/ui';
-import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
-import { LobbyRepository } from '@/repositories';
-import { useStudentStore, useLobbyStore } from '@/stores';
-import { appStorage } from '@/services/storage';
-import { STORAGE_KEYS } from '@/constants';
-import { colors } from '@/theme';
+import { Button, Card, Header, Input } from '@/shared/components/ui';
+import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
+import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { useStudentStore } from '@/features/applicants/stores/studentStore';
+import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
+import { appStorage } from '@/shared/services/storage';
+import { STORAGE_KEYS } from '@/shared/constants';
+import { colors } from '@/shared/theme';
 
 const schema = z.object({
   code: z

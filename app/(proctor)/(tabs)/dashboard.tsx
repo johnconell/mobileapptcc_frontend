@@ -27,11 +27,11 @@ import {
   GraduationCap,
   LogOut,
 } from 'lucide-react-native';
-import { Header, Button } from '@/components/ui';
-import { useProctorStore } from '@/stores';
-import { useAppTheme } from '@/hooks/useAppTheme';
-import { OfflineStore } from '@/services/offlineStore';
-import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
+import { Header, Button } from '@/shared/components/ui';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
+import { OfflineStore } from '@/features/synchronization/services/offlineStore';
+import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
 
 type ActiveLobbyDetails = {
   sessionId: string;

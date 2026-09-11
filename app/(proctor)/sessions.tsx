@@ -1,14 +1,14 @@
 import React from 'react';
 import { FlatList, Text, View, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Header } from '@/components/ui/Header';
-import { Breadcrumbs } from '@/components/ui/Breadcrumbs';
-import { EmptyState } from '@/components/ui/EmptyState';
-import { SkeletonList } from '@/components/ui/Skeleton';
-import { SessionCard } from '@/features/proctor/SessionCard';
-import { useSchedules, useSessions } from '@/hooks/useRepositories';
-import { useProctorStore } from '@/stores';
-import { safeBack } from '@/utils';
+import { Header } from '@/shared/components/ui/Header';
+import { Breadcrumbs } from '@/shared/components/ui/Breadcrumbs';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
+import { SkeletonList } from '@/shared/components/ui/Skeleton';
+import { SessionCard } from '@/features/schedules/components/SessionCard';
+import { useSchedules, useSessions } from '@/features/schedules/hooks/useSchedules';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { safeBack } from '@/shared/utils';
 
 export default function SessionsScreen() {
   const router = useRouter();

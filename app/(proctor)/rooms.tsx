@@ -16,16 +16,16 @@ import {
   ChevronRight,
   Layers,
 } from 'lucide-react-native';
-import { Header, Card, Button, EmptyState, StatusChip, Breadcrumbs } from '@/components/ui';
-import { SkeletonList } from '@/components/ui/Skeleton';
-import { useRooms, useSchedules, useSessions } from '@/hooks/useRepositories';
-import { LobbyRepository } from '@/repositories';
-import { QUERY_KEYS } from '@/constants';
-import { useProctorStore } from '@/stores';
-import { colors, shadows } from '@/theme';
-import { safeBack } from '@/utils';
-import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
-import type { ExamRoom } from '@/types';
+import { Header, Card, Button, EmptyState, StatusChip, Breadcrumbs } from '@/shared/components/ui';
+import { SkeletonList } from '@/shared/components/ui/Skeleton';
+import { useRooms, useSchedules, useSessions } from '@/features/schedules/hooks/useSchedules';
+import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { QUERY_KEYS } from '@/shared/constants';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { colors, shadows } from '@/shared/theme';
+import { safeBack } from '@/shared/utils';
+import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
+import type { ExamRoom } from '@/shared/types';
 
 function roomTone(status: string): 'success' | 'warning' | 'danger' | 'default' {
   if (status === 'lobby_open' || status === 'in_progress') return 'success';
@@ -131,7 +131,7 @@ export default function RoomsScreen() {
       }
 
       // 2. Verify Examination Pack was downloaded TODAY (required for rescheduled applicants)
-      const { OfflineStore } = await import('@/services/offlineStore');
+      const { OfflineStore } = await import('@/features/synchronization/services/offlineStore');
       const todayCheck = await OfflineStore.isPackDownloadedToday();
       if (!todayCheck.downloadedToday) {
         Alert.alert(
@@ -197,7 +197,7 @@ export default function RoomsScreen() {
       }
 
       // 3. Verify Wi-Fi / Campus LAN Network
-      const { PeerExamClient } = await import('@/services/peerExamClient');
+      const { PeerExamClient } = await import('@/features/examinations/services/peerExamClient');
       await PeerExamClient.clear(); // Clear leftover peer client targets
 
       const hasPack = await OfflineStore.hasPack();

@@ -3,20 +3,20 @@ import { Text, View, StyleSheet, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { DoorOpen, Users, UserRound } from 'lucide-react-native';
-import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
-import { Header } from '@/components/ui/Header';
-import { SkeletonDetail } from '@/components/ui/Skeleton';
-import { StatusChip } from '@/components/ui/StatusChip';
-import { useRooms, useSchedules, useSessions } from '@/hooks/useRepositories';
-import { LobbyRepository } from '@/repositories';
-import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
-import { QUERY_KEYS, STATUS_LABELS } from '@/constants';
-import { useProctorStore } from '@/stores';
-import { Breadcrumbs } from '@/components/ui/Breadcrumbs';
-import { colors } from '@/theme';
-import { safeBack } from '@/utils';
-import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
+import { Button } from '@/shared/components/ui/Button';
+import { Card } from '@/shared/components/ui/Card';
+import { Header } from '@/shared/components/ui/Header';
+import { SkeletonDetail } from '@/shared/components/ui/Skeleton';
+import { StatusChip } from '@/shared/components/ui/StatusChip';
+import { useRooms, useSchedules, useSessions } from '@/features/schedules/hooks/useSchedules';
+import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
+import { QUERY_KEYS, STATUS_LABELS } from '@/shared/constants';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { Breadcrumbs } from '@/shared/components/ui/Breadcrumbs';
+import { colors } from '@/shared/theme';
+import { safeBack } from '@/shared/utils';
+import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
 
 function statusLabel(status: string) {
   if (status === 'idle') return 'Closed';
@@ -159,7 +159,7 @@ export default function RoomDetailScreen() {
     try {
         // Ensure required exam data is present and up-to-date on this device.
         try {
-          const { OfflineStore } = await import('@/services/offlineStore');
+          const { OfflineStore } = await import('@/features/synchronization/services/offlineStore');
           const pack = await OfflineStore.getPack();
           const missing: string[] = [];
           if (!pack) {
@@ -198,8 +198,8 @@ export default function RoomDetailScreen() {
 
         // Validate Wi‑Fi / LAN server before changing any lobby state.
         // Explicitly set isProctor: true so student peer targets are NEVER pinged for Proctor room actions.
-        const { OfflineStore } = await import('@/services/offlineStore');
-        const { PeerExamClient } = await import('@/services/peerExamClient');
+        const { OfflineStore } = await import('@/features/synchronization/services/offlineStore');
+        const { PeerExamClient } = await import('@/features/examinations/services/peerExamClient');
         await PeerExamClient.clear(); // Clear any leftover student peer target on Proctor action
 
         const hasPack = await OfflineStore.hasPack();

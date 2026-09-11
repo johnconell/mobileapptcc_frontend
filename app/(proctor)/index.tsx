@@ -1,6 +1,6 @@
 import React from 'react';
 import { Redirect } from 'expo-router';
-import { useProctorStore } from '@/stores';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 
 export default function ProctorIndex() {
   const profile = useProctorStore((s) => s.profile);

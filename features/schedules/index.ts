@@ -2,11 +2,11 @@
  * Feature: schedules
  * Screen: app/(proctor)/(tabs)/examination.tsx
  */
-export { ScheduleRepository } from '@/repositories/ScheduleRepository';
-export { ScheduleCard } from '@/features/proctor/ScheduleCard';
+export { ScheduleRepository } from '@/features/schedules/repositories/ScheduleRepository';
+export { ScheduleCard } from '@/features/schedules/components/ScheduleCard';
 export {
   deriveExamSlotStatus,
   matchOpenedRoom,
   summarizeScheduleStatus,
   EXAM_STATUS_LABELS,
-} from '@/utils/examScheduleStatus';
+} from '@/features/schedules/utils/examScheduleStatus';

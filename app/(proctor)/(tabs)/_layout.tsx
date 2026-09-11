@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { Tabs } from 'expo-router';
 import { Home, ClipboardList, BarChart3, Settings } from 'lucide-react-native';
-import { useAppTheme } from '@/hooks/useAppTheme';
-import { OfflineStore } from '@/services/offlineStore';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
+import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { useSegments } from 'expo-router';
 
 export default function ProctorTabsLayout() {

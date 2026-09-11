@@ -1,9 +1,9 @@
 import React from 'react';
 import { View, StyleSheet, Text } from 'react-native';
-import { Header } from '@/components/ui/Header';
-import { Card } from '@/components/ui/Card';
+import { Header } from '@/shared/components/ui/Header';
+import { Card } from '@/shared/components/ui/Card';
 import { useRouter } from 'expo-router';
-import { colors } from '@/theme';
+import { colors } from '@/shared/theme';
 
 export default function NotificationsScreen() {
   const router = useRouter();

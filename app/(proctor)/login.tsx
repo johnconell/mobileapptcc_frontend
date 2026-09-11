@@ -12,23 +12,23 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as Linking from 'expo-linking';
 import { Shield } from 'lucide-react-native';
-import { Button } from '@/components/ui/Button';
-import { Header } from '@/components/ui/Header';
-import { Input } from '@/components/ui/Input';
-import { Card } from '@/components/ui/Card';
+import { Button } from '@/shared/components/ui/Button';
+import { Header } from '@/shared/components/ui/Header';
+import { Input } from '@/shared/components/ui/Input';
+import { Card } from '@/shared/components/ui/Card';
 import {
   proctorLoginSchema,
   type ProctorLoginValues,
-} from '@/features/proctor/proctorLoginSchema';
-import { useHardwareBack } from '@/hooks/useHardwareBack';
-import { AuthRepository } from '@/repositories';
+} from '@/features/authentication/validation/proctorLoginSchema';
+import { useHardwareBack } from '@/shared/hooks/useHardwareBack';
+import { AuthRepository } from '@/features/authentication/repositories/AuthRepository';
 import {
   getProctorGoogleRedirectUrl,
   isProctorGoogleCallback,
   parseProctorGoogleCallback,
-} from '@/services/proctorGoogleAuth';
-import { useProctorStore } from '@/stores';
-import { colors } from '@/theme';
+} from '@/features/authentication/services/proctorGoogleAuth';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { colors } from '@/shared/theme';
 
 let lastConsumedGoogleUrl: string | null = null;
 

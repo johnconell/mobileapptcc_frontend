@@ -1,7 +1,7 @@
 import React from 'react';
 import { useRouter } from 'expo-router';
-import { Loader } from '@/components/ui';
-import { useStudentStore } from '@/stores';
+import { Loader } from '@/shared/components/ui';
+import { useStudentStore } from '@/features/applicants/stores/studentStore';
 
 /** Name-list claim is retired. Live join is passkey-only. */
 export default function VerifyStudentScreen() {

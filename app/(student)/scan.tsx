@@ -2,14 +2,16 @@ import React, { useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Header, Button, Card, Skeleton, SkeletonText } from '@/components/ui';
-import { CampusWifiBlockedCard } from '@/features/student/CampusWifiBlockedCard';
-import { useCampusWifiJoinGate } from '@/hooks/useCampusWifiJoinGate';
-import { LobbyRepository, ScheduleRepository } from '@/repositories';
-import { useStudentStore, useLobbyStore } from '@/stores';
-import { appStorage } from '@/services/storage';
-import { STORAGE_KEYS } from '@/constants';
-import { colors } from '@/theme';
+import { Header, Button, Card, Skeleton, SkeletonText } from '@/shared/components/ui';
+import { CampusWifiBlockedCard } from '@/features/monitoring/components/CampusWifiBlockedCard';
+import { useCampusWifiJoinGate } from '@/features/monitoring/hooks/useCampusWifiJoinGate';
+import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { ScheduleRepository } from '@/features/schedules/repositories/ScheduleRepository';
+import { useStudentStore } from '@/features/applicants/stores/studentStore';
+import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
+import { appStorage } from '@/shared/services/storage';
+import { STORAGE_KEYS } from '@/shared/constants';
+import { colors } from '@/shared/theme';
 
 export default function ScanScreen() {
   const router = useRouter();

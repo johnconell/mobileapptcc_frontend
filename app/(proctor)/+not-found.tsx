@@ -1,5 +1,5 @@
 import { Redirect } from 'expo-router';
-import { useProctorStore } from '@/stores';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 
 /** After logout the URL can still be a tab route; send the user to Login or Dashboard. */
 export default function ProctorUnmatchedRoute() {

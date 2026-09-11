@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Header, Button, Card, Skeleton, SkeletonCard, SkeletonText } from '@/components/ui';
-import { OfflineExamRepository } from '@/services/offlineExamRepository';
-import { OfflineStore } from '@/services/offlineStore';
-import { getCloudApiBaseUrl, getApiBaseUrl } from '@/services/api';
-import { colors } from '@/theme';
-import { safeBack } from '@/utils';
+import { Header, Button, Card, Skeleton, SkeletonCard, SkeletonText } from '@/shared/components/ui';
+import { OfflineExamRepository } from '@/features/synchronization/services/offlineExamRepository';
+import { OfflineStore } from '@/features/synchronization/services/offlineStore';
+import { getCloudApiBaseUrl, getApiBaseUrl } from '@/shared/services/api';
+import { colors } from '@/shared/theme';
+import { safeBack } from '@/shared/utils';
 
 export default function OfflinePrepareScreen() {
   const router = useRouter();

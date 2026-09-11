@@ -1,8 +1,8 @@
 /**
  * Feature: monitoring (wifi, network, keep-awake related gates)
  */
-export { startNetworkMonitoring } from '@/services/networkMonitor';
-export { assertCampusWifiForJoin } from '@/services/campusWifiGate';
-export { useWifiExamGate } from '@/hooks/useWifiExamGate';
-export { useCampusWifiJoinGate } from '@/hooks/useCampusWifiJoinGate';
-export { useAppState } from '@/hooks/useAppState';
+export { startNetworkMonitoring } from '@/features/monitoring/services/networkMonitor';
+export { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
+export { useWifiExamGate } from '@/features/monitoring/hooks/useWifiExamGate';
+export { useCampusWifiJoinGate } from '@/features/monitoring/hooks/useCampusWifiJoinGate';
+export { useAppState } from '@/shared/hooks/useAppState';

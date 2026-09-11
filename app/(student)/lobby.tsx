@@ -3,32 +3,35 @@ import { Alert, BackHandler, ScrollView, Text, View, StyleSheet, Pressable, Acti
 import { useNavigation, useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Check, User, RefreshCw, AlertTriangle, ShieldCheck } from 'lucide-react-native';
-import { Header } from '@/components/ui/Header';
-import { Card } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
-import { useLobby } from '@/hooks/useRepositories';
-import { appStorage } from '@/services/storage';
-import { STORAGE_KEYS } from '@/constants';
-import { LobbyRepository, StudentRepository } from '@/repositories';
-import { useExamStore, useLobbyStore, useStudentStore } from '@/stores';
-import { colors } from '@/theme';
-import { PeerExamClient } from '@/services/peerExamClient';
-import { ExamPreloader } from '@/services/examPreloader';
+import { Header } from '@/shared/components/ui/Header';
+import { Card } from '@/shared/components/ui/Card';
+import { Button } from '@/shared/components/ui/Button';
+import { useLobby } from '@/features/lobby/hooks/useLobby';
+import { appStorage } from '@/shared/services/storage';
+import { STORAGE_KEYS } from '@/shared/constants';
+import { StudentRepository } from '@/features/applicants/repositories/StudentRepository';
+import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { useStudentStore } from '@/features/applicants/stores/studentStore';
+import { useExamStore } from '@/features/examinations/stores/examStore';
+import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
+import { colors } from '@/shared/theme';
+import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
+import { ExamPreloader } from '@/features/examinations/services/examPreloader';
 import {
   ExamLifecycle,
   type AuthorityStatus,
-} from '@/services/examLifecycle';
+} from '@/features/examinations/services/examLifecycle';
 import {
   STUDENT_MONITOR_INTERVAL_MS,
   parseStartPulse,
   shouldNavigateToExam,
-} from '@/services/examStartCoordinator';
+} from '@/features/examinations/services/examStartCoordinator';
 import {
   INITIAL_PACK_PROGRESS,
   userFacingStartupError,
   validateExamStartup,
   type ExamPackProgress,
-} from '@/services/examReadiness';
+} from '@/features/examinations/services/examReadiness';
 
 /**
  * DETERMINISTIC LOBBY STATES

@@ -5,12 +5,12 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { AppProviders } from '@/providers/AppProviders';
-import { hydrateApiBaseUrl } from '@/services/api';
-import { useSettingsStore } from '@/stores';
-import { colors } from '@/theme';
+import { AppProviders } from '@/shared/providers/AppProviders';
+import { hydrateApiBaseUrl } from '@/shared/services/api';
+import { useSettingsStore } from '@/features/settings/stores/settingsStore';
+import { colors } from '@/shared/theme';
 
-import { startNetworkMonitoring } from '@/services/networkMonitor';
+import { startNetworkMonitoring } from '@/features/monitoring/services/networkMonitor';
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 

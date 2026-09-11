@@ -9,7 +9,7 @@ import {
   Pressable,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useHardwareBack } from '@/hooks/useHardwareBack';
+import { useHardwareBack } from '@/shared/hooks/useHardwareBack';
 import {
   BarChart3,
   CheckCircle2,
@@ -30,10 +30,10 @@ import {
   AlertCircle,
   LogOut,
 } from 'lucide-react-native';
-import { Header, Card, Button } from '@/components/ui';
-import { OfflineStore, type OfflineQueuedResult, type OfflinePack } from '@/services/offlineStore';
-import { colors, radii, shadows } from '@/theme';
-import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
+import { Header, Card, Button } from '@/shared/components/ui';
+import { OfflineStore, type OfflineQueuedResult, type OfflinePack } from '@/features/synchronization/services/offlineStore';
+import { colors, radii, shadows } from '@/shared/theme';
+import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
 
 type LobbyStudentItem = {
   id: string;

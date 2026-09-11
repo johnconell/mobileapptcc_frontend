@@ -11,19 +11,20 @@ import { useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
-import { Header } from '@/components/ui/Header';
-import { Input } from '@/components/ui/Input';
-import { SkeletonDetail } from '@/components/ui/Skeleton';
-import { LobbyRepository } from '@/repositories';
-import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
-import { ExamPreloader } from '@/services/examPreloader';
-import { ExamLifecycle } from '@/services/examLifecycle';
-import { INITIAL_PACK_PROGRESS, type ExamPackProgress } from '@/services/examReadiness';
-import { appStorage } from '@/services/storage';
-import { useLobbyStore, useStudentStore } from '@/stores';
-import { colors } from '@/theme';
+import { Button } from '@/shared/components/ui/Button';
+import { Card } from '@/shared/components/ui/Card';
+import { Header } from '@/shared/components/ui/Header';
+import { Input } from '@/shared/components/ui/Input';
+import { SkeletonDetail } from '@/shared/components/ui/Skeleton';
+import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
+import { ExamPreloader } from '@/features/examinations/services/examPreloader';
+import { ExamLifecycle } from '@/features/examinations/services/examLifecycle';
+import { INITIAL_PACK_PROGRESS, type ExamPackProgress } from '@/features/examinations/services/examReadiness';
+import { appStorage } from '@/shared/services/storage';
+import { useStudentStore } from '@/features/applicants/stores/studentStore';
+import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
+import { colors } from '@/shared/theme';
 
 const gmailSchema = z.object({
   email: z

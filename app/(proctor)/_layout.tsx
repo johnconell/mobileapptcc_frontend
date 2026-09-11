@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { Stack } from 'expo-router';
-import { useAppTheme } from '@/hooks/useAppTheme';
-import { useProctorStore } from '@/stores';
-import { AuthRepository } from '@/repositories';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { AuthRepository } from '@/features/authentication/repositories/AuthRepository';
 
 /**
  * Auth switch: logged-out proctors stay on a real Stack (Login only) so hardware

@@ -22,20 +22,21 @@ import {
   Calendar,
   LogOut,
 } from 'lucide-react-native';
-import { Header, Card, Button, EmptyState, Breadcrumbs, StatusChip } from '@/components/ui';
-import { ScheduleCard } from '@/features/proctor/ScheduleCard';
-import { useSchedules } from '@/hooks/useRepositories';
-import { AuthRepository, LobbyRepository } from '@/repositories';
-import { QUERY_KEYS } from '@/constants';
-import { useProctorStore } from '@/stores';
-import { ensureExamPackCached } from '@/services/ensureExamPack';
-import { OfflineStore } from '@/services/offlineStore';
-import { assertCampusWifiForJoin } from '@/services/campusWifiGate';
-import { shadows } from '@/theme';
-import type { ExamSchedule, ExamSession } from '@/types';
-import { confirmProctorLogout } from '@/utils/confirmProctorLogout';
-import { useHardwareBack } from '@/hooks/useHardwareBack';
-import { extractNumericScheduleId, matchOpenedRoom } from '@/utils/examScheduleStatus';
+import { Header, Card, Button, EmptyState, Breadcrumbs, StatusChip } from '@/shared/components/ui';
+import { ScheduleCard } from '@/features/schedules/components/ScheduleCard';
+import { useSchedules } from '@/features/schedules/hooks/useSchedules';
+import { AuthRepository } from '@/features/authentication/repositories/AuthRepository';
+import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { QUERY_KEYS } from '@/shared/constants';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { ensureExamPackCached } from '@/features/synchronization/services/ensureExamPack';
+import { OfflineStore } from '@/features/synchronization/services/offlineStore';
+import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
+import { shadows } from '@/shared/theme';
+import type { ExamSchedule, ExamSession } from '@/shared/types';
+import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
+import { useHardwareBack } from '@/shared/hooks/useHardwareBack';
+import { extractNumericScheduleId, matchOpenedRoom } from '@/features/schedules/utils/examScheduleStatus';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -289,7 +290,7 @@ export default function ProctorExaminationTabScreen() {
       }
 
       // 2. Wi-Fi check
-      const { PeerExamClient } = await import('@/services/peerExamClient');
+      const { PeerExamClient } = await import('@/features/examinations/services/peerExamClient');
       await PeerExamClient.clear();
       const hasPack = await OfflineStore.hasPack();
       const wifiCheck = await assertCampusWifiForJoin({ requireServer: !hasPack, isProctor: true });
