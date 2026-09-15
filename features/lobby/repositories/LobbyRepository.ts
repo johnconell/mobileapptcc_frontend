@@ -75,18 +75,6 @@ export const LobbyRepository = {
         throw new Error('Select a room first. Each room has its own examination code and QR.');
       }
       const sid = String(sessionId).replace(/^offline-/, '');
-      const opened = await OfflineStore.getOpenedRooms();
-      const existing = opened[OfflineStore.roomKey(sid, roomId)];
-      const usedCodes = new Set(Object.values(opened).map((r) => r.code));
-      const examCode =
-        existing?.code && existing.status !== 'ended'
-          ? existing.code
-          : OfflineExamRepository.generateExamCode(usedCodes);
-
-      await OfflineStore.setOpenedRoom(sid, roomId, examCode, 'lobby_open');
-      await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, sid);
-      await appStorage.setItem(STORAGE_KEYS.offlineExamCode, examCode);
-      await setStoredCode(examCode);
 
       if (!PeerExamServer.isSupported()) {
         throw new Error(
@@ -94,17 +82,32 @@ export const LobbyRepository = {
         );
       }
 
-      // Reuse a live server for the same room instead of restarting (was very slow).
+      // Idempotent: keep the current code/QR only while this room's lobby is
+      // already live. After close/end (or any non-lobby state), mint a fresh code.
       const info = PeerExamServer.info();
       const hostedNow = await PeerExamServer.snapshot();
       if (
         info.running &&
         hostedNow &&
         String(hostedNow.roomId ?? '') === String(roomId) &&
-        hostedNow.examinationCode === examCode
+        hostedNow.status === 'lobby_open' &&
+        hostedNow.examinationCode
       ) {
+        await OfflineStore.setOpenedRoom(sid, roomId, hostedNow.examinationCode, 'lobby_open');
+        await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, sid);
+        await appStorage.setItem(STORAGE_KEYS.offlineExamCode, hostedNow.examinationCode);
+        await setStoredCode(hostedNow.examinationCode);
         return hostedNow;
       }
+
+      const opened = await OfflineStore.getOpenedRooms();
+      const usedCodes = new Set(Object.values(opened).map((r) => r.code));
+      const examCode = OfflineExamRepository.generateExamCode(usedCodes);
+
+      await OfflineStore.setOpenedRoom(sid, roomId, examCode, 'lobby_open');
+      await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, sid);
+      await appStorage.setItem(STORAGE_KEYS.offlineExamCode, examCode);
+      await setStoredCode(examCode);
 
       await PeerExamServer.start({ scheduleId: sid, roomId, examCode });
       const hosted = await PeerExamServer.snapshot();
@@ -158,13 +161,14 @@ export const LobbyRepository = {
     roomId?: string,
   ): Promise<LobbySnapshot> {
     // Offline / peer: always (re)start the local server so a QR with a live host IP exists.
+    // Never reuse an ended session roster when opening a lobby.
     if (await OfflineStore.isOfflineMode()) {
       return this.openLobby(sessionId, questionBankId, roomId);
     }
 
     try {
       const existing = await this.fetchProctorLobby(sessionId, roomId);
-      if (existing) return existing;
+      if (existing && existing.status !== 'ended') return existing;
       return this.openLobby(sessionId, questionBankId, roomId);
     } catch (error) {
       if (await OfflineStore.hasPack()) {
@@ -305,7 +309,7 @@ export const LobbyRepository = {
             terminatedCount: 0,
             violationsDetected: 0,
             notYetConnectedCount: 0,
-          } as LobbySnapshot;
+          } as unknown as LobbySnapshot;
         } catch (err) {
           if (__DEV__) console.warn('[LOBBY DEBUG] Peer poll failed:', err);
           throw err;
@@ -493,6 +497,34 @@ export const LobbyRepository = {
     // A stale peer target must not hijack a plain code entered later.
     await PeerExamClient.clear();
 
+    // Typed code (no QR host): discover the proctor phone on LAN :9777 and resolve.
+    try {
+      const { discoverPeerExamHostByCode } = await import(
+        '@/features/monitoring/services/peerLanDiscovery'
+      );
+      const discovered = await discoverPeerExamHostByCode(code);
+      if (discovered) {
+        await PeerExamClient.setTarget(discovered);
+        const resolved = await PeerExamClient.request<{
+          schedule: ExamCodeValidation['schedule'];
+          session: ExamCodeValidation['session'];
+          examinationCode: string;
+        }>('/resolve', { method: 'POST', body: { code: discovered.code || code } });
+
+        await setStoredCode(resolved.examinationCode || discovered.code || code);
+        await OfflineStore.setOfflineMode(false);
+        return {
+          valid: true,
+          message: 'Connected to the proctor phone.',
+          schedule: resolved.schedule,
+          session: resolved.session,
+          examinationCode: resolved.examinationCode || discovered.code || code,
+        };
+      }
+    } catch (err) {
+      console.warn('[LobbyRepository] Peer LAN discovery failed:', err);
+    }
+
     // Only Proctor role can resolve offline codes locally without LAN peer server
     const isProctorUser = Boolean(await appStorage.getItem(STORAGE_KEYS.proctorToken));
     if (isProctorUser) {
@@ -513,37 +545,45 @@ export const LobbyRepository = {
       }
     }
 
-    const json = await apiRequest<{
-      success: boolean;
-      valid?: boolean;
-      message?: string;
-      examinationCode?: string;
-      data?: {
+    try {
+      const json = await apiRequest<{
+        success: boolean;
+        valid?: boolean;
+        message?: string;
+        examinationCode?: string;
+        data?: {
+          schedule?: ExamCodeValidation['schedule'];
+          session?: ExamCodeValidation['session'];
+        };
         schedule?: ExamCodeValidation['schedule'];
         session?: ExamCodeValidation['session'];
-      };
-      schedule?: ExamCodeValidation['schedule'];
-      session?: ExamCodeValidation['session'];
-    }>('/exam/resolve', {
-      method: 'POST',
-      auth: false,
-      body: { code },
-    });
+      }>('/exam/resolve', {
+        method: 'POST',
+        auth: false,
+        body: { code },
+      });
 
-    const schedule = json.data?.schedule ?? json.schedule;
-    const session = json.data?.session ?? json.session;
-    const valid = Boolean(json.valid ?? json.success) && Boolean(schedule && session);
-    if (valid && schedule && session) {
-      await setStoredCode(json.examinationCode || code);
-      await OfflineStore.setOfflineMode(false);
+      const schedule = json.data?.schedule ?? json.schedule;
+      const session = json.data?.session ?? json.session;
+      const valid = Boolean(json.valid ?? json.success) && Boolean(schedule && session);
+      if (valid && schedule && session) {
+        await setStoredCode(json.examinationCode || code);
+        await OfflineStore.setOfflineMode(false);
+      }
+      return {
+        valid,
+        message: json.message,
+        schedule: schedule ?? undefined,
+        session: session ?? undefined,
+        examinationCode: json.examinationCode || code,
+      };
+    } catch (err) {
+      throw err instanceof Error
+        ? err
+        : new Error(
+            'Unable to find an open examination for that code. Connect to the same Wi‑Fi as the proctor and try again, or scan the QR code.',
+          );
     }
-    return {
-      valid,
-      message: json.message,
-      schedule: schedule ?? undefined,
-      session: session ?? undefined,
-      examinationCode: json.examinationCode || code,
-    };
   },
 
   async validatePasskey(passkey: string): Promise<{
@@ -712,6 +752,7 @@ export const LobbyRepository = {
 
     if (await PeerExamClient.isActive()) {
       const preloadedHash = (await appStorage.getItem('tcc.student.preload.sha256')) || '';
+      const existingToken = (await appStorage.getItem(STORAGE_KEYS.participationToken)) || '';
       const joined = await PeerExamClient.request<{
         registration_id: number;
         participation_token: string;
@@ -728,6 +769,7 @@ export const LobbyRepository = {
           download_percent: preloadedHash ? 100 : 0,
           hash_verified: Boolean(preloadedHash),
           module_ready: Boolean(preloadedHash),
+          participation_token: existingToken || undefined,
         },
       });
 
@@ -744,6 +786,16 @@ export const LobbyRepository = {
           sessionId,
           participationToken: joined.participation_token,
           peer: true,
+          student: {
+            id: student.id,
+            studentId: student.studentId,
+            fullName: student.fullName,
+            email: student.email,
+            programCode: student.programCode,
+            programName: student.programName,
+            avatarInitials: student.avatarInitials,
+            registration_id: joined.registration_id,
+          },
         }),
       );
       if (__DEV__) {

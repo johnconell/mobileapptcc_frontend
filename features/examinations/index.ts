@@ -16,3 +16,13 @@ export { useKioskMode } from '@/features/examinations/hooks/useKioskMode';
 export { useExamTimer } from '@/features/examinations/hooks/useExamTimer';
 export { useViolationMonitor } from '@/features/monitoring/hooks/useViolationMonitor';
 export { ExamWifiDisconnectOverlay } from '@/features/examinations/components/ExamWifiDisconnectOverlay';
+export {
+  ExamProcessChrome,
+  ExamProcessActions,
+  ExamProcessButton,
+  ExamProcessOk,
+} from '@/features/examinations/components/ExamProcessChrome';
+export {
+  ExamCategoryNav,
+  buildCategoryProgress,
+} from '@/features/examinations/components/ExamCategoryNav';

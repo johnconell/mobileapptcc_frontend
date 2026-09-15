@@ -28,6 +28,10 @@ import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { VersionInfo } from '@/shared/components/VersionInfo';
 import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
+import {
+  seedSampleResults,
+  clearSampleResults,
+} from '@/features/synchronization/services/resultsSeeder';
 import type { ThemeMode, AppFontSize } from '@/features/settings/stores/settingsStore';
 
 export default function ProctorSettingsScreen() {
@@ -167,6 +171,79 @@ export default function ProctorSettingsScreen() {
                 maxFontSizeMultiplier={fontMultiplier}
               >
                 {themeMode === 'dark' ? 'Dark Mode' : themeMode === 'light' ? 'Light Mode' : 'System Auto'} · Font: {fontSize}
+              </Text>
+            </View>
+            <ChevronRight size={18} color={colors.textMuted} />
+          </Pressable>
+        </View>
+
+        {/* DEVELOPER & TESTING TOOLS */}
+        <Text
+          style={[styles.groupHeading, { color: colors.textPrimary }]}
+          maxFontSizeMultiplier={fontMultiplier}
+        >
+          Developer & Testing Tools
+        </Text>
+
+        <View
+          style={[
+            styles.menuCard,
+            { backgroundColor: colors.card, borderColor: colors.cardBorder },
+          ]}
+        >
+          <Pressable
+            style={styles.menuItem}
+            onPress={() => {
+              Alert.alert(
+                'Examination Results Seeder',
+                'Seed realistic mock examination transactions and examinee scores (including passed, failed, and unsynced red-dot records) to test the UI.',
+                [
+                  {
+                    text: 'Seed Sample Results',
+                    onPress: async () => {
+                      try {
+                        const rep = await seedSampleResults();
+                        Alert.alert(
+                          'Results Seeded',
+                          `${rep.message}\n\nGo to the Results tab to inspect the seeded examination lobbies and verify the red dot notification badge!`,
+                        );
+                      } catch (err) {
+                        Alert.alert('Error', err instanceof Error ? err.message : 'Failed to seed sample results.');
+                      }
+                    },
+                  },
+                  {
+                    text: 'Clear Test Results',
+                    style: 'destructive',
+                    onPress: async () => {
+                      try {
+                        await clearSampleResults();
+                        Alert.alert('Cleared', 'All seeded sample results have been removed.');
+                      } catch (err) {
+                        Alert.alert('Error', 'Failed to clear sample results.');
+                      }
+                    },
+                  },
+                  { text: 'Cancel', style: 'cancel' },
+                ],
+              );
+            }}
+          >
+            <View style={[styles.menuIcon, { backgroundColor: colors.accentMuted }]}>
+              <Sparkles size={18} color={colors.accent} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text
+                style={[styles.menuTitle, { color: colors.textPrimary }]}
+                maxFontSizeMultiplier={fontMultiplier}
+              >
+                Results & Lobbies Seeder
+              </Text>
+              <Text
+                style={[styles.menuSub, { color: colors.textSecondary }]}
+                maxFontSizeMultiplier={fontMultiplier}
+              >
+                Load or reset mock results to test UI, filters & red dots
               </Text>
             </View>
             <ChevronRight size={18} color={colors.textMuted} />

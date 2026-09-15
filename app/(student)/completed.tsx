@@ -1,13 +1,17 @@
 import React from 'react';
-import { Text, View, StyleSheet } from 'react-native';
+import { Text, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import Animated, { FadeInDown } from 'react-native-reanimated';
-import { Button } from '@/shared/components/ui';
+import {
+  ExamProcessButton,
+  ExamProcessChrome,
+  ExamProcessOk,
+} from '@/features/examinations/components/ExamProcessChrome';
 import { SuccessIllustration } from '@/features/examinations/components/SuccessIllustration';
 import { clearApplicantExamMaterial } from '@/features/applicants/services/applicantExamCleanup';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
-import { colors } from '@/shared/theme';
+import { examProcess } from '@/shared/theme/examProcess';
 
 const AUTO_HOME_SECONDS = 10;
 
@@ -28,9 +32,6 @@ export default function CompletedScreen() {
     router.replace('/');
   }, [resetExam, resetStudent, router]);
 
-  // Time ran out: hand the phone back to the next examinee without a tap.
-  // The tick must stay a pure state update — resetting the stores from inside a
-  // setState updater fires while React is rendering and warns.
   const [countdown, setCountdown] = React.useState(AUTO_HOME_SECONDS);
 
   React.useEffect(() => {
@@ -44,7 +45,7 @@ export default function CompletedScreen() {
   }, [timeExpired, countdown, goHome]);
 
   return (
-    <View style={styles.screen}>
+    <ExamProcessChrome step={5} title="Examination complete" stepLabel="Step 6 of 6 · Done">
       <SuccessIllustration />
       <Animated.View entering={FadeInDown.delay(120).springify()} style={styles.copy}>
         <Text style={[styles.title, terminated && styles.titleDanger]}>
@@ -61,51 +62,29 @@ export default function CompletedScreen() {
               ? 'Your time ran out and your answers were submitted automatically. Please wait for the official examination results.'
               : 'Please wait for the official examination results.'}
         </Text>
-        {timeExpired ? (
-          <Text style={styles.countdown}>Returning to the start in {countdown}s…</Text>
-        ) : null}
+        <ExamProcessOk visible={Boolean(timeExpired)}>
+          Returning to the start in {countdown}s…
+        </ExamProcessOk>
       </Animated.View>
-      <Button
-        title="Return Home"
-        size="lg"
-        fullWidth
-        onPress={goHome}
-        style={styles.btn}
-      />
-    </View>
+      <ExamProcessButton title="Return Home" variant="submit" onPress={goHome} />
+    </ExamProcessChrome>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: colors.background,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 28,
-    gap: 24,
-  },
-  copy: { alignItems: 'center', gap: 10 },
+  copy: { alignItems: 'center', gap: 10, marginVertical: 12 },
   title: {
-    fontSize: 26,
+    fontSize: 18,
     fontWeight: '700',
-    color: colors.ink,
+    color: examProcess.ink,
     textAlign: 'center',
-    lineHeight: 32,
+    lineHeight: 24,
   },
-  titleDanger: { color: colors.danger, fontSize: 22 },
+  titleDanger: { color: examProcess.error, fontSize: 16 },
   note: {
-    fontSize: 15,
-    color: colors.inkSecondary,
-    textAlign: 'center',
-    lineHeight: 22,
-    maxWidth: 320,
-  },
-  countdown: {
     fontSize: 13,
-    color: colors.inkMuted,
-    fontWeight: '600',
+    color: examProcess.muted,
     textAlign: 'center',
+    lineHeight: 19,
   },
-  btn: { maxWidth: 360 },
 });

@@ -75,7 +75,10 @@ export const PeerExamClient = {
 
     const normalize = (data: any) => {
       if (!data) return null;
-      const authority = data.authorityStatus != null ? String(data.authorityStatus) : undefined;
+            const authority: 'WAITING' | 'ACTIVE' | 'ENDED' | 'STARTING' | 'PAUSED' | undefined =
+        (['WAITING', 'ACTIVE', 'ENDED', 'STARTING', 'PAUSED'] as const).includes(data.authorityStatus)
+          ? data.authorityStatus
+          : undefined;
       let roomStatus = String(data.roomStatus ?? data.status ?? '');
       if (!roomStatus && authority === 'ACTIVE') roomStatus = 'in_progress';
       if (!roomStatus && authority === 'ENDED') roomStatus = 'ended';
@@ -189,6 +192,39 @@ export const PeerExamClient = {
       return fallback.ok;
     } catch {
       return false;
+    }
+  },
+
+  /**
+   * Lightweight health check used by resume: distinguish a live session from
+   * an idle/closed proctor host (exam already ended).
+   */
+  async probeHealth(
+    target?: PeerTarget | PeerQrTarget,
+  ): Promise<'ready' | 'idle' | 'ended' | 'unreachable'> {
+    const resolved = (target as PeerTarget | undefined) ?? (await this.getTarget());
+    if (!resolved) return 'unreachable';
+    try {
+      const res = await withTimeout(
+        (signal) =>
+          fetch(`${baseUrl(resolved)}/health`, {
+            method: 'POST',
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+            body: '{}',
+            signal,
+          }),
+        4000,
+      );
+      if (!res.ok) return 'unreachable';
+      const json = await res.json().catch(() => null);
+      const data = json?.data ?? json;
+      const sessionStatus = String(data?.session_status ?? '').toLowerCase();
+      const status = String(data?.status ?? '').toLowerCase();
+      if (sessionStatus === 'ended' || status === 'ended') return 'ended';
+      if (status === 'idle' || !sessionStatus || sessionStatus === 'null') return 'idle';
+      return 'ready';
+    } catch {
+      return 'unreachable';
     }
   },
 

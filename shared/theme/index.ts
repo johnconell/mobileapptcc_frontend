@@ -1,3 +1,6 @@
+export { examProcess, EXAM_PROCESS_STEPS } from './examProcess';
+export type { ExamProcessStepIndex } from './examProcess';
+
 export const colors = {
   primary: '#7A1F2B',
   primaryDark: '#55161E',

@@ -55,6 +55,27 @@ function formatRemaining(seconds: number | null | undefined) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+function liveRemainingSeconds(lobby: {
+  status?: string;
+  remainingSeconds?: number | null;
+  session?: {
+    startedAt?: string | null;
+    durationMinutes?: number | null;
+    remainingSeconds?: number | null;
+  } | null;
+}): number | null {
+  if (lobby.status !== 'in_progress') {
+    return lobby.session?.remainingSeconds ?? lobby.remainingSeconds ?? null;
+  }
+  const startedAt = lobby.session?.startedAt;
+  const durationMinutes = lobby.session?.durationMinutes;
+  if (startedAt && durationMinutes && durationMinutes > 0) {
+    const elapsed = (Date.now() - new Date(startedAt).getTime()) / 1000;
+    return Math.max(0, Math.round(durationMinutes * 60 - elapsed));
+  }
+  return lobby.session?.remainingSeconds ?? lobby.remainingSeconds ?? null;
+}
+
 export default function ProctorLobbyScreen() {
   useKeepAwake();
   const router = useRouter();
@@ -84,6 +105,7 @@ export default function ProctorLobbyScreen() {
   const [notifications, setNotifications] = useState<
     Array<{ id: string; title: string; body: string; at: string; kind: 'connect' | 'disconnect' }>
   >([]);
+  const [clockTick, setClockTick] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
   const [reconnectCode, setReconnectCode] = useState<string | null>(null);
   const [reconnectExpiresAt, setReconnectExpiresAt] = useState<string | null>(null);
@@ -298,6 +320,16 @@ export default function ProctorLobbyScreen() {
   }, [lobbyQuery.data, setSnapshot, selected]);
 
   const lobby = lobbyQuery.data ?? storeLobby;
+
+  // Live countdown tick while the examination is running.
+  useEffect(() => {
+    if (lobby?.status !== 'in_progress') return;
+    const id = setInterval(() => setClockTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [lobby?.status]);
+
+  const remainingLive = lobby ? liveRemainingSeconds(lobby) : null;
+  void clockTick; // re-render dependency for remainingLive
 
   useEffect(() => {
     if (!lobby?.status || lobby.status !== 'ended') return;
@@ -651,15 +683,27 @@ export default function ProctorLobbyScreen() {
               ) : null}
             </View>
 
+            {lobby.status === 'ended' ? (
+              <Card style={styles.endedBanner}>
+                <CheckCircle2 size={22} color={colors.success} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.endedTitle}>Examination ended</Text>
+                  <Text style={styles.endedBody}>
+                    This session is closed
+                    {lobby.endedAt ? ` · ${formatTime(lobby.endedAt)}` : ''}
+                    . Sync results to Admin when you are back online.
+                  </Text>
+                </View>
+              </Card>
+            ) : null}
+
             {lobby.status === 'in_progress' ? (
               <Card>
                 <Text style={styles.monitorTitle}>Live monitoring</Text>
-                <Text style={styles.monitorLine}>
-                  Remaining time:{' '}
-                  {formatRemaining(
-                    lobby.session.remainingSeconds ?? lobby.remainingSeconds ?? null,
-                  )}
+                <Text style={styles.monitorTimer}>
+                  {formatRemaining(remainingLive)}
                 </Text>
+                <Text style={styles.monitorLine}>Remaining time</Text>
                 <Text style={styles.monitorLine}>
                   Taking: {lobby.takingCount} · Disconnected:{' '}
                   {lobby.disconnectedCount ?? 0} · Done: {lobby.finishedCount}
@@ -1253,11 +1297,37 @@ const styles = StyleSheet.create({
     color: colors.ink,
     marginBottom: 8,
   },
+  monitorTimer: {
+    fontSize: 36,
+    fontWeight: '800',
+    color: colors.primary,
+    fontVariant: ['tabular-nums'],
+    marginBottom: 2,
+  },
   monitorLine: {
     fontSize: 14,
     color: colors.inkSecondary,
     fontWeight: '600',
     marginBottom: 4,
+  },
+  endedBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: '#ECFDF5',
+    borderColor: colors.success,
+  },
+  endedTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: colors.success,
+    marginBottom: 4,
+  },
+  endedBody: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.inkSecondary,
+    fontWeight: '500',
   },
   ownerHint: {
     fontSize: 12,

@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Button, Loader } from '@/shared/components/ui';
+import {
+  ExamProcessButton,
+  ExamProcessChrome,
+} from '@/features/examinations/components/ExamProcessChrome';
+import { Loader } from '@/shared/components/ui';
 import { QuestionRepository } from '@/features/examinations/repositories/QuestionRepository';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { clearApplicantExamMaterial } from '@/features/applicants/services/applicantExamCleanup';
@@ -9,7 +13,7 @@ import { ExamProgressStore } from '@/features/examinations/services/examProgress
 import { appStorage } from '@/shared/services/storage';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
-import { colors } from '@/shared/theme';
+import { examProcess } from '@/shared/theme/examProcess';
 
 const MAX_ATTEMPTS = 3;
 
@@ -26,19 +30,24 @@ export default function SubmittingScreen() {
 
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  // The exam must be sent once; store objects change identity and would re-fire.
   const submittingRef = useRef(false);
 
-  /** Time-expired and terminated exams are involuntary: never trap the student. */
   const isForcedEnd =
     terminationReason === 'time_expired' ||
     terminationReason === 'policy_violation' ||
     terminationReason === 'proctor_terminated';
 
   const goHome = useCallback(() => {
-    resetExam();
-    resetStudent();
-    router.replace('/');
+    void (async () => {
+      try {
+        await clearApplicantExamMaterial();
+      } catch {
+        /* ignore */
+      }
+      resetExam();
+      resetStudent();
+      router.replace('/');
+    })();
   }, [resetExam, resetStudent, router]);
 
   const submit = useCallback(async () => {
@@ -90,8 +99,6 @@ export default function SubmittingScreen() {
     submittingRef.current = false;
     markSubmitting(false);
 
-    // Answers were autosaved throughout the exam, so a failed final send must not
-    // hold a forced-end student on this screen — close it out and let sync finish it.
     if (isForcedEnd) {
       await clearApplicantExamMaterial();
       markSubmitted(reason);
@@ -117,40 +124,34 @@ export default function SubmittingScreen() {
 
   useEffect(() => {
     void submit();
-    // `attempt` re-runs this on an explicit retry press.
   }, [submit, attempt]);
 
   if (error) {
     return (
-      <View style={styles.screen}>
-        <Text style={styles.errorTitle}>Could not submit</Text>
-        <Text style={styles.errorBody}>{error}</Text>
-        <Text style={styles.errorBody}>
+      <ExamProcessChrome step={5} title="Could not submit" stepLabel="Step 6 of 6 · Done">
+        <Text style={styles.body}>{error}</Text>
+        <Text style={styles.body}>
           Your answers are saved on this phone. Stay on the exam Wi‑Fi and try again.
         </Text>
-        <Button
-          title="Try Again"
-          fullWidth
-          onPress={() => {
-            submittingRef.current = false;
-            setError(null);
-            setAttempt((n) => n + 1);
-          }}
-          style={styles.btn}
-        />
-        <Button
-          title="Return Home"
-          variant="outline"
-          fullWidth
-          onPress={goHome}
-          style={styles.btn}
-        />
-      </View>
+        <View style={styles.gap}>
+          <ExamProcessButton
+            title="Try Again"
+            onPress={() => {
+              submittingRef.current = false;
+              setError(null);
+              setAttempt((n) => n + 1);
+            }}
+          />
+        </View>
+        <View style={styles.gap}>
+          <ExamProcessButton title="Return Home" variant="back" onPress={goHome} />
+        </View>
+      </ExamProcessChrome>
     );
   }
 
   return (
-    <View style={styles.screen}>
+    <ExamProcessChrome step={5} title="Submitting" stepLabel="Step 6 of 6 · Done">
       <Loader
         label={
           terminationReason === 'policy_violation'
@@ -161,27 +162,23 @@ export default function SubmittingScreen() {
         }
       />
       <Text style={styles.note}>Please keep this screen open.</Text>
-    </View>
+    </ExamProcessChrome>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: colors.background,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-    gap: 8,
+  body: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: examProcess.muted,
+    marginBottom: 8,
   },
-  note: { fontSize: 13, color: colors.inkMuted, fontWeight: '500' },
-  errorTitle: { fontSize: 18, fontWeight: '700', color: colors.ink, textAlign: 'center' },
-  errorBody: {
-    fontSize: 14,
-    color: colors.inkMuted,
+  note: {
+    marginTop: 12,
+    fontSize: 13,
+    color: examProcess.muted,
+    fontWeight: '500',
     textAlign: 'center',
-    lineHeight: 20,
-    maxWidth: 320,
   },
-  btn: { maxWidth: 360, marginTop: 8 },
+  gap: { marginTop: 10 },
 });

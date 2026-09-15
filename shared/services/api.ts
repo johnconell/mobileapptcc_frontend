@@ -2,7 +2,9 @@ import { STORAGE_KEYS } from '@/shared/constants';
 import { isLoopbackApiHost, requiresLanApiHost } from '@/shared/services/apiReachability';
 import { appStorage } from '@/shared/services/storage';
 
-const DEFAULT_API_URL = 'http://127.0.0.1:8000/api/v1';
+const DEFAULT_API_URL = 'https://metccapi.repohive.com/api/v1';
+/** Must match server ADMIN_SYNC_TOKEN (same value as eas.json production env). */
+const DEFAULT_SYNC_TOKEN = 'metcc-lan-sync-secret';
 
 /** In-memory cache of LAN API override (exam-day campus server). */
 let lanApiOverride: string | null | undefined;
@@ -32,19 +34,22 @@ export function getApiBaseUrl(): string {
 /** Cloud / internet API for auth + pack download (does not require campus exam Wi‑Fi). */
 export function getCloudApiBaseUrl(): string | null {
   const cloud = process.env.EXPO_PUBLIC_CLOUD_API_URL?.trim();
-  return cloud ? normalizeBase(cloud) : null;
+  const fallback = process.env.EXPO_PUBLIC_API_URL?.trim();
+  const value = cloud || fallback || DEFAULT_API_URL;
+  return value ? normalizeBase(value) : null;
 }
 
 /**
- * Prefer cloud for sign-in so proctors can log in on mobile data / home Wi‑Fi.
- * If a campus LAN exam server override is active, auth uses that host instead
- * (same Sanctum token as lobby/exam traffic).
+ * Sign-in always uses the cloud/internet API so a stale campus LAN override
+ * (or a phone pointing at 127.0.0.1) cannot block proctor login on mobile data.
  */
 export function getAuthApiBaseUrl(): string {
-  if (lanApiOverride) {
-    return getApiBaseUrl();
-  }
   return getCloudApiBaseUrl() || getApiBaseUrl();
+}
+
+/** Admin sync token for exam-day pack download + result upload. */
+export function getSyncToken(): string {
+  return process.env.EXPO_PUBLIC_SYNC_TOKEN?.trim() || DEFAULT_SYNC_TOKEN;
 }
 
 /** Call once on app start so SecureStore override is applied. */

@@ -55,16 +55,12 @@ export async function probeExamServerReachable(
   }
 }
 
-function isOfflinePackCode(code: string): boolean {
-  return /^OFF-\d+(?:-R\d+)?$/i.test(code.trim());
-}
-
 /**
  * Validate network AFTER a QR scan or examination-code submit, or before Proctor room open:
  * 1) Must be on Wi‑Fi (not mobile data alone).
  * 2) Proctor actions: verify Wi-Fi is on; DO NOT check or ping student peer targets.
  * 3) Student Peer QR → ping the proctor phone on LAN.
- * 4) Live Hub codes → probe Laravel. Offline codes skip the Hub probe.
+ * 4) Live Hub codes → probe Laravel. Typed / offline codes skip the Hub probe (LAN peer discovery).
  */
 export async function assertCampusWifiForJoin(options?: {
   /** When verifying a typed code; OFF-* skips Hub probe. */
@@ -175,17 +171,15 @@ export async function assertCampusWifiForJoin(options?: {
   }
 
   const code = options?.examinationCode?.trim() ?? '';
+  // Typed examination codes resolve against the proctor phone on LAN
+  // (peer discovery in verifyExaminationCode). Offline pack codes skip Hub too.
   let skipServer =
-    options?.requireServer === false ||
-    (code.length > 0 && isOfflinePackCode(code));
+    options?.requireServer === false || code.length > 0;
 
-  // Opened local lobbies use normal codes (K7M2P9QX) — skip Laravel hub probe.
-  if (!skipServer && code.length > 0) {
+  if (!skipServer) {
     try {
       const { OfflineStore } = await import('@/features/synchronization/services/offlineStore');
-      const opened = await OfflineStore.findOpenedRoomByCode(code);
-      if (opened) skipServer = true;
-      if (!skipServer && await OfflineStore.isOfflineMode()) skipServer = true;
+      if (await OfflineStore.isOfflineMode()) skipServer = true;
     } catch {
       // ignore
     }

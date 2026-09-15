@@ -7,6 +7,8 @@ import {
   RefreshControl,
   TextInput,
   Pressable,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useHardwareBack } from '@/shared/hooks/useHardwareBack';
@@ -29,9 +31,16 @@ import {
   FileText,
   AlertCircle,
   LogOut,
+  Sparkles,
 } from 'lucide-react-native';
 import { Header, Card, Button } from '@/shared/components/ui';
+import { OfflineExamRepository } from '@/features/synchronization/services/offlineExamRepository';
 import { OfflineStore, type OfflineQueuedResult, type OfflinePack } from '@/features/synchronization/services/offlineStore';
+import {
+  seedSampleResults,
+  clearSampleResults,
+  isSampleResultsSeeded,
+} from '@/features/synchronization/services/resultsSeeder';
 import { colors, radii, shadows } from '@/shared/theme';
 import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
 
@@ -86,6 +95,36 @@ export default function ProctorResultsScreen() {
   const [studentSearch, setStudentSearch] = useState('');
   const [studentFilter, setStudentFilter] = useState<'all' | 'passed' | 'failed'>('all');
 
+  // Test seeder state
+  const [seeding, setSeeding] = useState(false);
+  const [isSeeded, setIsSeeded] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  const handleDirectSync = async () => {
+    if (syncing) return;
+    try {
+      setSyncing(true);
+      const result = await OfflineExamRepository.syncQueuedToCloud();
+      await loadData();
+      Alert.alert('Sync Successful', result.message);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Connect to the internet and try again.';
+      Alert.alert(
+        'Sync Status',
+        msg,
+        [
+          { text: 'OK' },
+          {
+            text: 'More Options',
+            onPress: () => router.push('/offline-prepare' as any),
+          },
+        ]
+      );
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const loadData = async () => {
     try {
       setRefreshing(true);
@@ -98,9 +137,57 @@ export default function ProctorResultsScreen() {
       setPack(cachedPack);
       setRawResults(queued);
       setOpenedRooms(opened);
+
+      const hasSeeded = queued.some((r) => r.local_id?.startsWith('seed-res-'));
+      setIsSeeded(hasSeeded);
     } finally {
       setRefreshing(false);
     }
+  };
+
+  const handleSeedResults = async () => {
+    try {
+      setSeeding(true);
+      const report = await seedSampleResults();
+      await loadData();
+      Alert.alert(
+        'Sample Results Seeded',
+        `${report.message}\n\nYou can now test examination transactions, examinee scores, and the red dot notification badge for ${report.unsyncedCount} unsynced examinee(s).`,
+      );
+    } catch (error) {
+      Alert.alert(
+        'Seeding Failed',
+        error instanceof Error ? error.message : 'Unable to seed sample results.',
+      );
+    } finally {
+      setSeeding(false);
+    }
+  };
+
+  const handleClearResults = async () => {
+    Alert.alert(
+      'Clear Sample Results',
+      'Remove all seeded examination transactions and mock examinee records?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear Data',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setSeeding(true);
+              await clearSampleResults();
+              await loadData();
+              Alert.alert('Cleared', 'All seeded sample results and test lobbies have been removed.');
+            } catch (error) {
+              Alert.alert('Error', 'Failed to clear sample results.');
+            } finally {
+              setSeeding(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   useEffect(() => {
@@ -389,14 +476,35 @@ export default function ProctorResultsScreen() {
           subtitle={`${selectedLobby.scheduleTitle} · Examinees`}
           onBack={() => setSelectedLobbyId(null)}
           right={
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Logout"
-              onPress={() => confirmProctorLogout()}
-              hitSlop={8}
-            >
-              <LogOut size={18} color="#B42318" />
-            </Pressable>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              {selectedLobby.hasUnsynced && (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Sync Lobby Results"
+                  onPress={handleDirectSync}
+                  disabled={syncing}
+                  style={styles.headerSyncBtn}
+                  hitSlop={8}
+                >
+                  {syncing ? (
+                    <ActivityIndicator size="small" color="#0055A4" />
+                  ) : (
+                    <>
+                      <RefreshCw size={13} color="#0055A4" />
+                      <Text style={styles.headerSyncBtnText}>Sync</Text>
+                    </>
+                  )}
+                </Pressable>
+              )}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Logout"
+                onPress={() => confirmProctorLogout()}
+                hitSlop={8}
+              >
+                <LogOut size={18} color="#B42318" />
+              </Pressable>
+            </View>
           }
         />
 
@@ -740,14 +848,49 @@ export default function ProctorResultsScreen() {
         subtitle="Recent Examination Transactions"
         hideBackSlot
         right={
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Logout"
-            onPress={() => confirmProctorLogout()}
-            hitSlop={8}
-          >
-            <LogOut size={18} color="#B42318" />
-          </Pressable>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Test Data Seeder"
+              onPress={() => {
+                Alert.alert(
+                  'Test Data Seeder',
+                  'Choose an action to test Examination Results:',
+                  [
+                    {
+                      text: isSeeded ? 'Re-Seed Sample Results' : 'Seed Sample Results',
+                      onPress: handleSeedResults,
+                    },
+                    ...(isSeeded
+                      ? [
+                          {
+                            text: 'Clear Test Results',
+                            style: 'destructive' as const,
+                            onPress: handleClearResults,
+                          },
+                        ]
+                      : []),
+                    { text: 'Cancel', style: 'cancel' },
+                  ],
+                );
+              }}
+              style={styles.headerSeedBtn}
+              hitSlop={8}
+            >
+              <Sparkles size={15} color="#0055A4" />
+              <Text style={styles.headerSeedBtnText}>
+                {isSeeded ? 'Re-Seed' : 'Demo'}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Logout"
+              onPress={() => confirmProctorLogout()}
+              hitSlop={8}
+            >
+              <LogOut size={18} color="#B42318" />
+            </Pressable>
+          </View>
         }
       />
 
@@ -856,9 +999,14 @@ export default function ProctorResultsScreen() {
             </View>
             <Pressable
               style={styles.pendingSyncBtn}
-              onPress={() => router.push('/offline-prepare' as any)}
+              onPress={handleDirectSync}
+              disabled={syncing}
             >
-              <Text style={styles.pendingSyncBtnText}>Sync</Text>
+              {syncing ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.pendingSyncBtnText}>Sync Now</Text>
+              )}
             </Pressable>
           </View>
         )}
@@ -957,13 +1105,21 @@ export default function ProctorResultsScreen() {
             <Text style={styles.emptySub}>
               Only examinations that have already started or ended appear here. Start an examination room from the Examination tab to begin.
             </Text>
-            <Button
-              title="Go to Examination"
-              variant="outline"
-              size="sm"
-              onPress={() => router.push('/(proctor)/(tabs)/examination')}
-              style={{ marginTop: 10 }}
-            />
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12, justifyContent: 'center' }}>
+              <Button
+                title={seeding ? 'Seeding Demo Data...' : 'Seed Sample Results'}
+                variant="primary"
+                size="sm"
+                onPress={handleSeedResults}
+                loading={seeding}
+              />
+              <Button
+                title="Go to Examination"
+                variant="outline"
+                size="sm"
+                onPress={() => router.push('/(proctor)/(tabs)/examination')}
+              />
+            </View>
           </View>
         ) : (
           filteredLobbies.map((lobby) => (
@@ -1107,6 +1263,38 @@ export default function ProctorResultsScreen() {
           onPress={() => router.push('/offline-prepare' as any)}
           style={{ marginTop: 12 }}
         />
+
+        {/* TEST / SEED DATA CONTROLS BAR */}
+        <View style={styles.testDataBar}>
+          <View style={styles.testDataInfo}>
+            <Sparkles size={14} color="#64748B" />
+            <Text style={styles.testDataLabel}>
+              {isSeeded ? 'Test data currently active' : 'Need mock examination data?'}
+            </Text>
+          </View>
+          <View style={styles.testDataActions}>
+            <Pressable
+              onPress={handleSeedResults}
+              disabled={seeding}
+              style={[styles.testDataBtn, styles.testDataBtnSeed]}
+              hitSlop={6}
+            >
+              <Text style={styles.testDataBtnTextSeed}>
+                {isSeeded ? 'Re-Seed Data' : 'Seed Sample Results'}
+              </Text>
+            </Pressable>
+            {isSeeded && (
+              <Pressable
+                onPress={handleClearResults}
+                disabled={seeding}
+                style={[styles.testDataBtn, styles.testDataBtnClear]}
+                hitSlop={6}
+              >
+                <Text style={styles.testDataBtnTextClear}>Clear Demo</Text>
+              </Pressable>
+            )}
+          </View>
+        </View>
       </ScrollView>
     </View>
   );
@@ -1666,5 +1854,91 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748B',
     textAlign: 'center',
+  },
+
+  // Test Data Seeder Styles
+  headerSyncBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#EBF3FE',
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  headerSyncBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0055A4',
+  },
+  headerSeedBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#EBF3FE',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  headerSeedBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0055A4',
+  },
+  testDataBar: {
+    marginTop: 14,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderStyle: 'dashed',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  testDataInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  testDataLabel: {
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  testDataActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  testDataBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 7,
+  },
+  testDataBtnSeed: {
+    backgroundColor: '#0055A4',
+  },
+  testDataBtnTextSeed: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  testDataBtnClear: {
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  testDataBtnTextClear: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#DC2626',
   },
 });

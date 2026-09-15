@@ -10,7 +10,10 @@ interface ExamWifiDisconnectOverlayProps {
   requiresPin: boolean;
   loading?: boolean;
   error?: string | null;
+  /** Proctor ended/closed the exam while this student was disconnected. */
+  examinationEnded?: boolean;
   onSubmitCode: (code: string) => void | Promise<void>;
+  onExitEnded?: () => void | Promise<void>;
 }
 
 export function ExamWifiDisconnectOverlay({
@@ -18,7 +21,9 @@ export function ExamWifiDisconnectOverlay({
   requiresPin,
   loading = false,
   error = null,
+  examinationEnded = false,
   onSubmitCode,
+  onExitEnded,
 }: ExamWifiDisconnectOverlayProps) {
   const [code, setCode] = useState('');
 
@@ -29,44 +34,63 @@ export function ExamWifiDisconnectOverlay({
           <View style={styles.iconWrap}>
             <WifiOff size={36} color={colors.danger} />
           </View>
-          <Text style={styles.title}>{requiresPin ? 'Examination locked' : 'Reconnecting...'}</Text>
-          <Text style={styles.message}>
-            {requiresPin
-              ? 'Disconnection exceeded 30 seconds. Campus Wi‑Fi must be restored and a proctor must issue a 6-digit PIN to unlock your exam.'
-              : 'Wi‑Fi connection lost. Attempting to reconnect automatically...'}
-          </Text>
-
-          {requiresPin ? (
+          {examinationEnded ? (
             <>
-              <Input
-                label="6-digit reconnect PIN"
-                value={code}
-                onChangeText={(text) => setCode(text.replace(/\D/g, '').slice(0, 6))}
-                keyboardType="number-pad"
-                maxLength={6}
-                placeholder="e.g. 482917"
-                editable={!loading}
-                autoFocus
-              />
-              {error ? <Text style={styles.error}>{error}</Text> : null}
+              <Text style={styles.title}>Examination ended</Text>
+              <Text style={styles.message}>
+                This examination has already ended or the room was closed. You can return to the
+                home screen — you are no longer in an active exam.
+              </Text>
               <Button
-                title="Unlock & Resume"
+                title="Return Home"
                 size="lg"
                 fullWidth
                 loading={loading}
-                disabled={code.trim().length !== 6 || loading}
-                onPress={() => void onSubmitCode(code.trim())}
+                onPress={() => void onExitEnded?.()}
               />
             </>
           ) : (
-            <Text style={styles.hint}>
-               Please move closer to the exam Wi‑Fi hotspot.
-            </Text>
-          )}
+            <>
+              <Text style={styles.title}>{requiresPin ? 'Examination locked' : 'Reconnecting...'}</Text>
+              <Text style={styles.message}>
+                {requiresPin
+                  ? 'Disconnection exceeded 30 seconds. Campus Wi‑Fi must be restored and a proctor must issue a 6-digit PIN to unlock your exam.'
+                  : 'Wi‑Fi connection lost. Attempting to reconnect automatically...'}
+              </Text>
 
-          <Text style={styles.disclaimer}>
-            Your answers remain saved locally on this phone.
-          </Text>
+              {requiresPin ? (
+                <>
+                  <Input
+                    label="6-digit reconnect PIN"
+                    value={code}
+                    onChangeText={(text) => setCode(text.replace(/\D/g, '').slice(0, 6))}
+                    keyboardType="number-pad"
+                    maxLength={6}
+                    placeholder="e.g. 482917"
+                    editable={!loading}
+                    autoFocus
+                  />
+                  {error ? <Text style={styles.error}>{error}</Text> : null}
+                  <Button
+                    title="Unlock & Resume"
+                    size="lg"
+                    fullWidth
+                    loading={loading}
+                    disabled={code.trim().length !== 6 || loading}
+                    onPress={() => void onSubmitCode(code.trim())}
+                  />
+                </>
+              ) : (
+                <Text style={styles.hint}>
+                  Please move closer to the exam Wi‑Fi hotspot.
+                </Text>
+              )}
+
+              <Text style={styles.disclaimer}>
+                Your answers remain saved locally on this phone.
+              </Text>
+            </>
+          )}
         </View>
       </View>
     </Modal>

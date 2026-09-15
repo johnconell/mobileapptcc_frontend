@@ -70,10 +70,11 @@ export const AuthRepository = {
     } catch (error) {
       if (error instanceof ApiError) {
         const unreachable = error.status === 0;
+        const host = getAuthApiBaseUrl();
         return {
           success: false,
           message: unreachable
-            ? 'Connect to the internet to sign in. Offline access starts after you download the exam pack.'
+            ? `Cannot reach the sign-in server (${host}). Check mobile data/Wi‑Fi, then try again.`
             : error.message,
         };
       }

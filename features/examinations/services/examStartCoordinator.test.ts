@@ -20,7 +20,7 @@ describe('examination start signal', () => {
     assert.equal(mapServerToAuthority('WAITING'), 'WAITING');
   });
 
-  it('never lets cached WAITING override ACTIVE or ENDED', () => {
+  it('never lets cached WAITING override ACTIVE or ENDED via canReplace', () => {
     assert.equal(canReplace('ACTIVE', 'WAITING'), false);
     assert.equal(canReplace('ENDED', 'WAITING'), false);
     assert.equal(canReplace('WAITING', 'ACTIVE'), true);

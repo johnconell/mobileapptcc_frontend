@@ -15,6 +15,7 @@ import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { colors } from '@/shared/theme';
+import { EXAM_PROCESS_STEPS, examProcess } from '@/shared/theme/examProcess';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { ExamPreloader } from '@/features/examinations/services/examPreloader';
 import {
@@ -74,9 +75,8 @@ function useLobbyController() {
   const lobbyData = useMemo(() => {
     const raw = lobbyQuery.data ?? storedSnapshot;
     if (!raw) return raw;
-    if (authority === 'ACTIVE' && raw.status === 'lobby_open') {
-      return { ...raw, status: 'in_progress' as const };
-    }
+    // Never override a live lobby_open with stale local ACTIVE — that skipped
+    // the proctor Start wait for later batches on shared devices.
     if (authority === 'ENDED' && raw.status !== 'ended') {
       return { ...raw, status: 'ended' as const };
     }
@@ -164,6 +164,13 @@ function useLobbyController() {
               void LobbyRepository.acknowledgeStart('received');
             }
           }
+          return;
+        }
+        // Proctor may have ended/closed the room while this student was away.
+        const health = await PeerExamClient.probeHealth();
+        if (!cancelled && (health === 'ended' || health === 'idle')) {
+          await applyLiveStatus('ended');
+          setPulseOk(false);
           return;
         }
         setPulseOk(false);
@@ -303,7 +310,9 @@ function useLobbyController() {
 
             setVerifiedStudent(verified);
             setSnapshot(lobby);
-            if (lobby.status === 'in_progress' || lobby.status === 'ended') {
+            if (lobby.status === 'lobby_open') {
+              await applyLiveStatus('lobby_open');
+            } else if (lobby.status === 'in_progress' || lobby.status === 'ended') {
               await applyLiveStatus(lobby.status);
             }
 
@@ -367,6 +376,42 @@ export default function StudentLobbyScreen() {
   const examReady = Boolean(progress.moduleReady && progress.hashVerified && progress.percent >= 100);
 
   const handleExit = () => {
+    const leave = async () => {
+      try {
+        const studentId = currentStudent?.id;
+        if (studentId && authority !== 'ENDED') {
+          await StudentRepository.cancelRegistration(String(studentId)).catch(() => undefined);
+        }
+        await Promise.allSettled([
+          appStorage.deleteItem(STORAGE_KEYS.participationToken),
+          appStorage.deleteItem(STORAGE_KEYS.examinationCode),
+          appStorage.deleteItem(STORAGE_KEYS.studentProgress),
+          appStorage.deleteItem(STORAGE_KEYS.examCheckpoint),
+          appStorage.deleteItem('tcc.student.preload.ready'),
+          ExamLifecycle.clear(),
+          PeerExamClient.clear(),
+        ]);
+        try {
+          const { clearApplicantExamMaterial } = await import(
+            '@/features/applicants/services/applicantExamCleanup'
+          );
+          await clearApplicantExamMaterial();
+        } catch {
+          /* ignore */
+        }
+        useStudentStore.getState().reset();
+        useExamStore.getState().reset();
+        useLobbyStore.getState().reset();
+      } finally {
+        router.replace('/');
+      }
+    };
+
+    if (authority === 'ENDED') {
+      void leave();
+      return;
+    }
+
     Alert.alert(
       'Exit Examination',
       'Are you sure you want to leave the examination lobby and return to the main landing page?',
@@ -375,28 +420,7 @@ export default function StudentLobbyScreen() {
         {
           text: 'Exit',
           style: 'destructive',
-          onPress: async () => {
-            try {
-              const studentId = currentStudent?.id;
-              if (studentId) {
-                await StudentRepository.cancelRegistration(String(studentId)).catch(() => undefined);
-              }
-              await Promise.allSettled([
-                appStorage.deleteItem(STORAGE_KEYS.participationToken),
-                appStorage.deleteItem(STORAGE_KEYS.examinationCode),
-                appStorage.deleteItem(STORAGE_KEYS.studentProgress),
-                appStorage.deleteItem(STORAGE_KEYS.examCheckpoint),
-                appStorage.deleteItem('tcc.student.preload.ready'),
-                ExamLifecycle.clear(),
-                PeerExamClient.clear(),
-              ]);
-              useStudentStore.getState().reset();
-              useExamStore.getState().reset();
-              useLobbyStore.getState().reset();
-            } finally {
-              router.replace('/');
-            }
-          },
+          onPress: () => void leave(),
         },
       ],
     );
@@ -404,6 +428,17 @@ export default function StudentLobbyScreen() {
 
   return (
     <View style={styles.screen}>
+      <View style={styles.processHeader}>
+        <View style={styles.progress}>
+          {EXAM_PROCESS_STEPS.map((label, index) => (
+            <View
+              key={label}
+              style={[styles.progressSeg, index <= 3 && styles.progressSegOn]}
+            />
+          ))}
+        </View>
+        <Text style={styles.stepLabel}>Step 4 of 6 · Lobby</Text>
+      </View>
       <Header
         title={lobbyData?.schedule?.name || "Entrance Examination"}
         subtitle={isStale ? "Syncing Connection..." : "Secure Student Dashboard"}
@@ -424,7 +459,7 @@ export default function StudentLobbyScreen() {
            </View>
 
            <View style={[styles.readinessBanner, examReady ? styles.readyBg : styles.progressBg]}>
-              {examReady ? <Check size={18} color={colors.success} /> : <ActivityIndicator size="small" color={colors.primary} />}
+              {examReady ? <Check size={18} color={examProcess.okText} /> : <ActivityIndicator size="small" color={examProcess.accent} />}
               <Text style={[styles.readinessText, examReady ? styles.readyText : styles.progressText]}>
                  {controller.state === 'FINISHING_DOWNLOAD'
                    ? `Finishing Download...\n${Math.round(progress.percent)}%`
@@ -491,7 +526,7 @@ export default function StudentLobbyScreen() {
         <Card style={styles.waitingCard}>
           <View style={styles.waitingBannerRow}>
             <View style={styles.waitingAnimWrap}>
-              <ActivityIndicator size="small" color="#0055A4" />
+              <ActivityIndicator size="small" color={examProcess.accent} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.waitingBannerTitle}>
@@ -505,7 +540,7 @@ export default function StudentLobbyScreen() {
               </Text>
               <Text style={styles.waitingBannerSub}>
                 {authority === 'ENDED'
-                  ? 'This examination has ended. You cannot enter the waiting lobby again.'
+                  ? 'This examination has ended. Tap Return Home to leave.'
                   : controller.state === 'STARTING' || authority === 'ACTIVE'
                     ? 'Launching examination browser. Please hold on.'
                     : controller.state === 'FINISHING_DOWNLOAD'
@@ -515,9 +550,15 @@ export default function StudentLobbyScreen() {
             </View>
           </View>
 
+          {authority === 'ENDED' ? (
+            <View style={styles.startingBox}>
+              <Button title="Return Home" onPress={handleExit} />
+            </View>
+          ) : null}
+
           {(controller.state === 'STARTING' || controller.state === 'FINISHING_DOWNLOAD') && (
             <View style={styles.startingBox}>
-              <ActivityIndicator size="small" color={colors.primary} />
+              <ActivityIndicator size="small" color={examProcess.accent} />
               <Text style={styles.startingText}>
                 {controller.state === 'FINISHING_DOWNLOAD'
                   ? `Finishing Download... ${Math.round(progress.percent)}%`
@@ -531,7 +572,7 @@ export default function StudentLobbyScreen() {
         <Card style={styles.rulesCard}>
           <View style={styles.rulesHeader}>
             <View style={styles.rulesIconWrap}>
-              <ShieldCheck size={20} color="#0055A4" />
+              <ShieldCheck size={20} color={examProcess.accent} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rulesTitle}>Rules & Regulations</Text>
@@ -546,7 +587,7 @@ export default function StudentLobbyScreen() {
               <Text style={styles.ruleBullet}>•</Text>
               <Text style={styles.ruleText}>
                 <Text style={styles.ruleBold}>Verification: </Text>
-                Examinees must scan proctor QR code or enter verified 6-digit access code.
+                Examinees must join with the proctor QR code or room code on the same Join screen.
               </Text>
             </View>
 
@@ -591,7 +632,7 @@ export default function StudentLobbyScreen() {
               {(controller.lobbyQuery.isError || isStale) ? "Signal Interrupted" : `LOCAL LINK ACTIVE · PULSE ${new Date(controller.lastSeen).toLocaleTimeString()}`}
            </Text>
            <Pressable onPress={() => void controller.lobbyQuery.refetch()} style={styles.refreshBtn}>
-              <RefreshCw size={14} color={colors.primary} />
+              <RefreshCw size={14} color={examProcess.accent} />
            </Pressable>
         </View>
 
@@ -626,37 +667,51 @@ function InfoItem({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.background },
+  screen: { flex: 1, backgroundColor: examProcess.pageBg },
+  processHeader: {
+    paddingHorizontal: examProcess.padPage,
+    paddingTop: 8,
+    gap: 6,
+  },
+  progress: { flexDirection: 'row', gap: 6 },
+  progressSeg: {
+    flex: 1,
+    height: 4,
+    borderRadius: examProcess.radiusProgress,
+    backgroundColor: examProcess.progressTrack,
+  },
+  progressSegOn: { backgroundColor: examProcess.accent },
+  stepLabel: { color: examProcess.muted, fontSize: 12, marginBottom: 4 },
   content: { padding: 16, paddingBottom: 40 },
   mainCard: { padding: 16 },
   studentSection: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
-  avatarCircle: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
-  welcomeText: { fontSize: 16, fontWeight: '700', color: colors.ink },
-  programText: { fontSize: 13, color: colors.inkSecondary, fontWeight: '500' },
-  readinessBanner: { flexDirection: 'row', alignItems: 'center', padding: 10, borderRadius: 10, marginVertical: 8 },
-  readyBg: { backgroundColor: '#DCFCE7' },
-  progressBg: { backgroundColor: '#E0F2FE' },
+  avatarCircle: { width: 44, height: 44, borderRadius: 22, backgroundColor: examProcess.accent, alignItems: 'center', justifyContent: 'center' },
+  welcomeText: { fontSize: 16, fontWeight: '700', color: examProcess.ink },
+  programText: { fontSize: 13, color: examProcess.muted, fontWeight: '500' },
+  readinessBanner: { flexDirection: 'row', alignItems: 'center', padding: 10, borderRadius: examProcess.radiusControl, marginVertical: 8 },
+  readyBg: { backgroundColor: examProcess.okBg },
+  progressBg: { backgroundColor: '#EEF1FD' },
   readinessText: { fontSize: 13, fontWeight: '700', marginLeft: 8, flex: 1 },
-  readyText: { color: colors.success },
-  progressText: { color: '#0369A1' },
+  readyText: { color: examProcess.okText },
+  progressText: { color: examProcess.accent },
   pendingText: { color: '#B45309' },
   readinessCard: { marginTop: 12, padding: 14 },
-  readinessCardTitle: { fontSize: 13, fontWeight: '800', color: '#003366', marginBottom: 8 },
+  readinessCardTitle: { fontSize: 13, fontWeight: '800', color: examProcess.ink, marginBottom: 8 },
   readinessRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 5 },
-  readinessRowLabel: { fontSize: 12, fontWeight: '600', color: '#64748B' },
-  readinessRowValue: { fontSize: 12, fontWeight: '800', color: colors.ink },
+  readinessRowLabel: { fontSize: 12, fontWeight: '600', color: examProcess.muted },
+  readinessRowValue: { fontSize: 12, fontWeight: '800', color: examProcess.ink },
   infoCard: { marginTop: 12, padding: 0, overflow: 'hidden' },
   infoGrid: { flexDirection: 'row', justifyContent: 'space-between', padding: 16 },
   infoItem: { alignItems: 'center' },
-  infoLabel: { fontSize: 10, fontWeight: '800', color: colors.inkMuted, textTransform: 'uppercase' },
-  infoValue: { fontSize: 14, fontWeight: '700', color: colors.ink, marginTop: 2 },
+  infoLabel: { fontSize: 10, fontWeight: '800', color: examProcess.muted, textTransform: 'uppercase' },
+  infoValue: { fontSize: 14, fontWeight: '700', color: examProcess.ink, marginTop: 2 },
   waitingCard: {
     marginTop: 12,
     padding: 12,
-    borderRadius: 14,
-    backgroundColor: '#F8FAFC',
+    borderRadius: examProcess.radiusCard,
+    backgroundColor: examProcess.cardBg,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: examProcess.cardBorder,
   },
   waitingBannerRow: {
     flexDirection: 'row',
@@ -666,42 +721,42 @@ const styles = StyleSheet.create({
   waitingAnimWrap: {
     width: 36,
     height: 36,
-    borderRadius: 10,
-    backgroundColor: '#EBF3FE',
+    borderRadius: examProcess.radiusControl,
+    backgroundColor: '#EEF1FD',
     alignItems: 'center',
     justifyContent: 'center',
   },
   waitingBannerTitle: {
     fontSize: 13,
     fontWeight: '800',
-    color: '#003366',
+    color: examProcess.ink,
   },
   waitingBannerSub: {
     fontSize: 11,
-    color: '#64748B',
+    color: examProcess.muted,
     marginTop: 2,
     fontWeight: '500',
     lineHeight: 15,
   },
-  startingBox: { flexDirection: 'row', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#E2E8F0' },
-  startingText: { fontSize: 14, fontWeight: '700', color: colors.primary, marginLeft: 8 },
-  networkBox: { flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: colors.surface, borderRadius: 12, borderWidth: 1, borderColor: colors.border, marginTop: 8 },
+  startingBox: { flexDirection: 'row', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: examProcess.cardBorder },
+  startingText: { fontSize: 14, fontWeight: '700', color: examProcess.accent, marginLeft: 8 },
+  networkBox: { flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: examProcess.cardBg, borderRadius: examProcess.radiusCard, borderWidth: 1, borderColor: examProcess.cardBorder, marginTop: 8 },
   pulse: { width: 8, height: 8, borderRadius: 4, marginRight: 10 },
-  networkText: { fontSize: 10, fontWeight: '700', color: colors.inkMuted, flex: 1 },
+  networkText: { fontSize: 10, fontWeight: '700', color: examProcess.muted, flex: 1 },
   refreshBtn: { padding: 4 },
   exitBtn: { marginTop: 16 },
-  loadingInfo: { fontSize: 13, color: colors.inkMuted, fontStyle: 'italic', textAlign: 'center' },
-  crashWrap: { flex: 1, backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center', padding: 40 },
-  crashTitle: { fontSize: 20, fontWeight: '800', color: colors.ink, marginBottom: 12 },
+  loadingInfo: { fontSize: 13, color: examProcess.muted, fontStyle: 'italic', textAlign: 'center' },
+  crashWrap: { flex: 1, backgroundColor: examProcess.pageBg, alignItems: 'center', justifyContent: 'center', padding: 40 },
+  crashTitle: { fontSize: 20, fontWeight: '800', color: examProcess.ink, marginBottom: 12 },
 
   // RULES & REGULATIONS STYLES
   rulesCard: {
     marginTop: 14,
     padding: 16,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
+    borderRadius: examProcess.radiusCard,
+    backgroundColor: examProcess.cardBg,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: examProcess.cardBorder,
   },
   rulesHeader: {
     flexDirection: 'row',
@@ -710,24 +765,24 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    borderBottomColor: examProcess.cardBorder,
   },
   rulesIconWrap: {
     width: 36,
     height: 36,
-    borderRadius: 10,
-    backgroundColor: '#EBF3FE',
+    borderRadius: examProcess.radiusControl,
+    backgroundColor: '#EEF1FD',
     alignItems: 'center',
     justifyContent: 'center',
   },
   rulesTitle: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#003366',
+    color: examProcess.ink,
   },
   rulesSubtitle: {
     fontSize: 11,
-    color: '#64748B',
+    color: examProcess.muted,
     fontWeight: '500',
     marginTop: 1,
   },
@@ -742,17 +797,17 @@ const styles = StyleSheet.create({
   ruleBullet: {
     fontSize: 14,
     fontWeight: '900',
-    color: '#0055A4',
+    color: examProcess.accent,
     lineHeight: 18,
   },
   ruleText: {
     flex: 1,
     fontSize: 12,
     lineHeight: 17,
-    color: '#475569',
+    color: examProcess.muted,
   },
   ruleBold: {
     fontWeight: '700',
-    color: '#003366',
+    color: examProcess.ink,
   },
 });

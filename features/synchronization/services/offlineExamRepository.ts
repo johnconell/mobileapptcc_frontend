@@ -1,4 +1,4 @@
-import { getCloudApiBaseUrl, getApiBaseUrl } from '@/shared/services/api';
+import { getCloudApiBaseUrl, getApiBaseUrl, getSyncToken } from '@/shared/services/api';
 import {
   describeApiReachabilityProblem,
   studentPackDownloadFailureMessage,
@@ -276,6 +276,78 @@ export function buildExamQuestions(pack: OfflinePack): Question[] {
   }));
 }
 
+export type ChoiceDisplayMap = Record<ChoiceKey, ChoiceKey>;
+
+export type StudentExamPaper = {
+  questions: Question[];
+  /** display letter → original pack letter, per question id */
+  choiceMaps: Record<string, ChoiceDisplayMap>;
+};
+
+function shuffleQuestionChoices(question: Question): {
+  question: Question;
+  displayToOriginal: ChoiceDisplayMap;
+} {
+  const keys = (['A', 'B', 'C', 'D'] as ChoiceKey[]).filter(
+    (k) => String(question.choices?.[k] ?? '').trim() !== '',
+  );
+  const pool = keys.length >= 2 ? keys : (['A', 'B', 'C', 'D'] as ChoiceKey[]);
+  const originalPairs = pool.map((key) => ({
+    original: key,
+    text: String(question.choices?.[key] ?? ''),
+  }));
+  const mixed = shuffled(originalPairs);
+  const choices = { A: '', B: '', C: '', D: '' } as Record<ChoiceKey, string>;
+  const displayToOriginal = { A: 'A', B: 'B', C: 'C', D: 'D' } as ChoiceDisplayMap;
+  let correctAnswer: ChoiceKey = question.correctAnswer;
+
+  mixed.forEach((pair, index) => {
+    const display = pool[index] ?? (['A', 'B', 'C', 'D'] as ChoiceKey[])[index];
+    if (!display) return;
+    choices[display] = pair.text;
+    displayToOriginal[display] = pair.original;
+    if (pair.original === question.correctAnswer) {
+      correctAnswer = display;
+    }
+  });
+
+  return {
+    question: {
+      ...question,
+      choices,
+      correctAnswer,
+    },
+    displayToOriginal,
+  };
+}
+
+/**
+ * Per-student exam paper: unique question order (within category rules) and
+ * shuffled answer choices. Choice maps convert display letters back to pack letters for grading.
+ */
+export function buildStudentExamPaper(pack: OfflinePack): StudentExamPaper {
+  const base = buildExamQuestions(pack);
+  const choiceMaps: Record<string, ChoiceDisplayMap> = {};
+  const questions = base.map((q, index) => {
+    const { question, displayToOriginal } = shuffleQuestionChoices(q);
+    choiceMaps[question.id] = displayToOriginal;
+    return { ...question, number: index + 1 };
+  });
+  return { questions, choiceMaps };
+}
+
+/** Map a student's display-letter answer back to the pack's original letter. */
+export function toOriginalAnswerLetter(
+  choiceMaps: Record<string, ChoiceDisplayMap> | undefined,
+  questionId: string,
+  displayLetter: string | null | undefined,
+): string | null {
+  if (displayLetter == null || displayLetter === '') return null;
+  const letter = String(displayLetter).toUpperCase().charAt(0) as ChoiceKey;
+  const mapped = choiceMaps?.[questionId]?.[letter];
+  return mapped ?? letter;
+}
+
 export function grade(
   pack: OfflinePack,
   answers: Record<string, string | null>,
@@ -344,7 +416,7 @@ export const OfflineExamRepository = {
 
     // Pack export requires ADMIN_SYNC_TOKEN (or admin Sanctum). A proctor
     // login token must NOT be preferred — it causes 401 Unauthorized.
-    const syncToken = process.env.EXPO_PUBLIC_SYNC_TOKEN?.trim() || null;
+    const syncToken = getSyncToken();
     if (!syncToken) {
       throw new Error(
         'Missing EXPO_PUBLIC_SYNC_TOKEN in the app .env (must match ADMIN_SYNC_TOKEN on the server). Restart Expo after changing it.',
@@ -779,7 +851,7 @@ export const OfflineExamRepository = {
       return { synced: 0, message: 'No offline results waiting to sync.' };
     }
 
-    const syncToken = process.env.EXPO_PUBLIC_SYNC_TOKEN?.trim() || null;
+    const syncToken = getSyncToken();
     if (!syncToken) {
       throw new Error(
         'Missing EXPO_PUBLIC_SYNC_TOKEN in the app .env (must match ADMIN_SYNC_TOKEN on the server).',

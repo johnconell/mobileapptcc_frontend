@@ -3,8 +3,11 @@ import * as Network from 'expo-network';
 
 import {
   buildExamQuestions,
+  buildStudentExamPaper,
   grade,
   OfflineExamRepository,
+  toOriginalAnswerLetter,
+  type ChoiceDisplayMap,
 } from '@/features/synchronization/services/offlineExamRepository';
 import { OfflineStore, computePackHash, computePackHashAsync, type OfflinePack } from '@/features/synchronization/services/offlineStore';
 import type {
@@ -18,6 +21,9 @@ import type {
 export const PEER_PORT = 9777;
 export const PEER_PATH_PREFIX = '/p2p';
 export const MAX_ROOM_CAPACITY = 60;
+
+/** Prevents two devices racing the same passkey into one seat on first join. */
+const joinLocks = new Set<number>();
 
 /**
  * expo-http-server is a native module: absent in Expo Go and on web. Loading it
@@ -62,6 +68,8 @@ type PeerStudentState = {
   answers: Record<string, string | null>;
   /** Question ids in this student's shuffled order, so a reload keeps it. */
   order: string[];
+  /** display letter → original pack letter, per question id */
+  choiceMaps?: Record<string, ChoiceDisplayMap>;
   submittedAt: string | null;
   score: number | null;
   reconnectCode: string | null;
@@ -116,6 +124,8 @@ let routesRegistered = false;
 let running = false;
 let hostIp: string | null = null;
 let listeners: Array<() => void> = [];
+let examWatchdog: ReturnType<typeof setInterval> | null = null;
+let endingExam = false;
 
 // Performance optimizations & Bulletproof Caching
 let _cachedSnapshot: LobbySnapshot | null = null;
@@ -340,6 +350,103 @@ function remainingSeconds(state: PeerSessionState): number | null {
   return Math.max(0, Math.round(state.durationMinutes * 60 - elapsed));
 }
 
+function allStudentsFinished(state: PeerSessionState): boolean {
+  const roster = Object.values(state.students);
+  if (roster.length === 0) return false;
+  return roster.every(
+    (s) =>
+      Boolean(s.submittedAt) ||
+      s.status === 'finished' ||
+      s.status === 'terminated',
+  );
+}
+
+function stopExamWatchdog() {
+  if (examWatchdog) {
+    clearInterval(examWatchdog);
+    examWatchdog = null;
+  }
+}
+
+function startExamWatchdog() {
+  stopExamWatchdog();
+  examWatchdog = setInterval(() => {
+    void (async () => {
+      if (!session || session.status !== 'in_progress' || endingExam) return;
+      const rem = remainingSeconds(session);
+      // Keep proctor countdown fresh even while the snapshot cache is warm.
+      if (rem != null) {
+        invalidateSnapshot();
+        notify();
+      }
+      if (rem != null && rem <= 0) {
+        console.log('[SERVER] Auto-ending examination — time expired.');
+        endingExam = true;
+        try {
+          await PeerExamServer.endExam();
+        } catch (err) {
+          console.warn('[SERVER] Auto-end on time failed:', err);
+        } finally {
+          endingExam = false;
+        }
+        return;
+      }
+      if (allStudentsFinished(session)) {
+        console.log('[SERVER] Auto-ending examination — all students finished.');
+        endingExam = true;
+        try {
+          await PeerExamServer.endExam();
+        } catch (err) {
+          console.warn('[SERVER] Auto-end on all finished failed:', err);
+        } finally {
+          endingExam = false;
+        }
+      }
+    })();
+  }, 1000);
+}
+
+function questionsForStudent(student: PeerStudentState, built: Question[]): Question[] {
+  const byId = new Map(built.map((q) => [q.id, q]));
+  const ordered = student.order
+    .map((id) => byId.get(id))
+    .filter((q): q is Question => Boolean(q));
+  const source = ordered.length ? ordered : built;
+
+  return source.map((q, index) => {
+    const map = student.choiceMaps?.[q.id];
+    if (!map) {
+      return {
+        ...q,
+        number: index + 1,
+        correctAnswer: 'A' as const,
+        explanation: '',
+      };
+    }
+    const keys = ['A', 'B', 'C', 'D'] as const;
+    const choices = { A: '', B: '', C: '', D: '' } as Question['choices'];
+    for (const display of keys) {
+      const original = map[display] ?? display;
+      choices[display] = q.choices[original] ?? '';
+    }
+    return {
+      ...q,
+      number: index + 1,
+      choices,
+      correctAnswer: 'A' as const,
+      explanation: '',
+    };
+  });
+}
+
+function answersForGrading(student: PeerStudentState): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
+  for (const [questionId, display] of Object.entries(student.answers)) {
+    out[questionId] = toOriginalAnswerLetter(student.choiceMaps, questionId, display);
+  }
+  return out;
+}
+
 /** Live roster only — students who scanned, entered a key, and joined. */
 async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
   // Return cached if clean (Critical Fix for Root Cause 1)
@@ -396,6 +503,13 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
       ...(resolved?.session as LobbySnapshot['session']),
       remainingSeconds: remainingSeconds(state),
       durationMinutes: state.durationMinutes,
+      startedAt: state.startedAt,
+      endsAt:
+        state.startedAt && state.durationMinutes
+          ? new Date(
+              new Date(state.startedAt).getTime() + state.durationMinutes * 60_000,
+            ).toISOString()
+          : null,
     },
     status: state.status,
     examinationCode: state.examCode,
@@ -420,6 +534,7 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
     is_owner: true,
     remainingSeconds: remainingSeconds(state),
     wifiSsid: state.wifiSsid,
+    endedAt: state.endedAt,
   };
 
   _snapshotDirty = false;
@@ -751,12 +866,26 @@ function registerRoutes(mod: HttpServerModule) {
 
     const registrationId = Number(validated.student.registration_id ?? 0);
     const existing = session.students[registrationId];
+    const providedToken = String(body.participation_token ?? '').trim();
 
     if (existing?.submittedAt || existing?.status === 'finished') {
       return fail(
         403,
         'Examination Already Completed: This examination has already been submitted. Multiple attempts are not permitted.',
       );
+    }
+
+    // One seat per examination key: reject a second device while the first is live.
+    if (existing && existing.status !== 'disconnected') {
+      const lastSeenMs = new Date(existing.lastActivityAt || existing.joinedAt).getTime();
+      const recentlyActive = Number.isFinite(lastSeenMs) && Date.now() - lastSeenMs < 120_000;
+      const sameDevice = Boolean(providedToken) && providedToken === existing.token;
+      if (recentlyActive && !sameDevice) {
+        return fail(
+          409,
+          'This examination key is already in use. Only one examinee may join with this key. Ask the proctor for a reconnect PIN if you need to switch devices.',
+        );
+      }
     }
 
     const applicantCode = (validated.student.studentId || '').trim().toUpperCase();
@@ -780,6 +909,15 @@ function registerRoutes(mod: HttpServerModule) {
       return fail(409, 'Room Full. Maximum capacity of 60 students reached. Please contact the Proctor.');
     }
 
+    // Guard against two devices racing past the uniqueness check on first join.
+    if (!existing && joinLocks.has(registrationId)) {
+      return fail(
+        409,
+        'This examination key is already in use. Only one examinee may join with this key.',
+      );
+    }
+    if (!existing) joinLocks.add(registrationId);
+
     const now = new Date().toISOString();
     const downloadPercent = Math.max(0, Math.min(100, Number(body.download_percent ?? (body.is_ready === true ? 100 : 0)) || 0));
     const hashVerified = body.hash_verified === true || (body.is_ready === true && Boolean(studentPackHash));
@@ -787,64 +925,68 @@ function registerRoutes(mod: HttpServerModule) {
     const isReady = body.is_ready === true && moduleReady;
 
     let student = existing;
-    if (student) {
-      // Rejoin: refresh activity and return the existing token
-      // Rejoin: refresh activity, readiness, and return the existing token
-      student.lastActivityAt = now;
-      student.isReady = isReady;
-      student.packageHash = studentPackHash || student.packageHash;
-      student.downloadPercent = downloadPercent;
-      student.hashVerified = hashVerified;
-      student.moduleReady = moduleReady;
-      console.log(`[SESSION] Student ${student.applicantCode} rejoined.`);
-    } else {
-      const questions = buildExamQuestions(pack);
-      student = {
-        token: makeToken(registrationId),
-        registrationId,
-        applicantId: Number(validated.student.id),
-        applicantCode: validated.student.studentId,
-        fullName: validated.student.fullName,
-        email: String(body.gmail ?? validated.student.email ?? ''),
-        programCode: validated.student.programCode,
-        programName: validated.student.programName,
-        avatarInitials: validated.student.avatarInitials,
-        status: session.status === 'in_progress' ? 'taking_exam' : 'waiting',
-        joinedAt: now,
-        startedAt: session.status === 'in_progress' ? now : null,
-        lastActivityAt: now,
-        violationCount: 0,
-        terminationReason: null,
-        answers: {},
-        order: questions.map((q) => q.id),
-        submittedAt: null,
-        score: null,
-        reconnectCode: null,
-        reconnectCodeExpiresAt: null,
-        isReady,
-        packageHash: studentPackHash || null,
-        downloadPercent,
-        hashVerified,
-        moduleReady,
-        startPhase: session.status === 'in_progress' ? 'waiting' : 'waiting',
-      };
-      session.students[registrationId] = student;
-      if (!session.tokenMap) session.tokenMap = {};
-      session.tokenMap[student.token] = registrationId;
-      console.log(`[SESSION] Student ${student.applicantCode} joined lobby.`);
-      console.log(`[SESSION] Student ${student.applicantCode} joined lobby (Ready: ${isReady}).`);
-      console.log('[SERVER] Student connected. Registration ID:', registrationId);
+    try {
+      if (student) {
+        // Rejoin: refresh activity, readiness, and return the existing token
+        student.lastActivityAt = now;
+        student.isReady = isReady;
+        student.packageHash = studentPackHash || student.packageHash;
+        student.downloadPercent = downloadPercent;
+        student.hashVerified = hashVerified;
+        student.moduleReady = moduleReady;
+        console.log(`[SESSION] Student ${student.applicantCode} rejoined.`);
+      } else {
+        const paper = buildStudentExamPaper(pack);
+        student = {
+          token: makeToken(registrationId),
+          registrationId,
+          applicantId: Number(validated.student.id),
+          applicantCode: validated.student.studentId,
+          fullName: validated.student.fullName,
+          email: String(body.gmail ?? validated.student.email ?? ''),
+          programCode: validated.student.programCode,
+          programName: validated.student.programName,
+          avatarInitials: validated.student.avatarInitials,
+          status: session.status === 'in_progress' ? 'taking_exam' : 'waiting',
+          joinedAt: now,
+          startedAt: session.status === 'in_progress' ? now : null,
+          lastActivityAt: now,
+          violationCount: 0,
+          terminationReason: null,
+          answers: {},
+          order: paper.questions.map((q) => q.id),
+          choiceMaps: paper.choiceMaps,
+          submittedAt: null,
+          score: null,
+          reconnectCode: null,
+          reconnectCodeExpiresAt: null,
+          isReady,
+          packageHash: studentPackHash || null,
+          downloadPercent,
+          hashVerified,
+          moduleReady,
+          startPhase: 'waiting',
+        };
+        session.students[registrationId] = student;
+        if (!session.tokenMap) session.tokenMap = {};
+        session.tokenMap[student.token] = registrationId;
+        console.log(`[SESSION] Student ${student.applicantCode} joined lobby.`);
+        console.log(`[SESSION] Student ${student.applicantCode} joined lobby (Ready: ${isReady}).`);
+        console.log('[SERVER] Student connected. Registration ID:', registrationId);
+      }
+
+      invalidateSnapshot();
+      await persist();
+      notify();
+
+      return ok({
+        registration_id: registrationId,
+        participation_token: student.token,
+        lobby: await buildSnapshot(session),
+      });
+    } finally {
+      joinLocks.delete(registrationId);
     }
-
-    invalidateSnapshot();
-    await persist();
-    notify();
-
-    return ok({
-      registration_id: registrationId,
-      participation_token: student.token,
-      lobby: await buildSnapshot(session),
-    });
   });
 
   mod.route(p('/lobby'), 'GET', async (request) => {
@@ -910,20 +1052,13 @@ function registerRoutes(mod: HttpServerModule) {
     const pack = _packCache;
     if (!pack) return fail(500, 'Exam Pack Missing');
 
-    // Replay this student's stored order so a reload never reshuffles mid-exam.
+    // Replay this student's stored order + choice shuffle so a reload never reshuffles mid-exam.
     if (!_builtQuestionsCache) {
       console.log('[SERVER] Building exam questions cache...');
       _builtQuestionsCache = buildExamQuestions(pack);
     }
     const built = _builtQuestionsCache;
-
-    const byId = new Map(built.map((q) => [q.id, q]));
-    const questions: Question[] = student.order
-      .map((id) => byId.get(id))
-      .filter((q): q is Question => Boolean(q))
-      .map((q, index) => ({ ...q, number: index + 1 }));
-
-    const outgoing = questions.length ? questions : built;
+    const outgoing = questionsForStudent(student, built);
     if (!outgoing.length) {
       return fail(500, 'Question Bank Not Found');
     }
@@ -956,13 +1091,7 @@ function registerRoutes(mod: HttpServerModule) {
     if (!_builtQuestionsCache) {
       _builtQuestionsCache = buildExamQuestions(pack);
     }
-    const built = _builtQuestionsCache;
-    const byId = new Map(built.map((q) => [q.id, q]));
-    const questions: Question[] = student.order
-      .map((id) => byId.get(id))
-      .filter((q): q is Question => Boolean(q))
-      .map((q, index) => ({ ...q, number: index + 1 }));
-    const outgoing = questions.length ? questions : built;
+    const outgoing = questionsForStudent(student, _builtQuestionsCache);
     if (!outgoing.length) return fail(500, 'Question Bank Not Found');
     return ok({
       questions: outgoing,
@@ -1037,7 +1166,7 @@ function registerRoutes(mod: HttpServerModule) {
       return fail(422, 'Validation Error: Student code is required for submission.');
     }
 
-    const graded = grade(pack, student.answers);
+    const graded = grade(pack, answersForGrading(student));
     const now = new Date().toISOString();
     student.submittedAt = now;
     student.lastActivityAt = now;
@@ -1381,6 +1510,10 @@ export const PeerExamServer = {
       });
     }
 
+    if (session.status === 'in_progress') {
+      startExamWatchdog();
+    }
+
     await persist();
     notify();
     return true;
@@ -1437,11 +1570,12 @@ export const PeerExamServer = {
       session &&
       session.scheduleId === scheduleId &&
       session.roomId === roomId &&
-      session.status !== 'ended';
+      session.status === 'lobby_open' &&
+      session.examCode === input.examCode.trim().toUpperCase();
 
-    // FIX PROBLEM 2: Auto-reset old session when switching schedules/rooms so old QR codes and token maps are invalidated.
+    // Reset when switching rooms/schedules, after end, or when minting a new exam code.
     if (session && !reopening) {
-      console.log('[SERVER] Switching schedules/rooms. Resetting old server session state.');
+      console.log('[SERVER] Switching schedules/rooms or minting new code. Resetting old server session state.');
       await this.reset();
     }
 
@@ -1467,6 +1601,7 @@ export const PeerExamServer = {
         wifiSsid,
         startSeq: 0,
       };
+      invalidateSnapshot();
     }
 
     if (!running) {
@@ -1513,6 +1648,7 @@ export const PeerExamServer = {
     invalidateSnapshot();
     await persist();
     notify();
+    startExamWatchdog();
     console.log('[SERVER] Broadcast ACTIVE');
     return buildSnapshot(session);
   },
@@ -1522,6 +1658,7 @@ export const PeerExamServer = {
     if (session.status === 'lobby_open') {
       throw new Error('Examination has not started. Close the lobby instead.');
     }
+    stopExamWatchdog();
     const now = new Date().toISOString();
     session.status = 'ended';
     session.endedAt = now;
@@ -1538,7 +1675,7 @@ export const PeerExamServer = {
       // Auto-grade in-flight answers for students who didn't explicitly submit
       if (!student.submittedAt && pack && numericScheduleId > 0 && student.applicantCode) {
         student.submittedAt = now;
-        const graded = grade(pack, student.answers);
+        const graded = grade(pack, answersForGrading(student));
         student.score = graded.score;
 
         const queuedRow = {
@@ -1648,9 +1785,11 @@ export const PeerExamServer = {
   },
 
   async reset(): Promise<void> {
+    stopExamWatchdog();
     await this.stop();
     session = null;
     hostIp = null;
+    invalidateSnapshot();
     await OfflineStore.clearPeerSession();
   },
 

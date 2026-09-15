@@ -34,4 +34,4 @@ npm test          # node:test suites
 npm run typecheck # tsc --noEmit
 ```
 
-JS updates: `eas update --branch production`. Native/plugin changes need a new APK.
+JS updates: `eas update --branch production`. Native/plugin changes need a new APK. yeH

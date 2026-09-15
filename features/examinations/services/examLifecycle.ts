@@ -85,7 +85,26 @@ export const ExamLifecycle = {
     extras: Partial<Pick<AuthorityRecord, 'sessionId' | 'startedAt' | 'startSeq'>> = {},
   ): Promise<AuthorityRecord> {
     await this.hydrate();
-    if (!canReplace(memory.status, incoming)) {
+
+    const nextSessionId =
+      extras.sessionId !== undefined ? extras.sessionId : memory.sessionId;
+    const sessionChanged =
+      extras.sessionId != null &&
+      memory.sessionId != null &&
+      String(extras.sessionId) !== String(memory.sessionId);
+
+    // A different examination session always supersedes prior authority.
+    if (sessionChanged) {
+      memory = {
+        status: 'WAITING',
+        sessionId: String(extras.sessionId),
+        startedAt: null,
+        updatedAt: Date.now(),
+        startSeq: 0,
+      };
+    }
+
+    if (!sessionChanged && !canReplace(memory.status, incoming)) {
       console.log(
         `[LIFECYCLE] Ignored stale ${incoming} (current ${memory.status})`,
       );
@@ -94,11 +113,13 @@ export const ExamLifecycle = {
     memory = {
       ...memory,
       status: incoming,
-      sessionId: extras.sessionId ?? memory.sessionId,
+      sessionId: nextSessionId,
       startedAt:
         incoming === 'ACTIVE' || incoming === 'STARTING'
           ? extras.startedAt ?? memory.startedAt ?? new Date().toISOString()
-          : extras.startedAt ?? memory.startedAt,
+          : incoming === 'WAITING'
+            ? null
+            : extras.startedAt ?? memory.startedAt,
       updatedAt: Date.now(),
       startSeq: extras.startSeq ?? memory.startSeq,
     };
@@ -111,7 +132,25 @@ export const ExamLifecycle = {
     roomStatus?: string | null,
     extras: Partial<Pick<AuthorityRecord, 'sessionId' | 'startedAt' | 'startSeq'>> = {},
   ): Promise<AuthorityRecord> {
-    return this.apply(mapServerToAuthority(roomStatus), extras);
+    const incoming = mapServerToAuthority(roomStatus);
+    await this.hydrate();
+
+    // Proctor lobby is authoritative: a reopened / not-started room must demote
+    // stale ACTIVE left over from a previous batch on this device.
+    if (incoming === 'WAITING') {
+      memory = {
+        status: 'WAITING',
+        sessionId: extras.sessionId ?? memory.sessionId,
+        startedAt: null,
+        updatedAt: Date.now(),
+        startSeq: extras.startSeq ?? 0,
+      };
+      await appStorage.setItem(STORAGE_KEY, JSON.stringify(memory));
+      emit();
+      return memory;
+    }
+
+    return this.apply(incoming, extras);
   },
 
   async clear(): Promise<void> {

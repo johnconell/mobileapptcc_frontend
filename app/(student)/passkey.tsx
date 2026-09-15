@@ -3,6 +3,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Text,
+  TextInput,
   View,
   StyleSheet,
 } from 'react-native';
@@ -10,17 +11,16 @@ import { useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { KeyRound } from 'lucide-react-native';
-import { Button } from '@/shared/components/ui/Button';
-import { Card } from '@/shared/components/ui/Card';
-import { Header } from '@/shared/components/ui/Header';
-import { Input } from '@/shared/components/ui/Input';
-import { SkeletonForm } from '@/shared/components/ui/Skeleton';
+import {
+  ExamProcessActions,
+  ExamProcessButton,
+  ExamProcessChrome,
+} from '@/features/examinations/components/ExamProcessChrome';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { appStorage } from '@/shared/services/storage';
-import { colors } from '@/shared/theme';
+import { examProcess } from '@/shared/theme/examProcess';
 
 const schema = z.object({
   passkey: z
@@ -64,10 +64,9 @@ export default function StudentPasskeyScreen() {
 
   if (!scannedSessionId) {
     return (
-      <View style={styles.screen}>
-        <Header title="Examination Key" subtitle="Loading…" />
-        <SkeletonForm fields={1} />
-      </View>
+      <ExamProcessChrome step={1} title="Examination Key" stepLabel="Step 2 of 6 · Key">
+        <Text style={styles.hint}>Loading session…</Text>
+      </ExamProcessChrome>
     );
   }
 
@@ -103,13 +102,16 @@ export default function StudentPasskeyScreen() {
       if (!result.student) {
         throw new Error(result.message || 'Unable to continue with this examination key.');
       }
-      // Prevent repeated attempts: check if this applicant already has a queued or submitted result or local device marker
       try {
-        const applicantCode = String(result.student?.studentId || result.student?.id || '').trim().toUpperCase();
+        const applicantCode = String(result.student?.studentId || result.student?.id || '')
+          .trim()
+          .toUpperCase();
         const scheduleId = result.schedule?.id ? Number(result.schedule.id) : null;
 
         if (applicantCode && scheduleId) {
-          const localMarker = await appStorage.getItem(`tcc.student.completed.${scheduleId}.${applicantCode}`);
+          const localMarker = await appStorage.getItem(
+            `tcc.student.completed.${scheduleId}.${applicantCode}`,
+          );
           if (localMarker === '1') {
             setError(
               'Examination Already Completed\nYou have already taken this examination on this device. Multiple attempts are not permitted.',
@@ -120,12 +122,17 @@ export default function StudentPasskeyScreen() {
 
         const results = await OfflineStore.getResults();
         const already = results.find((r) => {
-          const matchApplicant = (r.applicant_code || '').trim().toUpperCase() === applicantCode;
-          const matchSchedule = scheduleId ? Number(r.examination_schedule_id) === scheduleId : false;
+          const matchApplicant =
+            (r.applicant_code || '').trim().toUpperCase() === applicantCode;
+          const matchSchedule = scheduleId
+            ? Number(r.examination_schedule_id) === scheduleId
+            : false;
           return matchApplicant && matchSchedule;
         });
         if (already) {
-          setError('Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.');
+          setError(
+            'Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.',
+          );
           return;
         }
       } catch {
@@ -140,74 +147,89 @@ export default function StudentPasskeyScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.screen}
+      style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Header
+      <ExamProcessChrome
+        step={1}
         title="Examination Key"
-        subtitle="Enter the key emailed to your Gmail"
-        onBack={() => router.replace('/')}
-      />
-      <View style={styles.content}>
-        <Card>
-          <View style={styles.iconRow}>
-            <KeyRound size={28} color={colors.primary} />
-          </View>
-          <Text style={styles.intro}>
-            Use the unique examination key sent to your Gmail. Do not use another student&apos;s
-            key.
-          </Text>
+        stepLabel="Step 2 of 6 · Key"
+        onBack={() => router.replace('/(student)/scan')}
+      >
+        <Text style={styles.intro}>
+          Use the unique examination key sent to your Gmail. Do not use another student&apos;s
+          key.
+        </Text>
 
-          <Controller
-            control={control}
-            name="passkey"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <Input
-                label="Examination Key"
-                placeholder="e.g. K7M2P9QX"
-                autoCapitalize="characters"
-                autoCorrect={false}
-                autoComplete="off"
-                value={value}
-                onChangeText={(text) => onChange(text.replace(/[^A-Za-z0-9]/g, '').toUpperCase())}
-                onBlur={onBlur}
-                error={errors.passkey?.message}
-                maxLength={12}
-              />
-            )}
+        <Text style={styles.label}>Examination Key</Text>
+        <Controller
+          control={control}
+          name="passkey"
+          render={({ field: { onChange, onBlur, value } }) => (
+            <TextInput
+              style={[styles.input, Boolean(errors.passkey || error) && styles.inputInvalid]}
+              placeholder="e.g. K7M2P9QX"
+              placeholderTextColor={examProcess.muted}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              autoComplete="off"
+              value={value}
+              onChangeText={(text) =>
+                onChange(text.replace(/[^A-Za-z0-9]/g, '').toUpperCase())
+              }
+              onBlur={onBlur}
+              maxLength={12}
+              onSubmitEditing={onContinue}
+            />
+          )}
+        />
+        {errors.passkey?.message ? <Text style={styles.error}>{errors.passkey.message}</Text> : null}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+
+        <ExamProcessActions>
+          <ExamProcessButton
+            title="Back"
+            variant="back"
+            onPress={() => router.replace('/(student)/scan')}
           />
-
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-
-          <Button
-            title="Continue"
-            loading={isSubmitting}
-            onPress={onContinue}
-            style={styles.btn}
-          />
-        </Card>
-      </View>
+          <ExamProcessButton title="Next" loading={isSubmitting} onPress={onContinue} />
+        </ExamProcessActions>
+      </ExamProcessChrome>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.background },
-  content: { padding: 20, flex: 1 },
-  iconRow: { alignItems: 'center', marginBottom: 12 },
+  flex: { flex: 1, backgroundColor: examProcess.pageBg },
+  hint: { color: examProcess.muted, fontSize: 13 },
   intro: {
-    fontSize: 14,
-    lineHeight: 21,
-    color: colors.inkSecondary,
-    marginBottom: 18,
-    textAlign: 'center',
-  },
-  error: {
-    marginTop: 8,
-    marginBottom: 4,
     fontSize: 13,
-    color: '#B42318',
+    lineHeight: 19,
+    color: examProcess.muted,
+    marginBottom: 14,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: examProcess.ink,
+    marginBottom: 6,
+  },
+  input: {
+    backgroundColor: examProcess.inputBg,
+    borderWidth: 1,
+    borderColor: examProcess.inputBorder,
+    borderRadius: examProcess.radiusControl,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: examProcess.ink,
+    width: '100%',
+  },
+  inputInvalid: { borderColor: examProcess.error },
+  error: {
+    color: examProcess.error,
+    fontSize: 12,
+    marginTop: 6,
     fontWeight: '600',
   },
-  btn: { marginTop: 16 },
 });

@@ -82,6 +82,7 @@ export interface ExamSession {
   registeredStudents: number;
   durationMinutes: number;
   remainingSeconds?: number | null;
+  startedAt?: string | null;
   endsAt?: string | null;
   totalQuestions: number;
   questionBankId?: number;
@@ -186,6 +187,7 @@ export interface LobbySnapshot {
   can_control?: boolean;
   is_owner?: boolean;
   remainingSeconds?: number | null;
+  endedAt?: string | null;
   allow_late_entry?: boolean;
   my_status?: LobbyStudentStatus;
   registration_id?: number;

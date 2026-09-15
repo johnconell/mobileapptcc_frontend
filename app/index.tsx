@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Modal, Pressable, Text, View, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { Pressable, Text, View, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
-import { Keyboard, QrCode, Shield } from 'lucide-react-native';
+import { QrCode, Shield } from 'lucide-react-native';
 import { APP_NAME, SCHOOL_NAME } from '@/shared/constants';
 import { colors, shadows } from '@/shared/theme';
 import { Card } from '@/shared/components/ui/Card';
@@ -24,12 +24,12 @@ export default function HomeScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ stay?: string; from?: string }>();
   const insets = useSafeAreaInsets();
-  const [joinOpen, setJoinOpen] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
 
   // If a proctor session exists on this phone on initial cold launch, go straight to proctor dashboard.
   // When a user deliberately navigates here (e.g. after logout, back from login, or mode toggle),
   // stay on the landing page so applicants can scan QR code!
+  // Also resume an in-progress student exam after a closed browser tab.
   useEffect(() => {
     let active = true;
     void (async () => {
@@ -49,6 +49,15 @@ export default function HomeScreen() {
           router.replace('/(proctor)/(tabs)/dashboard');
           return;
         }
+
+        const { tryResumeStudentExam } = await import(
+          '@/features/examinations/services/resumeExamSession'
+        );
+        const resumed = await tryResumeStudentExam();
+        if (active && resumed.ok) {
+          router.replace(resumed.route);
+          return;
+        }
       } catch (err) {
         console.warn('Fast session check error:', err);
       } finally {
@@ -65,21 +74,35 @@ export default function HomeScreen() {
   useEffect(() => {
     // Applicants must not keep leftover exam modules on the landing phone.
     // Do not wipe a live lobby/exam session if the student briefly returns here.
+    // If a live session exists, offer resume instead of showing a dead home screen.
     void (async () => {
       const session = await AuthRepository.getCachedSessionFast();
       if (session) return;
       const { appStorage } = await import('@/shared/services/storage');
       const { STORAGE_KEYS } = await import('@/shared/constants');
       const inSession = await appStorage.getItem(STORAGE_KEYS.participationToken);
-      if (inSession) return;
+      if (inSession) {
+        try {
+          const { tryResumeStudentExam } = await import(
+            '@/features/examinations/services/resumeExamSession'
+          );
+          const resumed = await tryResumeStudentExam();
+          if (resumed.ok) {
+            router.replace(resumed.route);
+            return;
+          }
+        } catch {
+          // keep token; do not clear while an exam may still be recoverable
+        }
+        return;
+      }
       await clearApplicantExamMaterial();
     })();
-  }, []);
+  }, [router]);
 
-  // No Wi‑Fi / Hub check here — students open the scanner first.
-  // Network matching is validated only AFTER a QR is scanned (or a code is submitted).
+  // Join screen merges QR scan + room code. Wi‑Fi is validated after a payload is provided.
   const startTakeExam = () => {
-    setJoinOpen(true);
+    router.push('/(student)/scan');
   };
 
   if (checkingAuth) {
@@ -190,9 +213,9 @@ export default function HomeScreen() {
           <Card>
             <Text style={styles.cardTitle}>How to take the exam</Text>
             <Text style={styles.cardBody}>
-              Connect to the examination Wi-Fi, then scan the proctor QR code or enter
-              the room code. Questions are sent from the proctor during the exam and
-              removed from this phone after you submit.
+              Connect to the examination Wi-Fi, then join with the proctor QR code or
+              room code on one screen. Questions are sent from the proctor during the
+              exam and removed from this phone after you submit.
             </Text>
           </Card>
         </Animated.View>
@@ -210,61 +233,6 @@ export default function HomeScreen() {
           style={styles.fab}
         />
       </View>
-
-      <Modal
-        transparent
-        visible={joinOpen}
-        animationType="fade"
-        onRequestClose={() => setJoinOpen(false)}
-      >
-        <View style={styles.overlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setJoinOpen(false)} />
-          <Animated.View entering={FadeInDown.springify()} style={styles.sheet}>
-            <Text style={styles.sheetTitle}>Join Examination</Text>
-            <Text style={styles.sheetSub}>
-              Choose how you want to enter the examination lobby.
-            </Text>
-
-            <Pressable
-              style={styles.option}
-              onPress={() => {
-                setJoinOpen(false);
-                router.push('/(student)/scan');
-              }}
-            >
-              <View style={styles.optionIcon}>
-                <QrCode size={22} color={colors.primary} />
-              </View>
-              <View style={styles.optionMeta}>
-                <Text style={styles.optionTitle}>Scan QR Code</Text>
-                <Text style={styles.optionBody}>Use your camera to scan the proctor QR.</Text>
-              </View>
-            </Pressable>
-
-            <Pressable
-              style={styles.option}
-              onPress={() => {
-                setJoinOpen(false);
-                router.push('/(student)/enter-code');
-              }}
-            >
-              <View style={styles.optionIcon}>
-                <Keyboard size={22} color={colors.primary} />
-              </View>
-              <View style={styles.optionMeta}>
-                <Text style={styles.optionTitle}>Enter Examination Code</Text>
-                <Text style={styles.optionBody}>
-                  For devices with damaged or unavailable cameras.
-                </Text>
-              </View>
-            </Pressable>
-
-            <Pressable onPress={() => setJoinOpen(false)} style={styles.cancel}>
-              <Text style={styles.cancelText}>Cancel</Text>
-            </Pressable>
-          </Animated.View>
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -344,44 +312,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   fab: { width: '100%', maxWidth: 320 },
-  overlay: {
-    flex: 1,
-    backgroundColor: colors.overlay,
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 22,
-    gap: 12,
-    ...shadows.card,
-  },
-  sheetTitle: { fontSize: 20, fontWeight: '700', color: colors.ink },
-  sheetSub: { fontSize: 14, color: colors.inkSecondary, lineHeight: 20, marginBottom: 4 },
-  option: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    padding: 14,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    backgroundColor: colors.background,
-  },
-  optionIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: '#F0D9DC',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  optionMeta: { flex: 1, gap: 2 },
-  optionTitle: { fontSize: 15, fontWeight: '700', color: colors.ink },
-  optionBody: { fontSize: 12, color: colors.inkMuted, lineHeight: 18 },
-  cancel: { alignItems: 'center', paddingVertical: 10 },
-  cancelText: { fontWeight: '700', color: colors.primary },
 });
 
 // small tweak styles for update button

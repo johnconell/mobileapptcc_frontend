@@ -2,8 +2,8 @@ import React from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
   Text,
+  TextInput,
   View,
   StyleSheet,
 } from 'react-native';
@@ -11,20 +11,24 @@ import { useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Button } from '@/shared/components/ui/Button';
-import { Card } from '@/shared/components/ui/Card';
-import { Header } from '@/shared/components/ui/Header';
-import { Input } from '@/shared/components/ui/Input';
-import { SkeletonDetail } from '@/shared/components/ui/Skeleton';
+import {
+  ExamProcessActions,
+  ExamProcessButton,
+  ExamProcessChrome,
+  ExamProcessOk,
+} from '@/features/examinations/components/ExamProcessChrome';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
 import { ExamPreloader } from '@/features/examinations/services/examPreloader';
 import { ExamLifecycle } from '@/features/examinations/services/examLifecycle';
-import { INITIAL_PACK_PROGRESS, type ExamPackProgress } from '@/features/examinations/services/examReadiness';
+import {
+  INITIAL_PACK_PROGRESS,
+  type ExamPackProgress,
+} from '@/features/examinations/services/examReadiness';
 import { appStorage } from '@/shared/services/storage';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
-import { colors } from '@/shared/theme';
+import { examProcess } from '@/shared/theme/examProcess';
 
 const gmailSchema = z.object({
   email: z
@@ -52,9 +56,9 @@ export default function StudentConfirmationScreen() {
   const [joinError, setJoinError] = React.useState<string | null>(null);
   const [joining, setJoining] = React.useState(false);
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
-  const [downloadProgress, setDownloadProgress] = React.useState<ExamPackProgress>(INITIAL_PACK_PROGRESS);
+  const [downloadProgress, setDownloadProgress] =
+    React.useState<ExamPackProgress>(INITIAL_PACK_PROGRESS);
 
-  // Already has Gmail from import — confirm identity only; do not ask again.
   const hasGmail = Boolean(selectedStudent?.email?.trim());
 
   const {
@@ -85,10 +89,9 @@ export default function StudentConfirmationScreen() {
 
   if (!selectedStudent || !scannedSessionId) {
     return (
-      <View style={styles.screen}>
-        <Header title="Confirm Identity" subtitle="Loading…" onBack={goBack} />
-        <SkeletonDetail />
-      </View>
+      <ExamProcessChrome step={2} title="Confirm Identity" stepLabel="Step 3 of 6 · Confirm">
+        <Text style={styles.hint}>Loading…</Text>
+      </ExamProcessChrome>
     );
   }
 
@@ -129,31 +132,18 @@ export default function StudentConfirmationScreen() {
         email: email.trim().toLowerCase(),
       };
 
-      const lobby =
-        effectivePasskey
-          ? await LobbyRepository.joinWithPasskey(verified, scannedSessionId, effectivePasskey)
-          : await LobbyRepository.joinStudent(verified, scannedSessionId);
+      const lobby = effectivePasskey
+        ? await LobbyRepository.joinWithPasskey(verified, scannedSessionId, effectivePasskey)
+        : await LobbyRepository.joinStudent(verified, scannedSessionId);
 
-      // CRITICAL: Update the verified student with the EXACT registration_id from the server
       const regId = lobby.registration_id;
       if (regId) {
         verified.registration_id = Number(regId);
       } else {
-        // Fallback for full snapshots
-        const match = lobby.students?.find(s => s.studentId === verified.studentId);
+        const match = lobby.students?.find((s) => s.studentId === verified.studentId);
         if (match) verified.registration_id = Number(match.id);
       }
       setVerifiedStudent(verified);
-
-      if (__DEV__) {
-        try {
-          console.debug('[StudentConfirmation] joined lobby', {
-            sessionId: scannedSessionId,
-            registrationId: verified.registration_id,
-            students: lobby.students?.length ?? 0,
-          });
-        } catch {}
-      }
       setSnapshot(lobby);
       await ExamLifecycle.applyFromServer(lobby.status, { sessionId: String(scannedSessionId) });
       router.replace('/(student)/lobby');
@@ -175,37 +165,36 @@ export default function StudentConfirmationScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.screen}
+      style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Header
+      <ExamProcessChrome
+        step={2}
         title="Confirm Identity"
-        subtitle={hasGmail ? 'Confirm your details to join' : 'Enter your Gmail for results'}
+        stepLabel="Step 3 of 6 · Confirm"
         onBack={goBack}
-      />
-      <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
       >
-        <Card>
-          <Text style={styles.intro}>
-            {hasGmail
-              ? 'Confirm that this is your record. Your examination key matched this registration.'
-              : 'Confirm that this is your record, then enter your Gmail address for results.'}
-          </Text>
+        <Text style={styles.intro}>
+          {hasGmail
+            ? 'Confirm that this is your record. Your examination key matched this registration.'
+            : 'Confirm that this is your record, then enter your Gmail address for results.'}
+        </Text>
 
-          <ReadOnlyField label="Full Name" value={selectedStudent.fullName} />
-          <ReadOnlyField label="Desired Program" value={selectedStudent.programName} />
-          {hasGmail ? (
-            <ReadOnlyField label="Gmail" value={selectedStudent.email} />
-          ) : (
+        <ReadOnlyField label="Full Name" value={selectedStudent.fullName} />
+        <ReadOnlyField label="Desired Program" value={selectedStudent.programName} />
+        {hasGmail ? (
+          <ReadOnlyField label="Gmail" value={selectedStudent.email} />
+        ) : (
+          <View style={styles.field}>
+            <Text style={styles.label}>Gmail Address</Text>
             <Controller
               control={control}
               name="email"
               render={({ field: { onChange, onBlur, value } }) => (
-                <Input
-                  label="Gmail Address"
+                <TextInput
+                  style={[styles.input, Boolean(errors.email) && styles.inputInvalid]}
                   placeholder="yourname@gmail.com"
+                  placeholderTextColor={examProcess.muted}
                   autoCapitalize="none"
                   autoCorrect={false}
                   keyboardType="email-address"
@@ -213,40 +202,40 @@ export default function StudentConfirmationScreen() {
                   value={value}
                   onChangeText={onChange}
                   onBlur={onBlur}
-                  error={errors.email?.message}
-                  hint="Required so your score can be emailed later"
                 />
               )}
             />
-          )}
-
-          {statusMessage && joining ? (
-            <Text style={styles.statusMessage}>
-              {downloadProgress.percent > 0
-                ? `${statusMessage}\n${downloadProgress.phaseLabel}`
-                : statusMessage}
-            </Text>
-          ) : null}
-
-          {joinError ? <Text style={styles.error}>{joinError}</Text> : null}
-
-          <View style={styles.actions}>
-            <Button
-              title="Back"
-              variant="outline"
-              style={styles.btn}
-              onPress={goBack}
-              disabled={joining || isSubmitting}
-            />
-            <Button
-              title="Confirm & Join"
-              style={styles.btn}
-              loading={joining || isSubmitting}
-              onPress={hasGmail ? onConfirmExisting : onConfirmWithForm}
-            />
+            {errors.email?.message ? (
+              <Text style={styles.error}>{errors.email.message}</Text>
+            ) : (
+              <Text style={styles.hint}>Required so your score can be emailed later</Text>
+            )}
           </View>
-        </Card>
-      </ScrollView>
+        )}
+
+        <ExamProcessOk visible={Boolean(statusMessage && joining)}>
+          {downloadProgress.percent > 0
+            ? `${statusMessage}\n${downloadProgress.phaseLabel}`
+            : statusMessage}
+        </ExamProcessOk>
+
+        {joinError ? <Text style={styles.error}>{joinError}</Text> : null}
+
+        <ExamProcessActions>
+          <ExamProcessButton
+            title="Back"
+            variant="back"
+            onPress={goBack}
+            disabled={joining || isSubmitting}
+          />
+          <ExamProcessButton
+            title="Confirm & Join"
+            variant="submit"
+            loading={joining || isSubmitting}
+            onPress={hasGmail ? onConfirmExisting : onConfirmWithForm}
+          />
+        </ExamProcessActions>
+      </ExamProcessChrome>
     </KeyboardAvoidingView>
   );
 }
@@ -263,44 +252,46 @@ function ReadOnlyField({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.background },
-  content: { padding: 20, paddingBottom: 40 },
+  flex: { flex: 1, backgroundColor: examProcess.pageBg },
   intro: {
-    fontSize: 14,
-    lineHeight: 21,
-    color: colors.inkSecondary,
-    marginBottom: 18,
+    fontSize: 13,
+    lineHeight: 19,
+    color: examProcess.muted,
+    marginBottom: 14,
   },
-  field: { marginBottom: 14, gap: 6 },
+  field: { marginBottom: 12, gap: 6 },
   label: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.inkMuted,
-    textTransform: 'uppercase',
+    fontSize: 13,
+    fontWeight: '600',
+    color: examProcess.ink,
   },
   readonly: {
-    minHeight: 52,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-    paddingHorizontal: 14,
+    minHeight: 44,
+    borderRadius: examProcess.radiusControl,
+    borderWidth: 1,
+    borderColor: examProcess.inputBorder,
+    backgroundColor: examProcess.inputBg,
+    paddingHorizontal: 12,
     justifyContent: 'center',
   },
-  value: { fontSize: 15, fontWeight: '600', color: colors.ink },
+  value: { fontSize: 14, fontWeight: '600', color: examProcess.ink },
+  input: {
+    backgroundColor: examProcess.inputBg,
+    borderWidth: 1,
+    borderColor: examProcess.inputBorder,
+    borderRadius: examProcess.radiusControl,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: examProcess.ink,
+    width: '100%',
+  },
+  inputInvalid: { borderColor: examProcess.error },
   error: {
-    marginTop: 8,
-    fontSize: 13,
-    color: '#B42318',
+    marginTop: 6,
+    fontSize: 12,
+    color: examProcess.error,
     fontWeight: '600',
   },
-  statusMessage: {
-    marginTop: 8,
-    fontSize: 13,
-    color: colors.primary,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  actions: { flexDirection: 'row', gap: 10, marginTop: 18 },
-  btn: { flex: 1 },
+  hint: { fontSize: 12, color: examProcess.muted },
 });

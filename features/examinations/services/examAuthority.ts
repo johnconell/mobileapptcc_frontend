@@ -11,7 +11,7 @@ const RANK: Record<AuthorityStatus, number> = {
 export function canReplace(current: AuthorityStatus, incoming: AuthorityStatus): boolean {
   if (incoming === current) return true;
   if (incoming === 'ENDED') return true;
-  if (current === 'ENDED' && incoming !== 'ENDED') return false;
+  if (current === 'ENDED') return false;
   if (incoming === 'WAITING' && current !== 'WAITING') return false;
   if (incoming === 'STARTING' && (current === 'ACTIVE' || current === 'PAUSED')) return false;
   return RANK[incoming] >= RANK[current];
