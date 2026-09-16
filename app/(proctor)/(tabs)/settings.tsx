@@ -15,8 +15,6 @@ import {
   Shield,
   Moon,
   Sun,
-  Laptop,
-  Smartphone,
   ChevronRight,
   Sparkles,
   Type,
@@ -198,7 +196,7 @@ export default function ProctorSettingsScreen() {
                 style={[styles.menuSub, { color: colors.textSecondary }]}
                 maxFontSizeMultiplier={fontMultiplier}
               >
-                {themeMode === 'dark' ? 'Dark Mode' : themeMode === 'light' ? 'Light Mode' : 'System Auto'} · Font: {fontSize}
+                {themeMode === 'dark' ? 'Dark Mode' : 'Light Mode'} · Font: {fontSize}
               </Text>
             </View>
             <ChevronRight size={18} color={colors.textMuted} />
@@ -308,33 +306,6 @@ export default function ProctorSettingsScreen() {
                   Dark Mode
                 </Text>
                 {themeMode === 'dark' && (
-                  <Check size={14} color={colors.accent} style={styles.optionCheck} />
-                )}
-              </Pressable>
-
-              {/* System Auto */}
-              <Pressable
-                style={[
-                  styles.optionBtn,
-                  { backgroundColor: colors.cardMuted, borderColor: colors.cardBorder },
-                  themeMode === 'system' && {
-                    borderColor: colors.accent,
-                    backgroundColor: colors.accentMuted,
-                  },
-                ]}
-                onPress={() => setThemeMode('system')}
-              >
-                <Laptop size={20} color={themeMode === 'system' ? colors.accent : colors.textMuted} />
-                <Text
-                  style={[
-                    styles.optionText,
-                    { color: themeMode === 'system' ? colors.accent : colors.textSecondary },
-                  ]}
-                  maxFontSizeMultiplier={fontMultiplier}
-                >
-                  System
-                </Text>
-                {themeMode === 'system' && (
                   <Check size={14} color={colors.accent} style={styles.optionCheck} />
                 )}
               </Pressable>

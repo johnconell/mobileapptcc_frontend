@@ -168,7 +168,14 @@ function useLobbyController() {
           return;
         }
         // Proctor may have ended/closed the room while this student was away.
-        const health = await PeerExamClient.probeHealth();
+        // Or the proctor changed Wi‑Fi — refresh host IP from cloud before giving up.
+        let health = await PeerExamClient.probeHealth();
+        if (health === 'unreachable') {
+          const refreshed = await PeerExamClient.refreshHostFromCloud();
+          if (refreshed) {
+            health = await PeerExamClient.probeHealth();
+          }
+        }
         if (!cancelled && (health === 'ended' || health === 'idle')) {
           await applyLiveStatus('ended');
           setPulseOk(false);

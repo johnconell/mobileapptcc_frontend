@@ -24,6 +24,7 @@ import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { QUERY_KEYS } from '@/shared/constants';
 import { PeerExamServer } from '@/features/examinations/services/peerExamServer';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
+import { startProctorHostIpSync } from '@/features/monitoring/services/proctorHostIpSync';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
@@ -328,15 +329,6 @@ export default function ProctorLobbyScreen() {
     });
   }, [queryClient, sessionId, roomId]);
 
-  // Periodically refresh the LAN IP address in case Wi‑Fi toggled or DHCP changed.
-  useEffect(() => {
-    if (!peerHost) return;
-    const id = setInterval(() => {
-      void PeerExamServer.refreshHostIp();
-    }, 10000);
-    return () => clearInterval(id);
-  }, [peerHost]);
-
   useEffect(() => {
     if (lobbyQuery.data) {
       setSnapshot(lobbyQuery.data);
@@ -437,6 +429,32 @@ export default function ProctorLobbyScreen() {
   }, [lobbyQuery.data, setSnapshot, selected]);
 
   const lobby = lobbyQuery.data ?? storeLobby;
+
+  // Detect Wi‑Fi / DHCP changes: refresh local peer QR host IP and push to Laravel.
+  useEffect(() => {
+    const cloudSessionId =
+      lobby?.session?.examSessionId ??
+      (examSessionId ? Number(examSessionId) : null);
+    if (!peerHost && !cloudSessionId) return;
+
+    return startProctorHostIpSync({
+      examSessionId:
+        cloudSessionId && Number.isFinite(cloudSessionId) ? cloudSessionId : null,
+      onHostChanged: (host) => {
+        setPeerHost(host);
+        void queryClient.invalidateQueries({
+          queryKey: QUERY_KEYS.lobby(sessionId, roomId),
+        });
+      },
+    });
+  }, [
+    peerHost,
+    lobby?.session?.examSessionId,
+    examSessionId,
+    queryClient,
+    sessionId,
+    roomId,
+  ]);
 
   // Live countdown tick while the examination is running.
   useEffect(() => {
@@ -607,6 +625,16 @@ export default function ProctorLobbyScreen() {
     }
   };
 
+  const scheduleLabel =
+    lobby.schedule?.name ||
+    selectedSchedule?.name ||
+    'Examination Schedule';
+  const roomLabel = lobby.session?.roomName || lobby.roomName || 'Room 01';
+  const rawBatch = lobby.session?.batchNumber || '1';
+  const batchLabel = String(rawBatch).toLowerCase().startsWith('batch')
+    ? String(rawBatch)
+    : `Batch ${rawBatch}`;
+
   return (
     <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
       {/* 1. UNIFORM HEADER NAV BAR (Avatar Left, Title Center, Logout Right) */}
@@ -635,10 +663,10 @@ export default function ProctorLobbyScreen() {
 
         <View style={styles.navCenterBlock}>
           <Text style={[styles.navTitleText, { color: themeColors.textPrimary }]} numberOfLines={1}>
-            {lobby.session?.roomName || lobby.roomName || 'Examination Lobby'}
+            {scheduleLabel}
           </Text>
           <Text style={[styles.navSubtitleText, { color: themeColors.textSecondary }]} numberOfLines={1}>
-            Batch {lobby.session?.batchNumber || '1'} · {lobby.registeredCount || lobby.students.length} Candidates
+            {roomLabel} · {batchLabel} · {lobby.registeredCount || lobby.students.length} Candidates
           </Text>
         </View>
 
@@ -662,25 +690,74 @@ export default function ProctorLobbyScreen() {
         ListHeaderComponent={
           <View style={styles.headerBlock}>
             {/* ============================================================= */}
-            {/* 'Deposit Tether USDT' → EXAMINATION LOBBY QR CODE CARD        */}
-            {/* Vibrant red card (#7A1F2B), white QR inset, bold code, stats  */}
+            {/* EXAMINATION ACCESS PASS CARD (Theme-aware, matching results) */}
+            {/* Soft ivory in light mode, elevated dark in dark mode          */}
             {/* ============================================================= */}
-            <View style={styles.redDepositCard}>
+            <View
+              style={[
+                styles.accessPassCard,
+                {
+                  backgroundColor: themeColors.card,
+                  borderColor: themeColors.cardBorder,
+                },
+              ]}
+            >
               {/* Top Banner Row */}
               <View style={styles.depositTopRow}>
-                <View style={styles.depositTagBadge}>
-                  <Text style={styles.depositTagText}>EXAMINATION ACCESS PASS</Text>
+                <View
+                  style={[
+                    styles.depositTagBadge,
+                    {
+                      backgroundColor: isDark ? '#2A1414' : themeColors.accentMuted,
+                      borderColor: isDark ? '#7A1F2B50' : '#FECACA',
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.depositTagText,
+                      { color: isDark ? '#E8342A' : '#7A1F2B' },
+                    ]}
+                  >
+                    EXAMINATION ACCESS PASS
+                  </Text>
                 </View>
-                <View style={styles.depositLiveBadge}>
-                  <View style={styles.depositLiveDot} />
-                  <Text style={styles.depositLiveText}>
+
+                <View
+                  style={[
+                    styles.depositLiveBadge,
+                    {
+                      backgroundColor: isDark ? '#142918' : '#DCFCE7',
+                      borderColor: isDark ? '#22C55E40' : '#86EFAC',
+                    },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.depositLiveDot,
+                      { backgroundColor: isDark ? '#22C55E' : '#16A34A' },
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.depositLiveText,
+                      { color: isDark ? '#4ADE80' : '#15803D' },
+                    ]}
+                  >
                     {lobby.status === 'in_progress' ? 'EXAM IN PROGRESS' : 'LAN BROADCAST ACTIVE'}
                   </Text>
                 </View>
               </View>
 
               {/* Centered QR Code on White Inset Box */}
-              <View style={styles.qrWhiteFrame}>
+              <View
+                style={[
+                  styles.qrWhiteFrame,
+                  {
+                    borderColor: isDark ? '#262626' : themeColors.cardBorder,
+                  },
+                ]}
+              >
                 <QrCodePanel
                   value={lobby.qrValue}
                   size={190}
@@ -696,71 +773,108 @@ export default function ProctorLobbyScreen() {
 
               {/* Bold Hero Code Display */}
               <View style={styles.heroCodeSection}>
-                <Text style={styles.heroCodeLabel}>EXAMINATION ROOM ACCESS CODE</Text>
+                <Text style={[styles.heroCodeLabel, { color: themeColors.textMuted }]}>
+                  EXAMINATION ROOM ACCESS CODE
+                </Text>
                 <View style={styles.heroCodeRow}>
-                  <Text style={styles.heroCodeValue}>{lobby.examinationCode || '----'}</Text>
+                  <Text
+                    style={[
+                      styles.heroCodeValue,
+                      { color: isDark ? '#FFFFFF' : '#7A1F2B' },
+                    ]}
+                  >
+                    {lobby.examinationCode || '----'}
+                  </Text>
                   <View style={styles.codeActionButtonsRow}>
                     <Pressable
-                      style={styles.codeSquareBtn}
+                      style={[
+                        styles.codeSquareBtn,
+                        {
+                          backgroundColor: isDark ? '#1E1E1E' : themeColors.cardMuted,
+                          borderColor: isDark ? '#2E2E2E' : themeColors.cardBorder,
+                        },
+                      ]}
                       onPress={copyCode}
                       accessibilityLabel="Copy Code"
                       hitSlop={6}
                     >
                       {copied ? (
-                        <Check size={18} color="#FFFFFF" />
+                        <Check size={18} color={isDark ? '#22C55E' : '#16A34A'} />
                       ) : (
-                        <Copy size={18} color="#FFFFFF" />
+                        <Copy size={18} color={isDark ? '#FFFFFF' : '#7A1F2B'} />
                       )}
                     </Pressable>
                     <Pressable
-                      style={styles.codeSquareBtn}
+                      style={[
+                        styles.codeSquareBtn,
+                        {
+                          backgroundColor: isDark ? '#1E1E1E' : themeColors.cardMuted,
+                          borderColor: isDark ? '#2E2E2E' : themeColors.cardBorder,
+                        },
+                      ]}
                       onPress={handleShareCode}
                       accessibilityLabel="Share Code"
                       hitSlop={6}
                     >
-                      <Share2 size={18} color="#FFFFFF" />
+                      <Share2 size={18} color={isDark ? '#FFFFFF' : '#7A1F2B'} />
                     </Pressable>
                   </View>
                 </View>
               </View>
 
-              {/* Data Detail Rows (Translucent White Dividers) */}
-              <View style={styles.depositDetailsTable}>
+              {/* Data Detail Rows */}
+              <View
+                style={[
+                  styles.depositDetailsTable,
+                  {
+                    backgroundColor: isDark ? '#1A1A1A' : themeColors.cardMuted,
+                    borderColor: isDark ? '#262626' : themeColors.cardBorder,
+                  },
+                ]}
+              >
                 <View style={styles.depositDetailRow}>
-                  <Text style={styles.depositDetailLabel}>Room & Venue</Text>
-                  <Text style={styles.depositDetailVal}>
-                    {lobby.session?.roomName || lobby.roomName || 'Room 101'}
+                  <Text style={[styles.depositDetailLabel, { color: isDark ? '#A1A1AA' : themeColors.textSecondary }]}>Schedule</Text>
+                  <Text style={[styles.depositDetailVal, { color: isDark ? '#FFFFFF' : themeColors.textPrimary }]}>
+                    {scheduleLabel}
                   </Text>
                 </View>
-                <View style={styles.depositDetailDivider} />
+                <View style={[styles.depositDetailDivider, { backgroundColor: isDark ? '#262626' : themeColors.cardBorder }]} />
 
                 <View style={styles.depositDetailRow}>
-                  <Text style={styles.depositDetailLabel}>Batch Number</Text>
-                  <Text style={styles.depositDetailVal}>
-                    Batch {lobby.session?.batchNumber || '1'}
+                  <Text style={[styles.depositDetailLabel, { color: isDark ? '#A1A1AA' : themeColors.textSecondary }]}>Room & Venue</Text>
+                  <Text style={[styles.depositDetailVal, { color: isDark ? '#FFFFFF' : themeColors.textPrimary }]}>
+                    {roomLabel}
                   </Text>
                 </View>
-                <View style={styles.depositDetailDivider} />
+                <View style={[styles.depositDetailDivider, { backgroundColor: isDark ? '#262626' : themeColors.cardBorder }]} />
 
                 <View style={styles.depositDetailRow}>
-                  <Text style={styles.depositDetailLabel}>LAN Server Host</Text>
-                  <Text style={styles.depositDetailVal}>
+                  <Text style={[styles.depositDetailLabel, { color: isDark ? '#A1A1AA' : themeColors.textSecondary }]}>Batch Number</Text>
+                  <Text style={[styles.depositDetailVal, { color: isDark ? '#FFFFFF' : themeColors.textPrimary }]}>
+                    {batchLabel}
+                  </Text>
+                </View>
+                <View style={[styles.depositDetailDivider, { backgroundColor: isDark ? '#262626' : themeColors.cardBorder }]} />
+
+                <View style={styles.depositDetailRow}>
+                  <Text style={[styles.depositDetailLabel, { color: isDark ? '#A1A1AA' : themeColors.textSecondary }]}>LAN Server Host</Text>
+                  <Text style={[styles.depositDetailVal, { color: isDark ? '#FFFFFF' : themeColors.textPrimary }]}>
                     {peerHost ? `${peerHost}:${hosting.port}` : 'Local P2P Broadcast'}
                   </Text>
                 </View>
-                <View style={styles.depositDetailDivider} />
+                <View style={[styles.depositDetailDivider, { backgroundColor: isDark ? '#262626' : themeColors.cardBorder }]} />
 
                 <View style={styles.depositDetailRow}>
-                  <Text style={styles.depositDetailLabel}>Wi-Fi Network</Text>
-                  <Text style={styles.depositDetailVal}>
+                  <Text style={[styles.depositDetailLabel, { color: isDark ? '#A1A1AA' : themeColors.textSecondary }]}>Wi-Fi Network</Text>
+                  <Text style={[styles.depositDetailVal, { color: isDark ? '#FFFFFF' : themeColors.textPrimary }]}>
                     {lobby.wifiSsid || 'Testing Wi-Fi'}
                   </Text>
                 </View>
-                <View style={styles.depositDetailDivider} />
+                <View style={[styles.depositDetailDivider, { backgroundColor: isDark ? '#262626' : themeColors.cardBorder }]} />
 
                 <View style={styles.depositDetailRow}>
-                  <Text style={styles.depositDetailLabel}>Registered Examinees</Text>
-                  <Text style={styles.depositDetailVal}>
+                  <Text style={[styles.depositDetailLabel, { color: isDark ? '#A1A1AA' : themeColors.textSecondary }]}>Registered Examinees</Text>
+                  <Text style={[styles.depositDetailVal, { color: isDark ? '#FFFFFF' : themeColors.textPrimary }]}>
                     {lobby.registeredCount || lobby.students.length} Candidates
                   </Text>
                 </View>
@@ -796,7 +910,13 @@ export default function ProctorLobbyScreen() {
                       setBusy(false);
                     }
                   }}
-                  style={styles.depositOutlineBtn}
+                  style={[
+                    styles.depositOutlineBtn,
+                    {
+                      borderColor: isDark ? '#333333' : themeColors.cardBorder,
+                      backgroundColor: isDark ? '#1A1A1A' : themeColors.card,
+                    },
+                  ]}
                 />
 
                 <Button
@@ -821,7 +941,10 @@ export default function ProctorLobbyScreen() {
                       setStartOpen(true);
                     }
                   }}
-                  style={styles.depositSolidBtn}
+                  style={[
+                    styles.depositSolidBtn,
+                    { backgroundColor: '#7A1F2B' },
+                  ]}
                 />
               </View>
             </View>
@@ -1676,12 +1799,17 @@ const styles = StyleSheet.create({
     borderColor: '#262626',
   },
 
-  // 'DEPOSIT TETHER USDT' → EXAMINATION LOBBY QR CODE CARD
-  redDepositCard: {
-    backgroundColor: '#7A1F2B',
-    borderRadius: 24,
-    padding: 20,
+  // EXAMINATION LOBBY ACCESS PASS CARD
+  accessPassCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    padding: 18,
     gap: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 2,
   },
   depositTopRow: {
     flexDirection: 'row',
@@ -1689,36 +1817,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   depositTagBadge: {
-    backgroundColor: 'rgba(0,0,0,0.22)',
     paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingVertical: 4.5,
     borderRadius: 8,
+    borderWidth: 1,
   },
   depositTagText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '800',
-    color: '#FFFFFF',
-    letterSpacing: 0.5,
+    letterSpacing: 0.6,
   },
   depositLiveBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.18)',
     paddingHorizontal: 9,
     paddingVertical: 4,
     borderRadius: 8,
+    borderWidth: 1,
   },
   depositLiveDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: '#22C55E',
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   depositLiveText: {
     fontSize: 10,
     fontWeight: '800',
-    color: '#FFFFFF',
     letterSpacing: 0.4,
   },
   qrWhiteFrame: {
@@ -1727,16 +1852,16 @@ const styles = StyleSheet.create({
     padding: 14,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
   },
   heroCodeSection: {
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
     paddingVertical: 4,
   },
   heroCodeLabel: {
     fontSize: 11,
     fontWeight: '800',
-    color: 'rgba(255,255,255,0.85)',
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
@@ -1749,7 +1874,6 @@ const styles = StyleSheet.create({
   heroCodeValue: {
     fontSize: 34,
     fontWeight: '900',
-    color: '#FFFFFF',
     letterSpacing: 6,
   },
   codeActionButtonsRow: {
@@ -1758,38 +1882,35 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   codeSquareBtn: {
-    width: 36,
-    height: 36,
+    width: 38,
+    height: 38,
     borderRadius: 10,
-    backgroundColor: 'rgba(0,0,0,0.25)',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
   },
   depositDetailsTable: {
-    backgroundColor: 'rgba(0,0,0,0.18)',
     borderRadius: 16,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
   },
   depositDetailRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 7,
+    paddingVertical: 8,
   },
   depositDetailLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: 'rgba(255,255,255,0.78)',
   },
   depositDetailVal: {
     fontSize: 12,
     fontWeight: '800',
-    color: '#FFFFFF',
   },
   depositDetailDivider: {
     height: 1,
-    backgroundColor: 'rgba(255,255,255,0.12)',
   },
   cardInlineActionsRow: {
     flexDirection: 'row',
@@ -1817,12 +1938,11 @@ const styles = StyleSheet.create({
   },
   depositOutlineBtn: {
     flex: 1,
-    borderColor: 'rgba(255,255,255,0.4)',
-    backgroundColor: 'transparent',
+    borderRadius: 14,
   },
   depositSolidBtn: {
     flex: 1.3,
-    backgroundColor: '#141414',
+    borderRadius: 14,
   },
 
   // 'SWAP TOKENS INSTANTLY' → SWITCH ACTIVE ROOM MODAL
@@ -2160,10 +2280,17 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.inkMuted,
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginTop: 4,
+    letterSpacing: 0.8,
+    marginTop: 18,
+    marginBottom: 4,
   },
-  sectionHint: { fontSize: 13, color: colors.inkSecondary, fontWeight: '500', marginTop: -6 },
+  sectionHint: {
+    fontSize: 12,
+    color: colors.inkSecondary,
+    fontWeight: '500',
+    lineHeight: 18,
+    marginBottom: 10,
+  },
   historyTitle: {
     fontSize: 14,
     fontWeight: '800',

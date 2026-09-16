@@ -60,6 +60,67 @@ export const PeerExamClient = {
   },
 
   /**
+   * Fetch the latest proctor LAN IP from the cloud exam/resolve endpoint and
+   * update the cached peer target. Call before connect and on reconnect retry.
+   */
+  async refreshHostFromCloud(examCode?: string): Promise<boolean> {
+    const current = await this.getTarget();
+    const code = (examCode || current?.code || '').trim().toUpperCase();
+    if (!code) return false;
+
+    try {
+      const { getCloudApiBaseUrl, getApiBaseUrl } = await import('@/shared/services/api');
+      const base = getCloudApiBaseUrl() || getApiBaseUrl();
+      const res = await withTimeout(
+        (signal) =>
+          fetch(`${base}/exam/resolve`, {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ code }),
+            signal,
+          }),
+        6000,
+      );
+      if (!res.ok) return false;
+      const json = await res.json().catch(() => null);
+      if (!json || json.valid === false) return false;
+
+      const host = String(
+        json.local_server_ip ??
+          json.localServerIp ??
+          json.session?.localServerIp ??
+          json.data?.session?.localServerIp ??
+          '',
+      ).trim();
+      if (!host || host === '0.0.0.0') return false;
+
+      const port =
+        Number(json.peer_port ?? json.peerPort ?? current?.port) || PEER_PORT;
+      const wifiSsid =
+        (json.wifi_ssid ?? json.wifiSsid ?? json.session?.wifiSsid ?? current?.wifiSsid) != null
+          ? String(json.wifi_ssid ?? json.wifiSsid ?? json.session?.wifiSsid ?? current?.wifiSsid)
+          : null;
+      const nextCode = String(json.examinationCode ?? code).trim().toUpperCase() || code;
+
+      await this.setTarget({
+        host,
+        port,
+        code: nextCode,
+        scheduleId: current?.scheduleId ?? null,
+        roomId: current?.roomId ?? null,
+        wifiSsid,
+      });
+      return true;
+    } catch (err) {
+      if (__DEV__) console.warn('[PeerExamClient] refreshHostFromCloud failed:', err);
+      return false;
+    }
+  },
+
+  /**
    * Ultra-fast signal check (Fix Root Cause 1 & 2).
    * Polls the server for GLOBAL room status without needing a registration token.
    */
@@ -273,7 +334,7 @@ export const PeerExamClient = {
     } catch (err) {
       if (__DEV__) console.error(`[LAN ERROR] Request failed: ${baseUrl(target)}${path}`, err);
       throw new Error(
-        `Lost connection to the proctor phone (${target.host}). Stay on the same Wi‑Fi as the proctor and try again.`,
+        `Lost connection to the proctor phone (${target.host}). Make sure you are on the same Wi‑Fi as the proctor, then try again. If the proctor just changed networks, tap Reconnect.`,
       );
     }
 

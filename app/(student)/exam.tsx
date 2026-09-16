@@ -119,11 +119,13 @@ export default function ExamScreen() {
     };
   }, []);
 
-  const onWifiDisconnect = useCallback(() => {
+  const onWifiDisconnect = useCallback((reason: 'wifi_lost' | 'proctor_network_change') => {
+    // Do not mark / penalize the examinee when the proctor phone changed networks.
+    if (reason === 'proctor_network_change') return;
     void LobbyRepository.reportWifiDisconnect();
   }, []);
 
-  const { wifiLocked, requiresPin, unlockAfterReconnect } = useWifiExamGate({
+  const { wifiLocked, requiresPin, unlockAfterReconnect, disconnectReason } = useWifiExamGate({
     enabled: securityEnabled,
     onDisconnect: onWifiDisconnect,
   });
@@ -316,6 +318,26 @@ export default function ExamScreen() {
     },
     [unlockAfterReconnect],
   );
+
+  const handleProctorNetworkRetry = useCallback(async () => {
+    setReconnectLoading(true);
+    setReconnectError(null);
+    try {
+      await PeerExamClient.refreshHostFromCloud();
+      const unlocked = await unlockAfterReconnect();
+      if (!unlocked) {
+        setReconnectError(
+          "Still can't reach the proctor phone. Ask the proctor to stay on the exam Wi‑Fi and confirm the lobby is open.",
+        );
+      } else {
+        void LobbyRepository.sendHeartbeat();
+      }
+    } catch (err) {
+      setReconnectError(err instanceof Error ? err.message : 'Reconnect failed.');
+    } finally {
+      setReconnectLoading(false);
+    }
+  }, [unlockAfterReconnect]);
 
   useEffect(() => {
     navigation.setOptions({
@@ -608,7 +630,9 @@ export default function ExamScreen() {
         loading={reconnectLoading}
         error={reconnectError}
         examinationEnded={roomEnded}
+        proctorNetworkChanged={disconnectReason === 'proctor_network_change'}
         onSubmitCode={handleReconnect}
+        onRetry={handleProctorNetworkRetry}
         onExitEnded={leaveEndedExam}
       />
     </View>

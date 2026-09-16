@@ -3,20 +3,27 @@ import { isWifiConnected } from '@/features/monitoring/services/campusWifiGate';
 import * as Network from 'expo-network';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 
+export type WifiDisconnectReason = 'wifi_lost' | 'proctor_network_change';
+
 type WifiGateOptions = {
   enabled: boolean;
-  onDisconnect?: () => void;
+  onDisconnect?: (reason: WifiDisconnectReason) => void;
 };
 
 /**
  * Campus anti-cheat: exam requires any Wi‑Fi connection.
  * Turning Wi‑Fi off (or leaving Wi‑Fi) locks the exam until reconnect succeeds.
  * Includes a 30-second grace period before a hard Reconnect PIN is required.
+ *
+ * When Wi‑Fi is up but the proctor peer is unreachable, we first refresh the
+ * host IP from the cloud (proctor may have changed networks) before locking.
+ * Proctor-side network changes do not count as examinee anti-cheat violations.
  */
 export function useWifiExamGate({ enabled, onDisconnect }: WifiGateOptions) {
   const [wifiLocked, setWifiLocked] = useState(false);
   const [requiresPin, setRequiresPin] = useState(false);
   const [wifiConnected, setWifiConnected] = useState(true);
+  const [disconnectReason, setDisconnectReason] = useState<WifiDisconnectReason | null>(null);
   const wasConnected = useRef(true);
   const disconnectStartTime = useRef<number | null>(null);
 
@@ -36,17 +43,24 @@ export function useWifiExamGate({ enabled, onDisconnect }: WifiGateOptions) {
       return false;
     }
 
-    // If they re-established connection within the 30s grace period,
-    // they don't need a PIN.
-    if (!requiresPin) {
-        setWifiLocked(false);
-        wasConnected.current = true;
-        disconnectStartTime.current = null;
-        return true;
+    if (await PeerExamClient.isActive()) {
+      await PeerExamClient.refreshHostFromCloud();
+      const reachable = await PeerExamClient.ping();
+      if (!reachable) {
+        setWifiLocked(true);
+        setDisconnectReason('proctor_network_change');
+        return false;
+      }
     }
 
-    // If they exceeded 30s, they stay locked until PIN validation succeeds
-    // (handled separately in handleReconnect).
+    if (!requiresPin) {
+      setWifiLocked(false);
+      setDisconnectReason(null);
+      wasConnected.current = true;
+      disconnectStartTime.current = null;
+      return true;
+    }
+
     return false;
   }, [checkWifi, requiresPin]);
 
@@ -54,6 +68,7 @@ export function useWifiExamGate({ enabled, onDisconnect }: WifiGateOptions) {
     if (!enabled) {
       setWifiLocked(false);
       setRequiresPin(false);
+      setDisconnectReason(null);
       wasConnected.current = true;
       disconnectStartTime.current = null;
       return;
@@ -67,8 +82,23 @@ export function useWifiExamGate({ enabled, onDisconnect }: WifiGateOptions) {
 
       const isPeer = await PeerExamClient.isActive();
       let serverReachable = true;
-      if (isPeer) {
+      let reason: WifiDisconnectReason = 'wifi_lost';
+
+      if (!isWifi) {
+        serverReachable = false;
+        reason = 'wifi_lost';
+      } else if (isPeer) {
         serverReachable = await PeerExamClient.ping();
+        if (!serverReachable) {
+          // Proctor may have moved Wi‑Fi / got a new DHCP lease — refresh cloud IP once.
+          const refreshed = await PeerExamClient.refreshHostFromCloud();
+          if (refreshed) {
+            serverReachable = await PeerExamClient.ping();
+          }
+          if (!serverReachable) {
+            reason = 'proctor_network_change';
+          }
+        }
       }
 
       if (cancelled) return;
@@ -77,32 +107,33 @@ export function useWifiExamGate({ enabled, onDisconnect }: WifiGateOptions) {
 
       if (!connectionOk) {
         setWifiLocked(true);
+        setDisconnectReason(reason);
         if (!disconnectStartTime.current) {
           disconnectStartTime.current = Date.now();
         }
 
         const elapsed = (Date.now() - disconnectStartTime.current) / 1000;
-        if (elapsed > 30) {
+        // Proctor network change: never escalate to PIN — examinee is not at fault.
+        if (reason === 'wifi_lost' && elapsed > 30) {
           setRequiresPin(true);
         }
 
         if (wasConnected.current) {
           wasConnected.current = false;
-          onDisconnectRef.current?.();
+          onDisconnectRef.current?.(reason);
         }
       } else {
-        // Connection is back. If they were already in the "Requires PIN" state,
-        // we keep them locked but allow PIN entry.
         if (!requiresPin) {
-            setWifiLocked(false);
-            wasConnected.current = true;
-            disconnectStartTime.current = null;
+          setWifiLocked(false);
+          setDisconnectReason(null);
+          wasConnected.current = true;
+          disconnectStartTime.current = null;
         }
       }
     };
 
     void tick();
-    const id = setInterval(tick, 3000); // Polling every 3s for faster detection
+    const id = setInterval(tick, 3000);
 
     return () => {
       cancelled = true;
@@ -114,6 +145,7 @@ export function useWifiExamGate({ enabled, onDisconnect }: WifiGateOptions) {
     wifiLocked,
     requiresPin,
     wifiConnected,
+    disconnectReason,
     unlockAfterReconnect,
     setWifiLocked,
     setRequiresPin,

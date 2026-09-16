@@ -162,12 +162,22 @@ export async function apiRequest<T = unknown>(
   }
 
   if (!response.ok) {
-    const message =
-      json?.message ||
-      (response.status === 401
-        ? 'Session expired. Please sign in again.'
-        : `Request failed (${response.status}).`);
-    throw new ApiError(message, response.status, json);
+    const contentType = response.headers.get('content-type') ?? '';
+    const looksLikeHtml =
+      contentType.includes('text/html') ||
+      (typeof text === 'string' &&
+        /checking your browser|hcdn-cgi\/jschallenge|cf-browser-verification|just a moment/i.test(
+          text,
+        ));
+    const message = looksLikeHtml
+      ? 'Sign-in server is blocked by CDN bot protection (403). Disable Hostinger/hCDN JS challenge for metccapi.repohive.com API paths, then try again.'
+      : json?.message ||
+        (response.status === 401
+          ? 'Session expired. Please sign in again.'
+          : response.status === 403
+            ? 'Access denied (403). Check that this account is an active proctor and the API is reachable.'
+            : `Request failed (${response.status}).`);
+    throw new ApiError(message, response.status, json ?? text);
   }
 
   return json as T;

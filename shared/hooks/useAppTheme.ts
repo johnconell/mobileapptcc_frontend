@@ -85,8 +85,7 @@ export function useAppTheme() {
   const setThemeMode = useSettingsStore((s) => s.setThemeMode);
   const setFontSize = useSettingsStore((s) => s.setFontSize);
 
-  const isDark =
-    themeMode === 'dark' || (themeMode === 'system' && systemColorScheme === 'dark');
+  const isDark = themeMode === 'dark';
 
   const colors = isDark ? darkColors : lightColors;
 

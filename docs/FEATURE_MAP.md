@@ -17,6 +17,7 @@ symbol and want the dependency to be obvious.
 | examinations | `features/examinations` | `(student)/exam.tsx`, `(proctor)/room.tsx` | `peerExamServer`, `peerExamClient`, `examLifecycle`, `examAuthority`, `examStartCoordinator`, `examReadiness`, `examPreloader`, `examProgressStore`, `ExamSecurityService`, `passkeyClassification`, `examStore`, `QuestionRepository`, `SecurityRepository`, exam overlays |
 | lobby | `features/lobby` | `lobby.tsx` (both roles) | `LobbyRepository`, `lobbyStore`, `useLobby`, `LobbyStudentCard`, `LobbyWaitingAnimation` |
 | monitoring | `features/monitoring` | overlays | `networkMonitor`, `campusWifiGate`, `lanDiscovery`, wifi gate hooks, `useViolationMonitor`, `useViolations`, `CampusWifiBlockedCard` |
+| security | `features/security` | (barrel) | Re-exports anti-cheat: `useExamSecurity`, `useKioskMode`, `ExamSecurityService`, violation hooks |
 | qr-scanner | `features/qr-scanner` | `scan.tsx`, `enter-code.tsx` | joins via monitoring + lobby |
 | synchronization | `features/synchronization` | `offline-prepare.tsx` | `offlineStore`, `ensureExamPack`, `offlineExamRepository` |
 | results | `features/results` | `(tabs)/results.tsx` | queued result views |

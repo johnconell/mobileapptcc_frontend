@@ -4,6 +4,7 @@ import {
   Pressable,
   Text,
   ViewStyle,
+  StyleProp,
   StyleSheet,
 } from 'react-native';
 import Animated, {
@@ -26,7 +27,7 @@ interface ButtonProps {
   icon?: React.ReactNode;
   fullWidth?: boolean;
   className?: string;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);

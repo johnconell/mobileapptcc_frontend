@@ -86,6 +86,10 @@ export interface ExamSession {
   endsAt?: string | null;
   totalQuestions: number;
   questionBankId?: number;
+  /** Latest proctor LAN IP (cloud). Examinees refresh this after Wi‑Fi changes. */
+  localServerIp?: string | null;
+  wifiSsid?: string | null;
+  peerPort?: number | null;
 }
 
 export interface ExamRoom {
@@ -156,6 +160,8 @@ export interface LobbySnapshot {
   status: ExamLifecycleStatus;
   examinationCode?: string;
   wifiSsid?: string | null;
+  localServerIp?: string | null;
+  peerPort?: number | null;
   qrValue: string;
   roomName?: string | null;
   roomId?: number | null;

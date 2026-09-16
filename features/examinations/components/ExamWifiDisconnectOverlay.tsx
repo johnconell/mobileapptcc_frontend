@@ -12,7 +12,10 @@ interface ExamWifiDisconnectOverlayProps {
   error?: string | null;
   /** Proctor ended/closed the exam while this student was disconnected. */
   examinationEnded?: boolean;
+  /** Proctor changed Wi‑Fi / LAN IP — not an examinee fault. */
+  proctorNetworkChanged?: boolean;
   onSubmitCode: (code: string) => void | Promise<void>;
+  onRetry?: () => void | Promise<void>;
   onExitEnded?: () => void | Promise<void>;
 }
 
@@ -22,7 +25,9 @@ export function ExamWifiDisconnectOverlay({
   loading = false,
   error = null,
   examinationEnded = false,
+  proctorNetworkChanged = false,
   onSubmitCode,
+  onRetry,
   onExitEnded,
 }: ExamWifiDisconnectOverlayProps) {
   const [code, setCode] = useState('');
@@ -48,6 +53,23 @@ export function ExamWifiDisconnectOverlay({
                 loading={loading}
                 onPress={() => void onExitEnded?.()}
               />
+            </>
+          ) : proctorNetworkChanged && !requiresPin ? (
+            <>
+              <Text style={styles.title}>Proctor&apos;s connection changed</Text>
+              <Text style={styles.message}>
+                The proctor phone moved to a different Wi‑Fi network or got a new address. Stay on
+                the exam Wi‑Fi, then tap Reconnect. This is not counted as a violation.
+              </Text>
+              {error ? <Text style={styles.error}>{error}</Text> : null}
+              <Button
+                title="Reconnect"
+                size="lg"
+                fullWidth
+                loading={loading}
+                onPress={() => void onRetry?.()}
+              />
+              <Text style={styles.disclaimer}>Your answers remain saved locally on this phone.</Text>
             </>
           ) : (
             <>
@@ -81,14 +103,10 @@ export function ExamWifiDisconnectOverlay({
                   />
                 </>
               ) : (
-                <Text style={styles.hint}>
-                  Please move closer to the exam Wi‑Fi hotspot.
-                </Text>
+                <Text style={styles.hint}>Please move closer to the exam Wi‑Fi hotspot.</Text>
               )}
 
-              <Text style={styles.disclaimer}>
-                Your answers remain saved locally on this phone.
-              </Text>
+              <Text style={styles.disclaimer}>Your answers remain saved locally on this phone.</Text>
             </>
           )}
         </View>

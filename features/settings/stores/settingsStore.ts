@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { STORAGE_KEYS } from '@/shared/constants';
 import { appStorage } from '@/shared/services/storage';
 
-export type ThemeMode = 'light' | 'dark' | 'system';
+export type ThemeMode = 'light' | 'dark';
 export type AppFontSize = 'small' | 'standard' | 'large';
 
 interface SettingsState {
@@ -62,7 +62,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           keepAwakeDuringExam: parsed.keepAwakeDuringExam ?? true,
           reducedMotion: parsed.reducedMotion ?? false,
           allowUpdatesOnCellular: parsed.allowUpdatesOnCellular ?? false,
-          themeMode: parsed.themeMode ?? 'dark',
+          themeMode: parsed.themeMode === 'dark' ? 'dark' : 'light',
           fontSize: parsed.fontSize ?? 'standard',
           hydrated: true,
         });

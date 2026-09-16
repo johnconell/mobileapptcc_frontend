@@ -1799,10 +1799,35 @@ export const PeerExamServer = {
       hostIp = ip;
       if (session) {
         session.hostIp = ip;
+        try {
+          const netState = await Network.getNetworkStateAsync();
+          session.wifiSsid =
+            netState.type === Network.NetworkStateType.WIFI
+              ? ((netState as { ssid?: string | null }).ssid ?? session.wifiSsid)
+              : session.wifiSsid;
+        } catch {
+          // keep previous SSID
+        }
         await persist();
       }
+      invalidateSnapshot();
       notify();
     }
     return ip;
+  },
+
+  /**
+   * When the cloud mints a new exam code for an empty lobby after a network
+   * change, keep the local peer server in sync so the QR matches.
+   */
+  async adoptExamCode(code: string): Promise<void> {
+    if (!session) return;
+    const next = code.trim().toUpperCase();
+    if (!next || next === session.examCode) return;
+    if (Object.keys(session.students).length > 0) return;
+    session.examCode = next;
+    invalidateSnapshot();
+    await persist();
+    notify();
   },
 };

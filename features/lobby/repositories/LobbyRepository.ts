@@ -70,6 +70,11 @@ export const LobbyRepository = {
     questionBankId?: number,
     roomId?: string,
   ): Promise<LobbySnapshot> {
+    const { assertProctorWifiForRoomOpen } = await import(
+      '@/features/monitoring/services/proctorWifiLock'
+    );
+    const wifiIdentity = await assertProctorWifiForRoomOpen();
+
     const startPeerHost = async (): Promise<LobbySnapshot> => {
       if (!roomId) {
         throw new Error('Select a room first. Each room has its own examination code and QR.');
@@ -97,7 +102,9 @@ export const LobbyRepository = {
         await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, sid);
         await appStorage.setItem(STORAGE_KEYS.offlineExamCode, hostedNow.examinationCode);
         await setStoredCode(hostedNow.examinationCode);
-        return hostedNow;
+        // Refresh host IP in case Wi‑Fi changed while the lobby stayed open.
+        await PeerExamServer.refreshHostIp();
+        return (await PeerExamServer.snapshot()) ?? hostedNow;
       }
 
       const opened = await OfflineStore.getOpenedRooms();
@@ -124,13 +131,11 @@ export const LobbyRepository = {
     }
 
     try {
-      const netState = await import('expo-network').then((m) => m.getNetworkStateAsync());
-      const hostIp = await import('expo-network').then((m) => m.getIpAddressAsync());
-
       const body: Record<string, unknown> = {
         examination_schedule_id: Number(sessionId),
-        wifi_ssid: netState.type === 'WIFI' ? (netState as any).ssid : null,
-        local_server_ip: hostIp && hostIp !== '0.0.0.0' ? hostIp : null,
+        wifi_ssid: wifiIdentity.ssid,
+        wifi_bssid: wifiIdentity.bssid,
+        local_server_ip: wifiIdentity.localIp,
       };
       if (questionBankId) body.question_bank_id = questionBankId;
       if (roomId) body.examination_room_id = Number(roomId);
@@ -141,6 +146,18 @@ export const LobbyRepository = {
       });
       if (!json.data) throw new Error(json.message || 'Unable to open lobby.');
       await setStoredCode(json.data.examinationCode);
+      // Host peer LAN so QR embeds the current IP for examinee entry.
+      if (await OfflineStore.hasPack() && json.data.examinationCode) {
+        try {
+          await PeerExamServer.start({
+            scheduleId: sessionId,
+            roomId,
+            examCode: json.data.examinationCode,
+          });
+        } catch {
+          // Cloud lobby is enough if peer cannot start on this build.
+        }
+      }
       return json.data;
     } catch (error) {
       // Pack already on phone + Laravel unreachable → host on this device.
@@ -160,17 +177,42 @@ export const LobbyRepository = {
     questionBankId?: number,
     roomId?: string,
   ): Promise<LobbySnapshot> {
+    const { assertProctorWifiForRoomOpen } = await import(
+      '@/features/monitoring/services/proctorWifiLock'
+    );
+    await assertProctorWifiForRoomOpen();
+
     // Offline / peer: always (re)start the local server so a QR with a live host IP exists.
-    // Never reuse an ended session roster when opening a lobby.
     if (await OfflineStore.isOfflineMode()) {
       return this.openLobby(sessionId, questionBankId, roomId);
     }
 
     try {
       const existing = await this.fetchProctorLobby(sessionId, roomId);
-      if (existing && existing.status !== 'ended') return existing;
+      if (existing && existing.status !== 'ended') {
+        // Keep existing session; NetInfo sync will push the current IP if Wi‑Fi changed.
+        if (PeerExamServer.info().running) {
+          await PeerExamServer.refreshHostIp();
+          const examSessionId = existing.session?.examSessionId;
+          const ip = PeerExamServer.info().host;
+          if (examSessionId && ip) {
+            void this.updateSessionNetwork(examSessionId, {
+              localServerIp: ip,
+              wifiSsid: existing.wifiSsid ?? existing.session?.wifiSsid ?? null,
+              regenerateIfEmpty: false,
+            }).catch(() => undefined);
+          }
+        }
+        return existing;
+      }
       return this.openLobby(sessionId, questionBankId, roomId);
     } catch (error) {
+      if (
+        error instanceof Error &&
+        /Connect to the examination Wi‑Fi|no Wi‑Fi address/i.test(error.message)
+      ) {
+        throw error;
+      }
       if (await OfflineStore.hasPack()) {
         await OfflineStore.setOfflineMode(true);
         return this.openLobby(sessionId, questionBankId, roomId);
@@ -442,6 +484,50 @@ export const LobbyRepository = {
     return json.data;
   },
 
+  /**
+   * Push the proctor phone's current LAN IP to the cloud session record so
+   * examinees can refresh the host after a Wi‑Fi / DHCP change.
+   */
+  async updateSessionNetwork(
+    examSessionId: number,
+    input: {
+      localServerIp: string;
+      wifiSsid?: string | null;
+      wifiBssid?: string | null;
+      regenerateIfEmpty?: boolean;
+    },
+  ): Promise<{
+    snapshot: LobbySnapshot | null;
+    codeRegenerated: boolean;
+    joinedCount: number;
+  }> {
+    const json = await apiRequest<{
+      success: boolean;
+      message?: string;
+      data?: LobbySnapshot;
+      code_regenerated?: boolean;
+      joined_count?: number;
+    }>(`/proctor/sessions/${examSessionId}/network`, {
+      method: 'POST',
+      body: {
+        local_server_ip: input.localServerIp,
+        wifi_ssid: input.wifiSsid ?? null,
+        wifi_bssid: input.wifiBssid ?? null,
+        regenerate_if_empty: input.regenerateIfEmpty !== false,
+      },
+    });
+
+    if (json.data?.examinationCode) {
+      await setStoredCode(json.data.examinationCode);
+    }
+
+    return {
+      snapshot: json.data ?? null,
+      codeRegenerated: Boolean(json.code_regenerated),
+      joinedCount: Number(json.joined_count ?? 0),
+    };
+  },
+
   async verifyExaminationCode(rawCode: string): Promise<ExamCodeValidation> {
     // Peer QR: the proctor phone is the exam server. Its LAN address travels in
     // the QR, so no Laravel and no pack on this phone are needed.
@@ -449,21 +535,57 @@ export const LobbyRepository = {
     const peer = parsePeerQr(rawCode);
     if (peer) {
       await PeerExamClient.setTarget(peer);
-      const resolved = await PeerExamClient.request<{
-        schedule: ExamCodeValidation['schedule'];
-        session: ExamCodeValidation['session'];
-        examinationCode: string;
-      }>('/resolve', { method: 'POST', body: { code: peer.code } });
+      // Prefer the latest host IP from the cloud (proctor may have changed Wi‑Fi).
+      await PeerExamClient.refreshHostFromCloud(peer.code);
+      try {
+        const resolved = await PeerExamClient.request<{
+          schedule: ExamCodeValidation['schedule'];
+          session: ExamCodeValidation['session'];
+          examinationCode: string;
+        }>('/resolve', { method: 'POST', body: { code: peer.code } });
 
-      await setStoredCode(resolved.examinationCode || peer.code);
-      await OfflineStore.setOfflineMode(false);
-      return {
-        valid: true,
-        message: 'Connected to the proctor phone.',
-        schedule: resolved.schedule,
-        session: resolved.session,
-        examinationCode: resolved.examinationCode || peer.code,
-      };
+        await setStoredCode(resolved.examinationCode || peer.code);
+        await OfflineStore.setOfflineMode(false);
+        return {
+          valid: true,
+          message: 'Connected to the proctor phone.',
+          schedule: resolved.schedule,
+          session: resolved.session,
+          examinationCode: resolved.examinationCode || peer.code,
+        };
+      } catch (firstErr) {
+        // Stale QR IP — refresh from cloud once more, then LAN discovery.
+        const refreshed = await PeerExamClient.refreshHostFromCloud(peer.code);
+        if (refreshed) {
+          try {
+            const resolved = await PeerExamClient.request<{
+              schedule: ExamCodeValidation['schedule'];
+              session: ExamCodeValidation['session'];
+              examinationCode: string;
+            }>('/resolve', { method: 'POST', body: { code: peer.code } });
+            await setStoredCode(resolved.examinationCode || peer.code);
+            await OfflineStore.setOfflineMode(false);
+            return {
+              valid: true,
+              message: 'Connected to the proctor phone.',
+              schedule: resolved.schedule,
+              session: resolved.session,
+              examinationCode: resolved.examinationCode || peer.code,
+            };
+          } catch {
+            // fall through
+          }
+        }
+        throw firstErr instanceof Error
+          ? new Error(
+              firstErr.message.includes('Lost connection') || firstErr.message.includes('reach')
+                ? firstErr.message
+                : 'Cannot reach the exam session. Please make sure you are on the same Wi‑Fi as the Proctor and try again.',
+            )
+          : new Error(
+              'Cannot reach the exam session. Please make sure you are on the same Wi‑Fi as the Proctor and try again.',
+            );
+      }
     }
 
     if (isPeerPayload) {
@@ -471,6 +593,9 @@ export const LobbyRepository = {
     }
 
     const code = extractExaminationCode(rawCode);
+
+    // Cloud first: latest local_server_ip for this exam code (avoids stale QR hosts).
+    await PeerExamClient.refreshHostFromCloud(code);
 
     // If there is an active peer target, resolve via PeerExamClient
     if (await PeerExamClient.isActive()) {

@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { colors, radii, shadows } from '@/shared/theme';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { Button } from './Button';
 
 interface DialogProps {
@@ -19,13 +20,28 @@ interface DialogProps {
 }
 
 export function Dialog({ visible, title, description, children, onClose }: DialogProps) {
+  const { colors: themeColors } = useAppTheme();
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <Animated.View entering={FadeInDown.springify()} style={styles.sheet}>
-          <Text style={styles.title}>{title}</Text>
-          {description ? <Text style={styles.description}>{description}</Text> : null}
+        <Animated.View
+          entering={FadeInDown.springify()}
+          style={[
+            styles.sheet,
+            {
+              backgroundColor: themeColors.card,
+              borderColor: themeColors.cardBorder,
+              borderWidth: 1,
+            },
+          ]}
+        >
+          <Text style={[styles.title, { color: themeColors.textPrimary }]}>{title}</Text>
+          {description ? (
+            <Text style={[styles.description, { color: themeColors.textSecondary }]}>
+              {description}
+            </Text>
+          ) : null}
           {children}
         </Animated.View>
       </View>
@@ -56,18 +72,37 @@ export function ConfirmationModal({
   onConfirm,
   onCancel,
 }: ConfirmationModalProps) {
+  const { colors: themeColors, isDark } = useAppTheme();
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
       <View style={styles.overlay}>
-        <Animated.View entering={FadeIn.duration(180)} style={styles.sheet}>
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.description}>{description}</Text>
+        <Animated.View
+          entering={FadeIn.duration(180)}
+          style={[
+            styles.sheet,
+            {
+              backgroundColor: themeColors.card,
+              borderColor: themeColors.cardBorder,
+              borderWidth: 1,
+            },
+          ]}
+        >
+          <Text style={[styles.title, { color: themeColors.textPrimary }]}>{title}</Text>
+          <Text style={[styles.description, { color: themeColors.textSecondary }]}>
+            {description}
+          </Text>
           <View style={styles.actions}>
             <Button
               title={cancelLabel}
               variant="outline"
               onPress={onCancel}
-              style={styles.actionBtn}
+              style={[
+                styles.actionBtn,
+                {
+                  borderColor: isDark ? '#333333' : themeColors.cardBorder,
+                  backgroundColor: isDark ? '#1A1A1A' : themeColors.card,
+                },
+              ]}
               disabled={loading}
             />
             <Button
@@ -75,7 +110,10 @@ export function ConfirmationModal({
               variant={danger ? 'danger' : 'primary'}
               onPress={onConfirm}
               loading={loading}
-              style={styles.actionBtn}
+              style={[
+                styles.actionBtn,
+                !danger && { backgroundColor: '#7A1F2B' },
+              ]}
             />
           </View>
         </Animated.View>
