@@ -19,7 +19,7 @@ import {
   buildCategoryProgress,
   type CategoryProgress,
 } from '@/features/examinations/components/ExamCategoryNav';
-import { EXAM_PROCESS_STEPS } from '@/shared/theme/examProcess';
+import { ExamProcessStepper } from '@/features/examinations/components/ExamProcessStepper';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
 import { useExamTimer } from '@/features/examinations/hooks/useExamTimer';
@@ -402,14 +402,7 @@ export default function ExamScreen() {
   return (
     <View style={[styles.screen, { paddingTop: Math.max(insets.top, 8), backgroundColor: screenBg }]}>
       <View style={styles.topBar}>
-        <View style={styles.progress}>
-          {EXAM_PROCESS_STEPS.map((label, index) => (
-            <View
-              key={label}
-              style={[styles.progressSeg, index <= 4 && styles.progressSegOn]}
-            />
-          ))}
-        </View>
+        <ExamProcessStepper step={4} />
         <Text style={[styles.stepLabel, { color: muted }]}>Step 5 of 6 · Exam</Text>
         <View style={styles.titleRow}>
           <Text style={[styles.title, { color: ink }]}>Entrance Examination</Text>
@@ -629,15 +622,11 @@ const styles = StyleSheet.create({
     gap: 6,
     marginBottom: 4,
   },
-  progress: { flexDirection: 'row', gap: 6 },
-  progressSeg: {
-    flex: 1,
-    height: 4,
-    borderRadius: examProcess.radiusProgress,
-    backgroundColor: examProcess.progressTrack,
+  stepLabel: {
+    color: examProcess.muted,
+    fontSize: 13,
+    fontFamily: examProcess.fontRegular,
   },
-  progressSegOn: { backgroundColor: examProcess.accent },
-  stepLabel: { color: examProcess.muted, fontSize: 12 },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -646,8 +635,8 @@ const styles = StyleSheet.create({
   },
   title: {
     flex: 1,
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 18,
+    fontFamily: examProcess.fontSemiBold,
     color: examProcess.ink,
   },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -655,14 +644,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#EEF1FD',
+    backgroundColor: examProcess.accentSoft,
     paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: examProcess.radiusControl,
   },
-  secureText: { fontSize: 11, fontWeight: '800', color: examProcess.accent },
+  secureText: {
+    fontSize: 12,
+    fontFamily: examProcess.fontMedium,
+    color: examProcess.accent,
+  },
   saveRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  saveText: { fontSize: 11, color: examProcess.muted, fontWeight: '600', flex: 1 },
+  saveText: {
+    fontSize: 12,
+    color: examProcess.muted,
+    fontFamily: examProcess.fontRegular,
+    flex: 1,
+  },
   settingsPanel: {
     marginTop: 10,
     flexDirection: 'row',
@@ -686,13 +684,13 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   settingsLabel: {
-    fontSize: 12,
-    fontWeight: '700',
+    fontSize: 13,
+    fontFamily: examProcess.fontMedium,
   },
   settingsBtn: {
     minWidth: 34,
     height: 28,
-    borderRadius: 6,
+    borderRadius: examProcess.radiusControl,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: examProcess.white,
@@ -702,7 +700,7 @@ const styles = StyleSheet.create({
   },
   settingsBtnText: {
     fontSize: 13,
-    fontWeight: '800',
+    fontFamily: examProcess.fontMedium,
     color: examProcess.ink,
   },
   timeWarn: {
@@ -716,7 +714,7 @@ const styles = StyleSheet.create({
   },
   timeWarnText: {
     fontSize: 13,
-    fontWeight: '800',
+    fontFamily: examProcess.fontMedium,
     color: examProcess.danger,
     textAlign: 'center',
   },
@@ -731,14 +729,14 @@ const styles = StyleSheet.create({
   },
   categoryHeading: {
     fontSize: 13,
-    fontWeight: '800',
+    fontFamily: examProcess.fontSemiBold,
     color: examProcess.accent,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
   categoryMeta: {
     fontSize: 12,
-    fontWeight: '700',
+    fontFamily: examProcess.fontMedium,
     color: examProcess.muted,
   },
   submitBlock: { marginTop: 8, gap: 10 },
@@ -749,23 +747,27 @@ const styles = StyleSheet.create({
   },
   nextCategoryText: {
     color: examProcess.accent,
-    fontSize: 13,
-    fontWeight: '700',
+    fontSize: 14,
+    fontFamily: examProcess.fontMedium,
   },
   submitBtn: {
     backgroundColor: examProcess.accent,
     borderRadius: examProcess.radiusControl,
-    paddingVertical: 12,
+    paddingVertical: 14,
     paddingHorizontal: 12,
     alignItems: 'center',
   },
   submitDisabled: { opacity: 0.5 },
-  submitBtnText: { color: examProcess.white, fontSize: 14, fontWeight: '700' },
+  submitBtnText: {
+    color: examProcess.white,
+    fontSize: 15,
+    fontFamily: examProcess.fontSemiBold,
+  },
   submitHint: {
-    fontSize: 12,
+    fontSize: 13,
     color: examProcess.muted,
     textAlign: 'center',
-    fontWeight: '500',
+    fontFamily: examProcess.fontRegular,
   },
   modalOverlay: {
     flex: 1,
@@ -781,11 +783,15 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 14,
   },
-  modalTitle: { fontSize: 16, fontWeight: '800', color: examProcess.ink },
+  modalTitle: {
+    fontSize: 17,
+    fontFamily: examProcess.fontSemiBold,
+    color: examProcess.ink,
+  },
   modalBody: {
     fontSize: 14,
     lineHeight: 21,
     color: examProcess.muted,
-    fontWeight: '500',
+    fontFamily: examProcess.fontRegular,
   },
 });

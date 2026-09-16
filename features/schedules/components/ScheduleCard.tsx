@@ -15,6 +15,7 @@ import { colors, shadows } from '@/shared/theme';
 import { Card } from '@/shared/components/ui';
 import { useSessions } from '@/features/schedules/hooks/useSchedules';
 import { useFocusEffect } from 'expo-router';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import {
   deriveExamSlotStatus,
   examWindowHint,
@@ -49,6 +50,7 @@ export function ScheduleCard({
   delay = 0,
   openedRooms,
 }: ScheduleCardProps) {
+  const { colors: themeColors, isDark } = useAppTheme();
   const sessionsQuery = useSessions(schedule.id);
   const [headerPressed, setHeaderPressed] = useState(false);
   const [now, setNow] = useState(() => new Date());
@@ -140,18 +142,30 @@ export function ScheduleCard({
   );
 
   return (
-    <Card delay={delay} style={{ ...styles.card, ...(isExpanded ? styles.cardExpanded : {}) }}>
+    <Card delay={delay} style={{ ...styles.card, backgroundColor: themeColors.card, borderColor: isExpanded ? '#7A1F2B' : themeColors.cardBorder }}>
       {/* SCHEDULE CARD HEADER (Expandable trigger) */}
       <Pressable
         onPress={handleHeaderPress}
         onPressIn={() => setHeaderPressed(true)}
         onPressOut={() => setHeaderPressed(false)}
       >
-        <View style={[styles.headerRow, headerPressed && styles.headerPressed]}>
+        <View style={[styles.headerRow, headerPressed && { backgroundColor: themeColors.cardMuted }]}>
           {/* Calendar Date Block (Fixed-width, non-shrinking, overflow-safe) */}
-          <View style={[styles.dateBlock, isExpanded && styles.dateBlockExpanded]}>
+          <View
+            style={[
+              styles.dateBlock,
+              {
+                backgroundColor: isDark ? '#2A1414' : '#FEE2E2',
+                borderColor: isDark ? '#7A1F2B40' : '#FCA5A5',
+              },
+              isExpanded && {
+                backgroundColor: isDark ? '#351616' : '#FECACA',
+                borderColor: '#7A1F2B',
+              },
+            ]}
+          >
             <Text
-              style={[styles.day, isExpanded && styles.dayExpanded]}
+              style={[styles.day, { color: isDark ? '#FFFFFF' : '#991B1B' }]}
               numberOfLines={1}
               adjustsFontSizeToFit
               maxFontSizeMultiplier={1.15}
@@ -171,14 +185,14 @@ export function ScheduleCard({
           {/* Schedule Info / Meta */}
           <View style={styles.meta}>
             <Text
-              style={styles.name}
+              style={[styles.name, { color: themeColors.textPrimary }]}
               numberOfLines={2}
               maxFontSizeMultiplier={1.2}
             >
               {cleanName}
             </Text>
             <Text
-              style={styles.date}
+              style={[styles.date, { color: themeColors.textSecondary }]}
               numberOfLines={1}
               maxFontSizeMultiplier={1.2}
             >
@@ -187,7 +201,7 @@ export function ScheduleCard({
 
             {schedule.venue ? (
               <Text
-                style={styles.venue}
+                style={[styles.venue, { color: themeColors.textMuted }]}
                 numberOfLines={1}
                 maxFontSizeMultiplier={1.2}
               >
@@ -195,7 +209,7 @@ export function ScheduleCard({
               </Text>
             ) : schedule.description && schedule.batchCount === 1 ? (
               <Text
-                style={styles.venue}
+                style={[styles.venue, { color: themeColors.textMuted }]}
                 numberOfLines={1}
                 maxFontSizeMultiplier={1.2}
               >
@@ -216,35 +230,41 @@ export function ScheduleCard({
             <View style={styles.statusRow}>
               <ScheduleStatusBadge status={headerStatus} />
               {windowHint && headerStatus === 'not_opened' ? (
-                <Text style={styles.windowHint}>{windowHint}</Text>
+                <Text style={[styles.windowHint, { color: themeColors.textMuted }]}>{windowHint}</Text>
               ) : null}
             </View>
           </View>
 
           {/* Dropdown Chevron (Right-aligned, never pushed down) */}
           <Animated.View
-            style={[styles.chevronWrap, { transform: [{ rotate: chevronRotation }] }]}
+            style={[
+              styles.chevronWrap,
+              {
+                backgroundColor: themeColors.cardMuted,
+                transform: [{ rotate: chevronRotation }],
+              },
+            ]}
           >
-            <ChevronDown size={20} color={isExpanded ? '#003366' : colors.inkMuted} />
+            <ChevronDown size={20} color={isExpanded ? '#7A1F2B' : '#71717A'} />
           </Animated.View>
         </View>
       </Pressable>
 
       {/* SCHEDULE DROPDOWN (Time Slots List) */}
       {isExpanded && (
-        <View style={styles.dropdownContainer}>
-          <View style={styles.dropdownDivider} />
+        <View style={[styles.dropdownContainer, { backgroundColor: isDark ? '#101010' : themeColors.cardMuted }]}>
+          <View style={[styles.dropdownDivider, { backgroundColor: themeColors.cardBorder }]} />
 
           <View style={styles.dropdownHeader}>
             <Text
-              style={styles.dropdownHeaderTitle}
+              style={[styles.dropdownHeaderTitle, { color: themeColors.textMuted }]}
               numberOfLines={1}
               maxFontSizeMultiplier={1.15}
             >
               AVAILABLE TIME SLOTS
             </Text>
             <Text
-              style={styles.dropdownHeaderSubtitle}
+              style={[styles.dropdownHeaderSubtitle, { color: themeColors.textSecondary }]}
               numberOfLines={1}
               maxFontSizeMultiplier={1.15}
             >
@@ -281,7 +301,11 @@ export function ScheduleCard({
                     <View
                       style={[
                         styles.timeSlotRow,
-                        pressed && styles.timeSlotPressed,
+                        {
+                          backgroundColor: themeColors.card,
+                          borderColor: themeColors.cardBorder,
+                        },
+                        pressed && { backgroundColor: themeColors.cardMuted },
                         isActive && styles.timeSlotRowOpen,
                         isEnded && styles.timeSlotRowEnded,
                       ]}
@@ -293,6 +317,7 @@ export function ScheduleCard({
                           <Text
                             style={[
                               styles.timeSlotTitle,
+                              { color: themeColors.textPrimary },
                               isActive && { color: '#C2410C' },
                               visual === 'in_progress' && { color: '#1D4ED8' },
                               isEnded && { color: '#15803D' },
@@ -305,7 +330,7 @@ export function ScheduleCard({
                           <ScheduleStatusBadge status={visual} compact />
                         </View>
                         <Text
-                          style={styles.timeSlotAction}
+                          style={[styles.timeSlotAction, { color: themeColors.textSecondary }]}
                           numberOfLines={1}
                           maxFontSizeMultiplier={1.15}
                         >
@@ -313,7 +338,7 @@ export function ScheduleCard({
                         </Text>
                         <View style={styles.timeSlotDetails}>
                           <Text
-                            style={styles.timeSlotBatch}
+                            style={[styles.timeSlotBatch, { color: themeColors.textPrimary }]}
                             numberOfLines={1}
                             maxFontSizeMultiplier={1.15}
                           >
@@ -321,7 +346,7 @@ export function ScheduleCard({
                           </Text>
                           <Text style={styles.timeSlotDot}>•</Text>
                           <Text
-                            style={styles.timeSlotVenue}
+                            style={[styles.timeSlotVenue, { color: themeColors.textSecondary }]}
                             numberOfLines={1}
                             maxFontSizeMultiplier={1.15}
                           >
@@ -338,7 +363,7 @@ export function ScheduleCard({
                         </View>
                       </View>
 
-                      <View style={styles.timeSlotArrow}>
+                      <View style={[styles.timeSlotArrow, { backgroundColor: themeColors.cardMuted }]}>
                         <ChevronRight
                           size={18}
                           color={
@@ -366,20 +391,33 @@ export function ScheduleCard({
 }
 
 function ScheduleStatusDot({ status }: { status: ExamSlotVisualStatus }) {
+  const { isDark } = useAppTheme();
   if (status === 'ended') {
     return (
-      <View style={[styles.statusDot, styles.statusDotEnded]}>
-        <CheckCircle2 size={16} color="#16A34A" strokeWidth={2.4} />
+      <View style={[styles.circularStatusWrap, { backgroundColor: isDark ? '#142918' : '#DCFCE7' }]}>
+        <CheckCircle2 size={18} color={isDark ? '#22C55E' : '#16A34A'} />
+      </View>
+    );
+  }
+  if (status === 'open') {
+    return (
+      <View style={[styles.circularStatusWrap, { backgroundColor: isDark ? '#2A1414' : '#FEE2E2' }]}>
+        <Clock size={18} color={isDark ? '#7A1F2B' : '#DC2626'} />
       </View>
     );
   }
   if (status === 'in_progress') {
-    return <View style={[styles.statusDot, styles.statusDotProgress]} />;
+    return (
+      <View style={[styles.circularStatusWrap, { backgroundColor: isDark ? '#1A2035' : '#E0E7FF' }]}>
+        <Clock size={18} color={isDark ? '#3B82F6' : '#2563EB'} />
+      </View>
+    );
   }
-  if (status === 'open') {
-    return <View style={[styles.statusDot, styles.statusDotOpen]} />;
-  }
-  return <View style={[styles.statusDot, styles.statusDotClosed]} />;
+  return (
+    <View style={[styles.circularStatusWrap, { backgroundColor: isDark ? '#1F1F1F' : '#EFEAE1' }]}>
+      <Clock size={18} color={isDark ? '#71717A' : '#786B59'} />
+    </View>
+  );
 }
 
 function ScheduleStatusBadge({
@@ -389,36 +427,73 @@ function ScheduleStatusBadge({
   status: ExamSlotVisualStatus;
   compact?: boolean;
 }) {
+  const { isDark } = useAppTheme();
+
+  const getBadgeStyle = () => {
+    switch (status) {
+      case 'ended':
+        return {
+          backgroundColor: isDark ? '#142918' : '#DCFCE7',
+          borderColor: isDark ? '#22C55E40' : '#86EFAC',
+          textColor: isDark ? '#4ADE80' : '#166534',
+        };
+      case 'open':
+        return {
+          backgroundColor: isDark ? '#2A1414' : '#FEE2E2',
+          borderColor: isDark ? '#7A1F2B50' : '#FECACA',
+          textColor: isDark ? '#F87171' : '#B91C1C',
+        };
+      case 'in_progress':
+        return {
+          backgroundColor: isDark ? '#1E293B' : '#E0E7FF',
+          borderColor: isDark ? '#3B82F650' : '#BFDBFE',
+          textColor: isDark ? '#60A5FA' : '#1D4ED8',
+        };
+      case 'not_opened':
+      default:
+        return {
+          backgroundColor: isDark ? '#1E1E1E' : '#EFEAE1',
+          borderColor: isDark ? '#52525B' : '#D4CBB8',
+          textColor: isDark ? '#A1A1AA' : '#5A4E3E',
+        };
+    }
+  };
+
+  const badgeTheme = getBadgeStyle();
+
   return (
     <View
       style={[
         styles.statusBadge,
-        status === 'ended' && styles.statusBadgeEnded,
-        status === 'open' && styles.statusBadgeOpen,
-        status === 'in_progress' && styles.statusBadgeProgress,
-        status === 'not_opened' && styles.statusBadgeClosed,
+        {
+          backgroundColor: badgeTheme.backgroundColor,
+          borderColor: badgeTheme.borderColor,
+          borderWidth: 1,
+        },
         compact && { marginLeft: 8, marginTop: 0 },
       ]}
     >
       {status === 'ended' ? (
-        <CheckCircle2 size={11} color="#15803D" strokeWidth={2.4} />
+        <CheckCircle2 size={11} color={badgeTheme.textColor} strokeWidth={2.4} />
       ) : (
         <View
           style={[
             styles.statusBadgeDot,
-            status === 'open' && styles.statusBadgeDotOpen,
-            status === 'in_progress' && styles.statusBadgeDotProgress,
-            status === 'not_opened' && styles.statusBadgeDotClosed,
+            {
+              backgroundColor:
+                status === 'open'
+                  ? isDark ? '#7A1F2B' : '#DC2626'
+                  : status === 'in_progress'
+                  ? isDark ? '#3B82F6' : '#2563EB'
+                  : isDark ? '#71717A' : '#786B59',
+            },
           ]}
         />
       )}
       <Text
         style={[
           styles.statusBadgeText,
-          status === 'ended' && { color: '#15803D' },
-          status === 'open' && { color: '#C2410C' },
-          status === 'in_progress' && { color: '#1D4ED8' },
-          status === 'not_opened' && { color: '#475569' },
+          { color: badgeTheme.textColor },
         ]}
       >
         {EXAM_STATUS_LABELS[status]}
@@ -429,17 +504,14 @@ function ScheduleStatusBadge({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
     overflow: 'hidden',
     padding: 0,
     ...shadows.card,
   },
   cardExpanded: {
-    borderColor: '#93C5FD',
-    backgroundColor: '#FFFFFF',
+    borderColor: '#7A1F2B',
   },
   headerRow: {
     flexDirection: 'row',
@@ -448,48 +520,40 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     gap: 12,
   },
-  headerPressed: {
-    backgroundColor: '#F8FAFC',
-  },
+  headerPressed: {},
   dateBlock: {
-    width: 68,
-    minWidth: 68,
-    minHeight: 68,
+    width: 60,
+    minWidth: 60,
+    minHeight: 60,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 12,
-    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
     flexShrink: 0,
     paddingHorizontal: 4,
     paddingVertical: 6,
   },
   dateBlockExpanded: {
-    backgroundColor: '#EBF3FE',
-    borderColor: '#BFDBFE',
+    borderColor: '#7A1F2B',
   },
   day: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '900',
-    color: '#003366',
-    lineHeight: 26,
+    lineHeight: 24,
     textAlign: 'center',
   },
-  dayExpanded: {
-    color: '#0055A4',
-  },
+  dayExpanded: {},
   month: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#64748B',
+    color: '#7A1F2B',
     marginTop: 2,
     textTransform: 'uppercase',
     textAlign: 'center',
     letterSpacing: 0.5,
   },
   monthExpanded: {
-    color: '#0055A4',
+    color: '#7A1F2B',
   },
   meta: {
     flex: 1,
@@ -500,19 +564,16 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 15,
     fontWeight: '800',
-    color: '#003366',
     lineHeight: 20,
   },
   date: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#1E293B',
     marginTop: 1,
   },
   venue: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#64748B',
   },
   batchBadge: {
     flexDirection: 'row',
@@ -522,7 +583,7 @@ const styles = StyleSheet.create({
   },
   batches: {
     fontSize: 12,
-    color: '#0055A4',
+    color: '#7A1F2B',
     fontWeight: '700',
   },
   statusRow: {
@@ -535,7 +596,7 @@ const styles = StyleSheet.create({
   windowHint: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#64748B',
+    color: '#71717A',
   },
   chevronWrap: {
     width: 32,
@@ -543,15 +604,11 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#F1F5F9',
     flexShrink: 0,
   },
-  dropdownContainer: {
-    backgroundColor: '#F8FAFC',
-  },
+  dropdownContainer: {},
   dropdownDivider: {
     height: 1,
-    backgroundColor: '#E2E8F0',
     width: '100%',
   },
   dropdownHeader: {
@@ -563,12 +620,12 @@ const styles = StyleSheet.create({
   dropdownHeaderTitle: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#0055A4',
+    color: '#A1A1AA',
     letterSpacing: 0.6,
   },
   dropdownHeaderSubtitle: {
     fontSize: 11,
-    color: '#64748B',
+    color: '#71717A',
     fontWeight: '500',
   },
   loadingBox: {
@@ -599,26 +656,21 @@ const styles = StyleSheet.create({
   timeSlotRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    marginVertical: 3,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    marginVertical: 4,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 10,
+    gap: 12,
   },
-  timeSlotPressed: {
-    backgroundColor: '#EBF3FE',
-    borderColor: '#93C5FD',
-  },
+  timeSlotPressed: {},
   timeSlotRowOpen: {
-    borderColor: '#FDBA74',
-    backgroundColor: '#FFF7ED',
+    borderLeftWidth: 4,
+    borderLeftColor: '#7A1F2B',
   },
   timeSlotRowEnded: {
-    borderColor: '#86EFAC',
-    backgroundColor: '#F0FDF4',
+    borderLeftWidth: 4,
+    borderLeftColor: '#22C55E',
   },
   timeSlotTitleRow: {
     flexDirection: 'row',
@@ -628,14 +680,20 @@ const styles = StyleSheet.create({
   timeSlotAction: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#64748B',
     marginTop: 1,
+  },
+  circularStatusWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   timeSlotIconWrap: {
     width: 32,
     height: 32,
     borderRadius: 8,
-    backgroundColor: '#EBF3FE',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
@@ -648,7 +706,6 @@ const styles = StyleSheet.create({
   timeSlotTitle: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#003366',
   },
   timeSlotDetails: {
     flexDirection: 'row',
@@ -658,28 +715,25 @@ const styles = StyleSheet.create({
   timeSlotBatch: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#0055A4',
   },
   timeSlotDot: {
     fontSize: 11,
-    color: '#94A3B8',
+    color: '#71717A',
     marginHorizontal: 3,
   },
   timeSlotVenue: {
     fontSize: 11,
-    color: '#64748B',
     fontWeight: '500',
   },
   timeSlotExaminees: {
     fontSize: 11,
-    color: '#64748B',
-    fontWeight: '600',
+    color: '#7A1F2B',
+    fontWeight: '700',
   },
   timeSlotArrow: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#F1F5F9',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
@@ -688,7 +742,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#DCFCE7',
+    backgroundColor: '#142918',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
@@ -698,36 +752,36 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#16A34A',
+    backgroundColor: '#22C55E',
   },
   lobbyOpenBadgeText: {
     fontSize: 9,
     fontWeight: '800',
-    color: '#16A34A',
+    color: '#22C55E',
     letterSpacing: 0.5,
   },
   endedBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: '#1A1A1A',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
     marginLeft: 8,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#333333',
   },
   endedDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#64748B',
+    backgroundColor: '#71717A',
   },
   endedBadgeText: {
     fontSize: 9,
     fontWeight: '800',
-    color: '#475569',
+    color: '#A1A1AA',
     letterSpacing: 0.5,
   },
   statusDot: {
@@ -739,24 +793,24 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   statusDotEnded: {
-    backgroundColor: '#DCFCE7',
+    backgroundColor: '#142918',
     borderWidth: 1,
-    borderColor: '#86EFAC',
+    borderColor: '#22C55E',
   },
   statusDotOpen: {
-    backgroundColor: '#F97316',
+    backgroundColor: '#2A1414',
     borderWidth: 1,
-    borderColor: '#EA580C',
+    borderColor: '#7A1F2B',
   },
   statusDotProgress: {
-    backgroundColor: '#2563EB',
+    backgroundColor: '#1E293B',
     borderWidth: 1,
-    borderColor: '#1D4ED8',
+    borderColor: '#3B82F6',
   },
   statusDotClosed: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 2,
-    borderColor: '#94A3B8',
+    backgroundColor: '#1E1E1E',
+    borderWidth: 1,
+    borderColor: '#52525B',
   },
   statusBadge: {
     flexDirection: 'row',
@@ -769,24 +823,24 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   statusBadgeEnded: {
-    backgroundColor: '#DCFCE7',
+    backgroundColor: '#142918',
     borderWidth: 1,
-    borderColor: '#86EFAC',
+    borderColor: '#22C55E40',
   },
   statusBadgeOpen: {
-    backgroundColor: '#FFEDD5',
+    backgroundColor: '#2A1414',
     borderWidth: 1,
-    borderColor: '#FDBA74',
+    borderColor: '#7A1F2B50',
   },
   statusBadgeProgress: {
-    backgroundColor: '#DBEAFE',
+    backgroundColor: '#1E293B',
     borderWidth: 1,
-    borderColor: '#93C5FD',
+    borderColor: '#3B82F650',
   },
   statusBadgeClosed: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
-    borderColor: '#94A3B8',
+    backgroundColor: '#1E1E1E',
+    borderWidth: 1,
+    borderColor: '#52525B',
   },
   statusBadgeDot: {
     width: 7,
@@ -794,15 +848,13 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   statusBadgeDotOpen: {
-    backgroundColor: '#EA580C',
+    backgroundColor: '#7A1F2B',
   },
   statusBadgeDotProgress: {
-    backgroundColor: '#2563EB',
+    backgroundColor: '#3B82F6',
   },
   statusBadgeDotClosed: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
-    borderColor: '#64748B',
+    backgroundColor: '#52525B',
   },
   statusBadgeText: {
     fontSize: 9,

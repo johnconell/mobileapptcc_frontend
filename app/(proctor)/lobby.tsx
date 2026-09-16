@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, Modal, Pressable, Text, View, StyleSheet, Alert } from 'react-native';
+import { FlatList, Modal, Pressable, Text, View, StyleSheet, Alert, Share } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -25,6 +26,7 @@ import { PeerExamServer } from '@/features/examinations/services/peerExamServer'
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { colors } from '@/shared/theme';
 import type { LobbyStudent } from '@/shared/types';
 import { safeBack } from '@/shared/utils';
@@ -40,6 +42,17 @@ import {
   ShieldAlert,
   AlertTriangle,
   LogOut,
+  ArrowDownUp,
+  ArrowLeft,
+  RefreshCw,
+  Check,
+  Share2,
+  Wifi,
+  Search,
+  Bell,
+  X,
+  ChevronRight,
+  Keyboard,
 } from 'lucide-react-native';
 
 function formatTime(iso: string | null | undefined) {
@@ -79,13 +92,16 @@ function liveRemainingSeconds(lobby: {
 export default function ProctorLobbyScreen() {
   useKeepAwake();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
+  const { colors: themeColors, isDark } = useAppTheme();
   const { sessionId, roomId, examSessionId, scheduleId } = useLocalSearchParams<{
     sessionId: string;
     roomId?: string;
     examSessionId?: string;
     scheduleId?: string;
   }>();
+  const profile = useProctorStore((s) => s.profile);
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
   const storeLobby = useLobbyStore((s) => s.snapshot);
   const selectedSchedule = useProctorStore((s) => s.selectedSchedule);
@@ -112,6 +128,75 @@ export default function ProctorLobbyScreen() {
   const [peerHost, setPeerHost] = useState<string | null>(null);
   const [hosting, setHosting] = useState(PeerExamServer.info());
   const [serverLastHeartbeat, setServerLastHeartbeat] = useState<number>(Date.now());
+
+  // REPLICATION STATES: SWAP MODAL ('Switch Active Room') & SEND MODAL ('Room Access Code')
+  const [swapModalVisible, setSwapModalVisible] = useState(false);
+  const [codeModalVisible, setCodeModalVisible] = useState(false);
+  const [keypadCode, setKeypadCode] = useState('');
+  const [availableRooms, setAvailableRooms] = useState<
+    Array<{ id: number; name: string; capacity: number }>
+  >([]);
+  const [targetRoomId, setTargetRoomId] = useState<number | null>(null);
+
+  const handleKeypadPress = (digit: string) => {
+    if (keypadCode.length < 6) {
+      setKeypadCode((prev) => prev + digit);
+    }
+  };
+
+  const handleKeypadBackspace = () => {
+    setKeypadCode((prev) => prev.slice(0, -1));
+  };
+
+  const handleKeypadClear = () => {
+    setKeypadCode('');
+  };
+
+  const handleKeypadRandom = () => {
+    const randomCode = Math.floor(1000 + Math.random() * 9000).toString();
+    setKeypadCode(randomCode);
+  };
+
+  const handleApplyCustomCode = () => {
+    if (keypadCode.length < 4) {
+      Alert.alert('Invalid Code', 'Please enter at least a 4-digit code.');
+      return;
+    }
+    if (storeLobby) {
+      setSnapshot({
+        ...storeLobby,
+        examinationCode: keypadCode,
+      });
+      setCodeModalVisible(false);
+      Alert.alert('Access Code Updated', `Room Access Code set to ${keypadCode}`);
+    }
+  };
+
+  const handleConfirmRoomSwitch = () => {
+    if (!targetRoomId) return;
+    const targetRoom = availableRooms.find((r) => r.id === targetRoomId);
+    if (!targetRoom) return;
+
+    setSwapModalVisible(false);
+    const queryParams: Record<string, string> = {
+      sessionId: String(sessionId),
+      roomId: String(targetRoom.id),
+      roomName: targetRoom.name,
+      scheduleId: String(scheduleId || ''),
+    };
+    router.replace(`/(proctor)/lobby?${new URLSearchParams(queryParams).toString()}` as any);
+  };
+
+  const handleShareCode = async () => {
+    if (!storeLobby?.examinationCode) return;
+    try {
+      await Share.share({
+        message: `Examination Access Code: ${storeLobby.examinationCode}\nRoom: ${storeLobby.session?.roomName || 'Exam Room'}\nConnect to Wi-Fi: ${storeLobby.wifiSsid || 'Testing Wi-Fi'}`,
+      });
+    } catch {
+      // ignore
+    }
+  };
 
   const lobbyQuery = useLobby(
     ready && !openError ? sessionId : undefined,
@@ -175,6 +260,38 @@ export default function ProctorLobbyScreen() {
         checkInReady.current = true;
         setSnapshot(snapshot);
         setPeerHost(PeerExamServer.info().host);
+
+        try {
+          const pack = await OfflineStore.getPack();
+          const roomsList: Array<{ id: number; name: string; capacity: number }> = [];
+          (pack?.schedules ?? []).forEach((s) => {
+            (s.rooms ?? []).forEach((r) => {
+              if (!roomsList.some((ex) => ex.id === r.id)) {
+                roomsList.push({
+                  id: r.id,
+                  name: r.room_name || `Room ${r.id}`,
+                  capacity: r.capacity ?? 60,
+                });
+              }
+            });
+          });
+          if (roomsList.length === 0) {
+            roomsList.push(
+              { id: 101, name: 'Room 101 · Testing Lab A', capacity: 60 },
+              { id: 102, name: 'Room 102 · Testing Lab B', capacity: 50 },
+              { id: 103, name: 'Room 103 · Multimedia Hall', capacity: 80 },
+            );
+          }
+          setAvailableRooms(roomsList);
+          if (roomId) {
+            setTargetRoomId(Number(roomId));
+          } else if (roomsList.length > 0) {
+            setTargetRoomId(roomsList[0].id);
+          }
+        } catch {
+          // ignore
+        }
+
         await queryClient.invalidateQueries({
           queryKey: QUERY_KEYS.lobby(sessionId, roomId),
         });
@@ -360,22 +477,49 @@ export default function ProctorLobbyScreen() {
 
   if (!ready) {
     return (
-      <View style={styles.screen}>
-        <Header
-          title="Examination Lobby"
-          subtitle="Loading…"
-          onBack={goBack}
-          right={
+      <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
+        <View style={[styles.navBar, { backgroundColor: themeColors.background }]}>
+          <View style={styles.navLeftRow}>
+            <Pressable
+              style={[styles.navIconBtn, { backgroundColor: isDark ? '#1A1A1A' : themeColors.card, borderColor: themeColors.cardBorder }]}
+              onPress={goBack}
+              hitSlop={8}
+            >
+              <ArrowLeft size={18} color={themeColors.textPrimary} />
+            </Pressable>
+            <View style={[styles.navAvatarCircle, { backgroundColor: isDark ? '#1E1E1E' : themeColors.cardMuted, borderColor: themeColors.cardBorder }]}>
+              <Text style={[styles.navAvatarText, { color: themeColors.textPrimary }]}>
+                {profile?.displayName
+                  ? profile.displayName
+                      .split(' ')
+                      .map((n) => n[0])
+                      .join('')
+                      .slice(0, 2)
+                      .toUpperCase()
+                  : 'P1'}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.navCenterBlock}>
+            <Text style={[styles.navTitleText, { color: themeColors.textPrimary }]} numberOfLines={1}>
+              Examination Lobby
+            </Text>
+            <Text style={[styles.navSubtitleText, { color: themeColors.textSecondary }]} numberOfLines={1}>
+              Connecting to peer server…
+            </Text>
+          </View>
+          <View style={styles.navRightRow}>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Logout"
+              style={[styles.navIconBtn, { backgroundColor: isDark ? '#1A1A1A' : themeColors.card, borderColor: themeColors.cardBorder }]}
               onPress={() => confirmProctorLogout()}
               hitSlop={8}
             >
-              <LogOut size={18} color={colors.danger} />
+              <LogOut size={18} color="#7A1F2B" />
             </Pressable>
-          }
-        />
+          </View>
+        </View>
         <View style={styles.lobbySkeleton}>
           <SkeletonCard>
             <Skeleton height={16} width="50%" />
@@ -390,30 +534,57 @@ export default function ProctorLobbyScreen() {
 
   if (openError || !lobby) {
     return (
-      <View style={styles.screen}>
-        <Header
-          title="Examination Lobby"
-          onBack={goBack}
-          right={
+      <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
+        <View style={[styles.navBar, { backgroundColor: themeColors.background }]}>
+          <View style={styles.navLeftRow}>
+            <Pressable
+              style={[styles.navIconBtn, { backgroundColor: isDark ? '#1A1A1A' : themeColors.card, borderColor: themeColors.cardBorder }]}
+              onPress={goBack}
+              hitSlop={8}
+            >
+              <ArrowLeft size={18} color={themeColors.textPrimary} />
+            </Pressable>
+            <View style={[styles.navAvatarCircle, { backgroundColor: isDark ? '#1E1E1E' : themeColors.cardMuted, borderColor: themeColors.cardBorder }]}>
+              <Text style={[styles.navAvatarText, { color: themeColors.textPrimary }]}>
+                {profile?.displayName
+                  ? profile.displayName
+                      .split(' ')
+                      .map((n) => n[0])
+                      .join('')
+                      .slice(0, 2)
+                      .toUpperCase()
+                  : 'P1'}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.navCenterBlock}>
+            <Text style={[styles.navTitleText, { color: themeColors.textPrimary }]} numberOfLines={1}>
+              Examination Lobby
+            </Text>
+          </View>
+          <View style={styles.navRightRow}>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Logout"
+              style={[styles.navIconBtn, { backgroundColor: isDark ? '#1A1A1A' : themeColors.card, borderColor: themeColors.cardBorder }]}
               onPress={() => confirmProctorLogout()}
               hitSlop={8}
             >
-              <LogOut size={18} color={colors.danger} />
+              <LogOut size={18} color="#7A1F2B" />
             </Pressable>
-          }
-        />
+          </View>
+        </View>
+
         <View style={styles.errorWrap}>
-          <Text style={styles.errorTitle}>Lobby not available</Text>
-          <Text style={styles.errorBody}>
+          <Text style={[styles.errorTitle, { color: themeColors.textPrimary }]}>Lobby not available</Text>
+          <Text style={[styles.errorBody, { color: themeColors.textSecondary }]}>
             {openError || 'No examination session is available for this room.'}
           </Text>
           <Button
-            title="Back to room"
+            title="Back to examination schedules"
             fullWidth
             onPress={goBack}
+            style={{ backgroundColor: colors.primary }}
           />
         </View>
       </View>
@@ -437,26 +608,52 @@ export default function ProctorLobbyScreen() {
   };
 
   return (
-    <View style={styles.screen}>
-      <Header
-        title="Examination Lobby"
-        subtitle={
-          lobby.session?.roomName
-            ? `${lobby.session.roomName} · ${lobby.session.batchNumber}`
-            : lobby.session?.batchNumber
-        }
-        onBack={goBack}
-        right={
+    <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
+      {/* 1. UNIFORM HEADER NAV BAR (Avatar Left, Title Center, Logout Right) */}
+      <View style={[styles.navBar, { backgroundColor: themeColors.background }]}>
+        <View style={styles.navLeftRow}>
           <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Logout"
-            onPress={() => confirmProctorLogout()}
+            style={[styles.navIconBtn, { backgroundColor: isDark ? '#1A1A1A' : themeColors.card, borderColor: themeColors.cardBorder }]}
+            onPress={goBack}
             hitSlop={8}
           >
-            <LogOut size={18} color={colors.danger} />
+            <ArrowLeft size={18} color={themeColors.textPrimary} />
           </Pressable>
-        }
-      />
+          <View style={[styles.navAvatarCircle, { backgroundColor: isDark ? '#1E1E1E' : themeColors.cardMuted, borderColor: themeColors.cardBorder }]}>
+            <Text style={[styles.navAvatarText, { color: themeColors.textPrimary }]}>
+              {profile?.displayName
+                ? profile.displayName
+                    .split(' ')
+                    .map((n) => n[0])
+                    .join('')
+                    .slice(0, 2)
+                    .toUpperCase()
+                : 'P1'}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.navCenterBlock}>
+          <Text style={[styles.navTitleText, { color: themeColors.textPrimary }]} numberOfLines={1}>
+            {lobby.session?.roomName || lobby.roomName || 'Examination Lobby'}
+          </Text>
+          <Text style={[styles.navSubtitleText, { color: themeColors.textSecondary }]} numberOfLines={1}>
+            Batch {lobby.session?.batchNumber || '1'} · {lobby.registeredCount || lobby.students.length} Candidates
+          </Text>
+        </View>
+
+        <View style={styles.navRightRow}>
+          <Pressable
+            accessibilityRole="button"
+            style={[styles.navIconBtn, { backgroundColor: isDark ? '#1A1A1A' : themeColors.card, borderColor: themeColors.cardBorder }]}
+            onPress={() => confirmProctorLogout()}
+            accessibilityLabel="Logout"
+            hitSlop={8}
+          >
+            <LogOut size={18} color="#7A1F2B" />
+          </Pressable>
+        </View>
+      </View>
 
       <FlatList
         data={lobby.students}
@@ -464,167 +661,173 @@ export default function ProctorLobbyScreen() {
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View style={styles.headerBlock}>
-            <Card>
-              <View style={styles.examHead}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.examName}>{lobby.schedule?.name}</Text>
-                  <Text style={styles.infoLine}>School Year: {lobby.schedule?.schoolYear}</Text>
-                  <Text style={styles.infoLine}>Date: {lobby.schedule?.examinationDate}</Text>
-                  <Text style={styles.infoLine}>Time: {lobby.session?.timeLabel}</Text>
-                  <Text style={styles.infoLine}>
-                    Room: {lobby.session?.roomName || lobby.session?.venue}
-                  </Text>
-                  {lobby.proctor_name ? (
-                    <Text style={styles.line}>Proctored by: {lobby.proctor_name}</Text>
-                  ) : null}
-                  <Text style={styles.line}>Batch: {lobby.session?.batchNumber}</Text>
-                  <Text style={styles.line}>
-                    Total Registered Students: {lobby.registeredCount}
+            {/* ============================================================= */}
+            {/* 'Deposit Tether USDT' → EXAMINATION LOBBY QR CODE CARD        */}
+            {/* Vibrant red card (#7A1F2B), white QR inset, bold code, stats  */}
+            {/* ============================================================= */}
+            <View style={styles.redDepositCard}>
+              {/* Top Banner Row */}
+              <View style={styles.depositTopRow}>
+                <View style={styles.depositTagBadge}>
+                  <Text style={styles.depositTagText}>EXAMINATION ACCESS PASS</Text>
+                </View>
+                <View style={styles.depositLiveBadge}>
+                  <View style={styles.depositLiveDot} />
+                  <Text style={styles.depositLiveText}>
+                    {lobby.status === 'in_progress' ? 'EXAM IN PROGRESS' : 'LAN BROADCAST ACTIVE'}
                   </Text>
                 </View>
-                <StatusChip status={lobby.status} />
               </View>
-            </Card>
 
-            <Card delay={40}>
-              {peerHost ? (
-                <View style={styles.peerBanner}>
-                  <View style={styles.peerTitleRow}>
-                    <Text style={styles.peerTitle}>OFFLINE SERVER: RUNNING</Text>
-                    <View style={styles.liveIndicator}>
-                      <View style={[styles.liveDot, { backgroundColor: colors.success }]} />
-                      <Text style={styles.liveText}>LAN SERVER ONLINE</Text>
-                    </View>
-                  </View>
+              {/* Centered QR Code on White Inset Box */}
+              <View style={styles.qrWhiteFrame}>
+                <QrCodePanel
+                  value={lobby.qrValue}
+                  size={190}
+                  note={
+                    lobby.status === 'in_progress'
+                      ? 'Exam in progress · New scans locked'
+                      : peerHost
+                        ? `Connect to ${lobby.wifiSsid || 'Exam Wi-Fi'} & scan`
+                        : 'Scan QR with examinee device to enter'
+                  }
+                />
+              </View>
 
-                  <View style={styles.checklist}>
-                    <Text style={styles.checkItem}>✓ Exam modules downloaded</Text>
-                    <Text style={styles.checkItem}>✓ Questions & Choices ready</Text>
-                    <Text style={styles.checkItem}>✓ Student list available</Text>
-                    <Text style={styles.checkItem}>✓ Local API active on port {hosting.port}</Text>
-                  </View>
-
-                  <View style={styles.peerNetworkRow}>
-                    <Text style={styles.peerNetwork}>
-                      IP: {peerHost} · Network: {lobby.wifiSsid || 'Local Wi‑Fi'}
-                    </Text>
-                    <View style={styles.liveIndicator}>
-                      <View style={[styles.liveDot, { backgroundColor: colors.success }]} />
-                      <Text style={styles.liveText}>OFFLINE MODE ACTIVE</Text>
-                    </View>
+              {/* Bold Hero Code Display */}
+              <View style={styles.heroCodeSection}>
+                <Text style={styles.heroCodeLabel}>EXAMINATION ROOM ACCESS CODE</Text>
+                <View style={styles.heroCodeRow}>
+                  <Text style={styles.heroCodeValue}>{lobby.examinationCode || '----'}</Text>
+                  <View style={styles.codeActionButtonsRow}>
+                    <Pressable
+                      style={styles.codeSquareBtn}
+                      onPress={copyCode}
+                      accessibilityLabel="Copy Code"
+                      hitSlop={6}
+                    >
+                      {copied ? (
+                        <Check size={18} color="#FFFFFF" />
+                      ) : (
+                        <Copy size={18} color="#FFFFFF" />
+                      )}
+                    </Pressable>
+                    <Pressable
+                      style={styles.codeSquareBtn}
+                      onPress={handleShareCode}
+                      accessibilityLabel="Share Code"
+                      hitSlop={6}
+                    >
+                      <Share2 size={18} color="#FFFFFF" />
+                    </Pressable>
                   </View>
                 </View>
-              ) : null}
-              <QrCodePanel
-                value={lobby.qrValue}
-                note={
-                  lobby.status === 'in_progress'
-                    ? 'Examination in progress. New QR scans are blocked.'
-                    : peerHost
-                      ? `Students scan this QR to reach THIS phone (${peerHost})${lobby.wifiSsid ? ` on ${lobby.wifiSsid}` : ''}. Same Wi‑Fi required.`
-                      : `Room-specific QR for ${lobby.roomName || lobby.session.roomName || lobby.session.venue}. Other rooms have different codes.`
-                }
-              />
-              <View style={styles.codeBlock}>
-                <Text style={styles.codeLabel}>
-                  Examination Code · {lobby.roomName || lobby.session.roomName || 'This room'}
-                </Text>
-                <Text style={styles.codeValue}>{lobby.examinationCode}</Text>
-                <Text style={styles.codeHint}>
-                  {peerHost
-                    ? 'Unique to this room. The QR also carries this phone’s Wi‑Fi address.'
-                    : 'Unique to this room. Students in another room need that room’s code/QR.'}
-                </Text>
               </View>
-            </Card>
 
-            <View style={styles.actions}>
-              <Button
-                title="Regenerate QR Code"
-                variant="outline"
-                fullWidth
-                loading={busy}
-                disabled={lobby.can_control === false || lobby.status === 'ended' || lobby.status === 'in_progress'}
-                onPress={async () => {
-                  if (!sessionId) return;
-                  if (lobby.can_control === false) {
-                    Alert.alert(
-                      'Not allowed',
-                      'Only the proctor who opened this lobby can regenerate the code.',
-                    );
-                    return;
-                  }
-                  setBusy(true);
-                  try {
-                    const snapshot = await LobbyRepository.regenerateQr(
-                      sessionId,
-                      roomId,
-                    );
-                    setSnapshot(snapshot);
-                    await refresh();
-                  } catch (error) {
-                    Alert.alert(
-                      'Unable to regenerate',
-                      error instanceof Error ? error.message : 'Please try again.',
-                    );
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              />
-              <Button
-                title={copied ? 'Copied!' : 'Copy Examination Code'}
-                variant="outline"
-                fullWidth
-                icon={<Copy size={16} color={colors.primary} />}
-                onPress={copyCode}
-              />
-              <Button
-                title="Start Examination"
-                size="lg"
-                fullWidth
-                onPress={() => {
-                  if (lobby.can_control === false) {
-                    Alert.alert(
-                      'Not allowed',
-                      'Only the proctor who opened this lobby can start the examination.',
-                    );
-                    return;
-                  }
-                  setStartOpen(true);
-                }}
-                disabled={
-                  lobby.can_control === false ||
-                  lobby.status === 'in_progress' ||
-                  lobby.status === 'ended'
-                }
-              />
-              {lobby.status === 'lobby_open' || lobby.status === 'in_progress' ? (
+              {/* Data Detail Rows (Translucent White Dividers) */}
+              <View style={styles.depositDetailsTable}>
+                <View style={styles.depositDetailRow}>
+                  <Text style={styles.depositDetailLabel}>Room & Venue</Text>
+                  <Text style={styles.depositDetailVal}>
+                    {lobby.session?.roomName || lobby.roomName || 'Room 101'}
+                  </Text>
+                </View>
+                <View style={styles.depositDetailDivider} />
+
+                <View style={styles.depositDetailRow}>
+                  <Text style={styles.depositDetailLabel}>Batch Number</Text>
+                  <Text style={styles.depositDetailVal}>
+                    Batch {lobby.session?.batchNumber || '1'}
+                  </Text>
+                </View>
+                <View style={styles.depositDetailDivider} />
+
+                <View style={styles.depositDetailRow}>
+                  <Text style={styles.depositDetailLabel}>LAN Server Host</Text>
+                  <Text style={styles.depositDetailVal}>
+                    {peerHost ? `${peerHost}:${hosting.port}` : 'Local P2P Broadcast'}
+                  </Text>
+                </View>
+                <View style={styles.depositDetailDivider} />
+
+                <View style={styles.depositDetailRow}>
+                  <Text style={styles.depositDetailLabel}>Wi-Fi Network</Text>
+                  <Text style={styles.depositDetailVal}>
+                    {lobby.wifiSsid || 'Testing Wi-Fi'}
+                  </Text>
+                </View>
+                <View style={styles.depositDetailDivider} />
+
+                <View style={styles.depositDetailRow}>
+                  <Text style={styles.depositDetailLabel}>Registered Examinees</Text>
+                  <Text style={styles.depositDetailVal}>
+                    {lobby.registeredCount || lobby.students.length} Candidates
+                  </Text>
+                </View>
+              </View>
+
+              {/* Primary Card Buttons */}
+              <View style={styles.depositActionsRow}>
                 <Button
-                  title={
-                    lobby.status === 'lobby_open'
-                      ? 'Close Lobby'
-                      : 'End Examination'
-                  }
-                  variant="danger"
-                  size="lg"
-                  fullWidth
-                  disabled={lobby.can_control === false}
-                  onPress={() => {
+                  title="Regenerate QR"
+                  variant="outline"
+                  loading={busy}
+                  disabled={lobby.can_control === false || lobby.status === 'ended' || lobby.status === 'in_progress'}
+                  onPress={async () => {
+                    if (!sessionId) return;
                     if (lobby.can_control === false) {
                       Alert.alert(
                         'Not allowed',
-                        lobby.status === 'lobby_open'
-                          ? 'Only the proctor who opened this lobby can close it.'
-                          : 'Only the proctor who opened this lobby can end the examination.',
+                        'Only the proctor who opened this lobby can regenerate the code.',
                       );
                       return;
                     }
-                    setEndOpen(true);
+                    setBusy(true);
+                    try {
+                      const snapshot = await LobbyRepository.regenerateQr(sessionId, roomId);
+                      setSnapshot(snapshot);
+                      await refresh();
+                    } catch (error) {
+                      Alert.alert(
+                        'Unable to regenerate',
+                        error instanceof Error ? error.message : 'Please try again.',
+                      );
+                    } finally {
+                      setBusy(false);
+                    }
                   }}
+                  style={styles.depositOutlineBtn}
                 />
-              ) : null}
-              {lobby.status === 'ended' ? (
+
+                <Button
+                  title={
+                    lobby.status === 'in_progress'
+                      ? 'End Examination'
+                      : lobby.status === 'ended'
+                        ? 'Session Ended'
+                        : 'Start Examination'
+                  }
+                  variant="primary"
+                  loading={busy}
+                  disabled={lobby.can_control === false || lobby.status === 'ended'}
+                  onPress={() => {
+                    if (lobby.can_control === false) {
+                      Alert.alert('Not allowed', 'Only the proctor who opened this lobby can control it.');
+                      return;
+                    }
+                    if (lobby.status === 'in_progress') {
+                      setEndOpen(true);
+                    } else {
+                      setStartOpen(true);
+                    }
+                  }}
+                  style={styles.depositSolidBtn}
+                />
+              </View>
+            </View>
+
+            {lobby.status === 'ended' ? (
+              <View style={{ gap: 10, marginTop: 12 }}>
                 <Button
                   title={
                     syncPending != null && syncPending > 0
@@ -664,24 +867,24 @@ export default function ProctorLobbyScreen() {
                       setBusy(false);
                     }
                   }}
+                  style={{ backgroundColor: colors.primary }}
                 />
-              ) : null}
-              {lobby.status === 'ended' && syncConfigured === false ? (
-                <Text style={styles.ownerHint}>
-                  Set ADMIN_SYNC_URL and ADMIN_SYNC_TOKEN on the LAN server, then restart Laravel.
-                </Text>
-              ) : null}
-              {lobby.status === 'ended' && syncConfigured ? (
-                <Text style={styles.ownerHint}>
-                  You can leave and return later via View results & sync if you forget to sync now.
-                </Text>
-              ) : null}
-              {lobby.can_control === false ? (
-                <Text style={styles.ownerHint}>
-                  Viewing only — opened by {lobby.proctor_name || 'another proctor'}.
-                </Text>
-              ) : null}
-            </View>
+                {syncConfigured === false ? (
+                  <Text style={styles.ownerHint}>
+                    Set ADMIN_SYNC_URL and ADMIN_SYNC_TOKEN on the LAN server, then restart Laravel.
+                  </Text>
+                ) : (
+                  <Text style={styles.ownerHint}>
+                    You can leave and return later via View results & sync if you forget to sync now.
+                  </Text>
+                )}
+                {lobby.can_control === false && (
+                  <Text style={styles.ownerHint}>
+                    Viewing only — opened by {lobby.proctor_name || 'another proctor'}.
+                  </Text>
+                )}
+              </View>
+            ) : null}
 
             {lobby.status === 'ended' ? (
               <Card style={styles.endedBanner}>
@@ -699,96 +902,62 @@ export default function ProctorLobbyScreen() {
 
             {lobby.status === 'in_progress' ? (
               <Card>
-                <Text style={styles.monitorTitle}>Live monitoring</Text>
+                <Text style={[styles.monitorTitle, { color: themeColors.textPrimary }]}>Live monitoring</Text>
                 <Text style={styles.monitorTimer}>
                   {formatRemaining(remainingLive)}
                 </Text>
-                <Text style={styles.monitorLine}>Remaining time</Text>
-                <Text style={styles.monitorLine}>
+                <Text style={[styles.monitorLine, { color: themeColors.textSecondary }]}>Remaining time</Text>
+                <Text style={[styles.monitorLine, { color: themeColors.textSecondary }]}>
                   Taking: {lobby.takingCount} · Disconnected:{' '}
                   {lobby.disconnectedCount ?? 0} · Done: {lobby.finishedCount}
                 </Text>
               </Card>
             ) : null}
 
-            <Text style={styles.section}>Security Monitoring</Text>
-            <Text style={styles.sectionHint}>
-              Waiting = scanned QR, selected name, waiting for you to start. Taking = exam in
-              progress.
+            <Text style={[styles.section, { color: themeColors.textMuted }]}>Security Monitoring</Text>
+            <Text style={[styles.sectionHint, { color: themeColors.textSecondary }]}>
+              {lobby.registeredCount || lobby.students.length} Candidates registered · Live examinee integrity
             </Text>
             <View style={styles.statsGrid}>
               <StatisticCard
-                label="Registered"
-                value={lobby.registeredCount}
-                hint="On this schedule"
-                icon={<Users size={18} color={colors.primary} />}
+                label="In Lobby"
+                value={lobby.waitingCount}
+                hint="Waiting to start"
+                tone="warning"
+                icon={<UserCheck size={18} color={themeColors.warning} />}
+                compact
               />
               <StatisticCard
-                label="Ready Applicants"
-                value={lobby.readyCount ?? lobby.waitingCount}
-                tone="success"
-                hint="Module verified"
-                icon={<CheckCircle2 size={18} color={colors.success} />}
+                label="Taking Exam"
+                value={lobby.takingCount}
+                hint="Actively answering"
+                tone="default"
+                icon={<Play size={18} color={themeColors.accent} />}
+                compact
                 delay={20}
               />
               <StatisticCard
-                label="Not Ready"
-                value={lobby.notReadyCount ?? 0}
-                tone={Number(lobby.notReadyCount ?? 0) > 0 ? 'warning' : 'info'}
-                hint="Pending module"
-                icon={<AlertTriangle size={18} color={Number(lobby.notReadyCount ?? 0) > 0 ? colors.danger : colors.info} />}
-                delay={40}
-              />
-              <StatisticCard
-                label="Waiting"
-                value={lobby.waitingCount}
-                tone="warning"
-                hint="Scanned · wait to start"
-                icon={<UserCheck size={18} color={colors.warning} />}
-                delay={60}
-              />
-              <StatisticCard
-                label="Not joined"
-                value={lobby.notYetConnectedCount}
-                tone="info"
-                hint="Have not scanned yet"
-                icon={<UserX size={18} color={colors.info} />}
-                delay={80}
-              />
-              <StatisticCard
-                label="Taking"
-                value={lobby.takingCount}
-                tone="default"
-                hint="Exam started"
-                icon={<Play size={18} color={colors.primary} />}
-              />
-              <StatisticCard
-                label="Disconnected"
-                value={lobby.disconnectedCount ?? 0}
-                tone="warning"
-                hint="Need reconnect code"
-                icon={<UserX size={18} color={colors.danger} />}
-                delay={40}
-              />
-              <StatisticCard
-                label="Done"
+                label="Completed"
                 value={lobby.finishedCount}
+                hint="Exam submitted"
                 tone="success"
-                hint="Submitted"
-                icon={<CheckCircle2 size={18} color={colors.success} />}
-                delay={80}
+                icon={<CheckCircle2 size={18} color={themeColors.success} />}
+                compact
+                delay={40}
               />
               <StatisticCard
-                label="Violations"
-                value={lobby.violationsDetected}
-                tone="warning"
-                hint="Security flags"
-                icon={<ShieldAlert size={18} color={colors.danger} />}
+                label="Disconnected / Alerts"
+                value={`${lobby.disconnectedCount ?? 0}${lobby.violationsDetected ? ` (${lobby.violationsDetected}!)` : ''}`}
+                hint={lobby.violationsDetected ? `${lobby.violationsDetected} security flags` : 'Network integrity'}
+                tone={(lobby.disconnectedCount ?? 0) > 0 || lobby.violationsDetected > 0 ? 'warning' : 'info'}
+                icon={<ShieldAlert size={18} color={lobby.violationsDetected > 0 ? themeColors.danger : themeColors.warning} />}
+                compact
+                delay={60}
               />
             </View>
 
-            <Text style={styles.section}>Students in this room</Text>
-            <Text style={styles.sectionHint}>
+            <Text style={[styles.section, { color: themeColors.textMuted }]}>Students in this room</Text>
+            <Text style={[styles.sectionHint, { color: themeColors.textSecondary }]}>
               {lobby.waitingCount} waiting to start · {lobby.takingCount} taking ·{' '}
               {lobby.connectedCount} joined of {lobby.registeredCount} registered. Tap a student
               for details. Disconnected students show a 6-digit reconnect PIN (not the exam code).
@@ -796,17 +965,17 @@ export default function ProctorLobbyScreen() {
 
             {(lobby.recentViolations?.length ?? 0) > 0 ? (
               <Card>
-                <Text style={styles.historyTitle}>Security violations</Text>
+                <Text style={[styles.historyTitle, { color: themeColors.textPrimary }]}>Security violations</Text>
                 {(lobby.recentViolations ?? []).slice(0, 8).map((v) => (
-                  <View key={String(v.id)} style={styles.historyRow}>
+                  <View key={String(v.id)} style={[styles.historyRow, { borderBottomColor: themeColors.cardBorder }]}>
                     <Text style={[styles.historyKind, styles.historyDisconnect]}>
                       {String(v.type).replace(/_/g, ' ')}
                     </Text>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.historyBody}>
+                      <Text style={[styles.historyBody, { color: themeColors.textPrimary }]}>
                         {v.studentName}: {v.message || v.type}
                       </Text>
-                      <Text style={styles.historyTime}>
+                      <Text style={[styles.historyTime, { color: themeColors.textMuted }]}>
                         {formatTime(v.occurredAt)} · warning #{v.violationCount}
                       </Text>
                     </View>
@@ -827,12 +996,12 @@ export default function ProctorLobbyScreen() {
             />
             {showHistory ? (
               <Card>
-                <Text style={styles.historyTitle}>Live connection log</Text>
+                <Text style={[styles.historyTitle, { color: themeColors.textPrimary }]}>Live connection log</Text>
                 {notifications.length === 0 ? (
-                  <Text style={styles.historyEmpty}>No connection events yet.</Text>
+                  <Text style={[styles.historyEmpty, { color: themeColors.textMuted }]}>No connection events yet.</Text>
                 ) : (
                   notifications.slice(0, 12).map((n) => (
-                    <View key={n.id} style={styles.historyRow}>
+                    <View key={n.id} style={[styles.historyRow, { borderBottomColor: themeColors.cardBorder }]}>
                       <Text
                         style={[
                           styles.historyKind,
@@ -842,8 +1011,8 @@ export default function ProctorLobbyScreen() {
                         {n.kind === 'connect' ? 'Connected' : 'Left'}
                       </Text>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.historyBody}>{n.body}</Text>
-                        <Text style={styles.historyTime}>{formatTime(n.at)}</Text>
+                        <Text style={[styles.historyBody, { color: themeColors.textPrimary }]}>{n.body}</Text>
+                        <Text style={[styles.historyTime, { color: themeColors.textMuted }]}>{formatTime(n.at)}</Text>
                       </View>
                     </View>
                   ))
@@ -864,7 +1033,7 @@ export default function ProctorLobbyScreen() {
           />
         )}
         ListEmptyComponent={
-          <Text style={styles.empty}>
+          <Text style={[styles.empty, { color: themeColors.textMuted }]}>
             No students have joined yet. Share the QR Code or exam code.
           </Text>
         }
@@ -1060,8 +1229,8 @@ export default function ProctorLobbyScreen() {
             }}
           />
           {selected ? (
-            <View style={styles.detailSheet}>
-              <Text style={styles.detailTitle}>{selected.fullName}</Text>
+            <View style={[styles.detailSheet, { backgroundColor: themeColors.card }]}>
+              <Text style={[styles.detailTitle, { color: themeColors.textPrimary }]}>{selected.fullName}</Text>
               <StatusChip status={selected.status} />
               <DetailRow label="Gmail" value={selected.email} />
               <DetailRow label="Desired Program" value={selected.programName} />
@@ -1098,12 +1267,12 @@ export default function ProctorLobbyScreen() {
               ) : null}
 
               {selected.status === 'disconnected' ? (
-                <View style={styles.reconnectBox}>
-                  <Text style={styles.reconnectLabel}>Reconnect PIN (tell the student)</Text>
-                  <Text style={styles.reconnectCode}>
+                <View style={[styles.reconnectBox, { backgroundColor: isDark ? '#2A1818' : themeColors.accentMuted }]}>
+                  <Text style={[styles.reconnectLabel, { color: themeColors.textMuted }]}>Reconnect PIN (tell the student)</Text>
+                  <Text style={[styles.reconnectCode, { color: themeColors.accent }]}>
                     {reconnectCode || selected.reconnectCode || '————'}
                   </Text>
-                  <Text style={styles.reconnectHint}>
+                  <Text style={[styles.reconnectHint, { color: themeColors.textSecondary }]}>
                     6-digit PIN only — never the examination / QR code. Student enters it on the
                     lock screen after Wi‑Fi is back.
                     {(reconnectExpiresAt || selected.reconnectCodeExpiresAt)
@@ -1222,21 +1391,663 @@ export default function ProctorLobbyScreen() {
           ) : null}
         </View>
       </Modal>
+
+      {/* =================================================================== */}
+      {/* 2. 'SWAP TOKENS INSTANTLY' → SWITCH ACTIVE ROOM/BATCH MODAL         */}
+      {/* Two stacked cards, circular swap icon, room selector, red button    */}
+      {/* =================================================================== */}
+      <Modal
+        visible={swapModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSwapModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setSwapModalVisible(false)} />
+          <View style={styles.swapModalCard}>
+            <View style={styles.swapModalHeader}>
+              <Text style={styles.swapModalTitle}>Switch Active Room</Text>
+              <Pressable onPress={() => setSwapModalVisible(false)} hitSlop={8}>
+                <X size={20} color="#71717A" />
+              </Pressable>
+            </View>
+            <Text style={styles.swapModalSub}>
+              Migrate local Wi-Fi broadcasting and student check-ins to a different room session.
+            </Text>
+
+            {/* CARD 1: CURRENT ACTIVE ROOM */}
+            <View style={styles.swapCard}>
+              <Text style={styles.swapCardTag}>CURRENT ACTIVE ROOM</Text>
+              <View style={styles.swapCardMain}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.swapCardTitle}>
+                    {lobby.session?.roomName || lobby.roomName || 'Room 101'}
+                  </Text>
+                  <Text style={styles.swapCardMeta}>
+                    Batch {lobby.session?.batchNumber || '1'} · {lobby.registeredCount || lobby.students.length} Registered Candidates
+                  </Text>
+                </View>
+                <View style={styles.swapActiveBadge}>
+                  <Text style={styles.swapActiveBadgeText}>Active</Text>
+                </View>
+              </View>
+            </View>
+
+            {/* CIRCULAR SWAP ICON */}
+            <View style={styles.swapCircleWrapper}>
+              <View style={styles.swapCircle}>
+                <ArrowDownUp size={18} color="#FFFFFF" />
+              </View>
+            </View>
+
+            {/* CARD 2: SWITCH TO ROOM */}
+            <View style={styles.swapCard}>
+              <Text style={styles.swapCardTag}>SWITCH TO ROOM</Text>
+              <View style={styles.roomSelectGrid}>
+                {availableRooms.map((rm) => {
+                  const isSelected = targetRoomId === rm.id;
+                  return (
+                    <Pressable
+                      key={rm.id}
+                      style={[
+                        styles.roomSelectOption,
+                        isSelected && styles.roomSelectOptionActive,
+                      ]}
+                      onPress={() => setTargetRoomId(rm.id)}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.roomOptionName,
+                            isSelected && styles.roomOptionNameActive,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {rm.name}
+                        </Text>
+                        <Text style={styles.roomOptionCap}>
+                          Capacity: {rm.capacity} Applicants
+                        </Text>
+                      </View>
+                      {isSelected && (
+                        <View style={styles.roomCheckBadge}>
+                          <Check size={14} color="#FFFFFF" />
+                        </View>
+                      )}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            {/* DETAIL ROW */}
+            <View style={styles.swapDetailNotice}>
+              <Text style={styles.swapNoticeText}>
+                The local HTTP server and WebSocket beacon will immediately rebind to the selected room.
+              </Text>
+            </View>
+
+            {/* CONFIRM BUTTON */}
+            <Button
+              title="Confirm Room Switch"
+              variant="primary"
+              size="lg"
+              fullWidth
+              onPress={handleConfirmRoomSwitch}
+              style={{ backgroundColor: colors.primary }}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* =================================================================== */}
+      {/* 3. 'SEND TOKENS' → GENERATE/ENTER ROOM ACCESS CODE MODAL           */}
+      {/* Large 4-digit code display, numeric keypad, bold red button        */}
+      {/* =================================================================== */}
+      <Modal
+        visible={codeModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setCodeModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setCodeModalVisible(false)} />
+          <View style={styles.codeModalCard}>
+            <View style={styles.swapModalHeader}>
+              <Text style={styles.swapModalTitle}>Room Access Code</Text>
+              <Pressable onPress={() => setCodeModalVisible(false)} hitSlop={8}>
+                <X size={20} color="#71717A" />
+              </Pressable>
+            </View>
+            <Text style={styles.swapModalSub}>
+              Enter a custom numeric access code or generate a random passkey for examinees.
+            </Text>
+
+            {/* LARGE CODE DISPLAY AREA */}
+            <View style={styles.keypadDisplayContainer}>
+              <View style={styles.keypadDigitsRow}>
+                {[0, 1, 2, 3].map((idx) => {
+                  const char = keypadCode[idx];
+                  const isCurrent = keypadCode.length === idx;
+                  return (
+                    <View
+                      key={idx}
+                      style={[
+                        styles.keypadDigitBox,
+                        isCurrent && styles.keypadDigitBoxActive,
+                        char && styles.keypadDigitBoxFilled,
+                      ]}
+                    >
+                      <Text style={styles.keypadDigitText}>{char || '—'}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+              <Text style={styles.keypadDisplayHint}>
+                {keypadCode.length >= 4 ? 'Ready to Apply' : `Enter ${Math.max(0, 4 - keypadCode.length)} more digits`}
+              </Text>
+            </View>
+
+            {/* NUMERIC KEYPAD GRID */}
+            <View style={styles.keypadGrid}>
+              {[
+                ['1', '2', '3'],
+                ['4', '5', '6'],
+                ['7', '8', '9'],
+                ['C', '0', '⌫'],
+              ].map((row, rIdx) => (
+                <View key={rIdx} style={styles.keypadRow}>
+                  {row.map((btn) => (
+                    <Pressable
+                      key={btn}
+                      style={styles.keypadBtn}
+                      onPress={() => {
+                        if (btn === 'C') handleKeypadClear();
+                        else if (btn === '⌫') handleKeypadBackspace();
+                        else handleKeypadPress(btn);
+                      }}
+                      hitSlop={6}
+                    >
+                      <Text
+                        style={[
+                          styles.keypadBtnText,
+                          (btn === 'C' || btn === '⌫') && styles.keypadSpecialBtnText,
+                        ]}
+                      >
+                        {btn}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ))}
+            </View>
+
+            {/* ACTIONS: RANDOMIZE & SET CODE */}
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
+              <Button
+                title="Randomize"
+                variant="outline"
+                onPress={handleKeypadRandom}
+                style={{ flex: 1, borderColor: '#333333', backgroundColor: '#1E1E1E' }}
+              />
+              <Button
+                title="Set Access Code"
+                variant="primary"
+                onPress={handleApplyCustomCode}
+                style={{ flex: 2, backgroundColor: '#7A1F2B' }}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 function DetailRow({ label, value }: { label: string; value: string }) {
+  const { colors: themeColors } = useAppTheme();
   return (
-    <View style={styles.detailRow}>
-      <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue}>{value}</Text>
+    <View style={[styles.detailRow, { borderBottomColor: themeColors.cardBorder }]}>
+      <Text style={[styles.detailLabel, { color: themeColors.textMuted }]}>{label}</Text>
+      <Text style={[styles.detailValue, { color: themeColors.textPrimary }]}>{value}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.background },
+  screen: { flex: 1, backgroundColor: '#0D0D0D' },
+  navBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: '#0D0D0D',
+  },
+  navLeftRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  navCenterBlock: {
+    flex: 1,
+    marginHorizontal: 10,
+    alignItems: 'center',
+  },
+  navTitleText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  navSubtitleText: {
+    fontSize: 11,
+    color: '#A1A1AA',
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  navRightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  navAvatarCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1E1E1E',
+    borderWidth: 1.5,
+    borderColor: '#333333',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navAvatarText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  navIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1A1A1A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#262626',
+  },
+
+  // 'DEPOSIT TETHER USDT' → EXAMINATION LOBBY QR CODE CARD
+  redDepositCard: {
+    backgroundColor: '#7A1F2B',
+    borderRadius: 24,
+    padding: 20,
+    gap: 16,
+  },
+  depositTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  depositTagBadge: {
+    backgroundColor: 'rgba(0,0,0,0.22)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  depositTagText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  depositLiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  depositLiveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#22C55E',
+  },
+  depositLiveText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.4,
+  },
+  qrWhiteFrame: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroCodeSection: {
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+  },
+  heroCodeLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: 'rgba(255,255,255,0.85)',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  heroCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 14,
+  },
+  heroCodeValue: {
+    fontSize: 34,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 6,
+  },
+  codeActionButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  codeSquareBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  depositDetailsTable: {
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  depositDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 7,
+  },
+  depositDetailLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.78)',
+  },
+  depositDetailVal: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  depositDetailDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  cardInlineActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  cardActionPill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    backgroundColor: 'rgba(0,0,0,0.28)',
+    paddingVertical: 11,
+    borderRadius: 12,
+  },
+  cardActionPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  depositActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  depositOutlineBtn: {
+    flex: 1,
+    borderColor: 'rgba(255,255,255,0.4)',
+    backgroundColor: 'transparent',
+  },
+  depositSolidBtn: {
+    flex: 1.3,
+    backgroundColor: '#141414',
+  },
+
+  // 'SWAP TOKENS INSTANTLY' → SWITCH ACTIVE ROOM MODAL
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 18,
+  },
+  swapModalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#141414',
+    borderColor: '#262626',
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 22,
+    gap: 14,
+  },
+  swapModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  swapModalTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#FFFFFF',
+  },
+  swapModalSub: {
+    fontSize: 12,
+    color: '#A1A1AA',
+    fontWeight: '500',
+    lineHeight: 18,
+  },
+  swapCard: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#262626',
+    gap: 6,
+  },
+  swapCardTag: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#7A1F2B',
+    letterSpacing: 0.5,
+  },
+  swapCardMain: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  swapCardTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  swapCardMeta: {
+    fontSize: 12,
+    color: '#A1A1AA',
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  swapActiveBadge: {
+    backgroundColor: '#142918',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  swapActiveBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#22C55E',
+  },
+  swapCircleWrapper: {
+    alignItems: 'center',
+    marginVertical: -6,
+    zIndex: 2,
+  },
+  swapCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#7A1F2B',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: '#141414',
+  },
+  roomSelectGrid: {
+    gap: 8,
+    marginTop: 4,
+  },
+  roomSelectOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#141414',
+    borderWidth: 1,
+    borderColor: '#2E2E2E',
+    borderRadius: 10,
+    padding: 10,
+  },
+  roomSelectOptionActive: {
+    borderColor: '#7A1F2B',
+    backgroundColor: '#201313',
+  },
+  roomOptionName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#D4D4D8',
+  },
+  roomOptionNameActive: {
+    color: '#FFFFFF',
+  },
+  roomOptionCap: {
+    fontSize: 11,
+    color: '#71717A',
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  roomCheckBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#7A1F2B',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  swapDetailNotice: {
+    backgroundColor: '#1E1E1E',
+    padding: 10,
+    borderRadius: 10,
+  },
+  swapNoticeText: {
+    fontSize: 11,
+    color: '#A1A1AA',
+    lineHeight: 16,
+    fontWeight: '500',
+  },
+
+  // 'SEND TOKENS' → ROOM ACCESS CODE MODAL
+  codeModalCard: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: '#141414',
+    borderColor: '#262626',
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 22,
+    gap: 14,
+  },
+  keypadDisplayContainer: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
+    paddingVertical: 18,
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#262626',
+  },
+  keypadDigitsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  keypadDigitBox: {
+    width: 48,
+    height: 56,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#333333',
+    backgroundColor: '#141414',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  keypadDigitBoxActive: {
+    borderColor: '#7A1F2B',
+  },
+  keypadDigitBoxFilled: {
+    borderColor: '#7A1F2B',
+    backgroundColor: '#201313',
+  },
+  keypadDigitText: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#FFFFFF',
+  },
+  keypadDisplayHint: {
+    fontSize: 11,
+    color: '#71717A',
+    fontWeight: '600',
+  },
+  keypadGrid: {
+    gap: 8,
+    marginTop: 4,
+  },
+  keypadRow: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'center',
+  },
+  keypadBtn: {
+    flex: 1,
+    height: 46,
+    borderRadius: 12,
+    backgroundColor: '#1E1E1E',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+  },
+  keypadBtnText: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  keypadSpecialBtnText: {
+    fontSize: 15,
+    color: '#7A1F2B',
+    fontWeight: '900',
+  },
+
   lobbySkeleton: { padding: 20, gap: 12 },
   list: { padding: 20, gap: 10, paddingBottom: 40 },
   headerBlock: { gap: 14, marginBottom: 8 },
@@ -1273,13 +2084,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   peerBanner: {
-    gap: 6,
+    backgroundColor: '#071A0E',
+    borderRadius: 14,
+    padding: 14,
     marginBottom: 12,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: '#ECFDF5',
     borderWidth: 1,
-    borderColor: colors.success,
+    borderColor: '#166534',
+    gap: 8,
   },
   peerTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   peerTitle: { fontSize: 14, fontWeight: '800', color: colors.success },

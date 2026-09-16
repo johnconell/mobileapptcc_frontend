@@ -155,7 +155,9 @@ export function QuestionCard({
                     color: palette.ink,
                     fontSize: 15 * fontScale,
                     lineHeight: 21 * fontScale,
-                    fontWeight: selected ? '600' : '400',
+                    fontFamily: selected
+                      ? examProcess.fontMedium
+                      : examProcess.fontRegular,
                   },
                 ]}
                 selectable={!secure}
@@ -178,11 +180,11 @@ const styles = StyleSheet.create({
     padding: examProcess.padCard,
   },
   meta: {
-    fontWeight: '700',
+    fontFamily: examProcess.fontMedium,
     marginBottom: 8,
   },
   prompt: {
-    fontWeight: '600',
+    fontFamily: examProcess.fontMedium,
     marginBottom: 14,
   },
   choices: { gap: 8 },
@@ -211,6 +213,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 1,
   },
-  badgeText: { fontWeight: '700' },
-  choiceText: { flex: 1 },
+  badgeText: { fontFamily: examProcess.fontSemiBold },
+  choiceText: { flex: 1, fontFamily: examProcess.fontRegular },
 });

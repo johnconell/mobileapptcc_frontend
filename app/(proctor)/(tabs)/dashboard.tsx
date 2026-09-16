@@ -10,6 +10,7 @@ import {
   Alert,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Users,
   UserCheck,
@@ -26,6 +27,8 @@ import {
   User,
   GraduationCap,
   LogOut,
+  Search,
+  Bell,
 } from 'lucide-react-native';
 import { Header, Button } from '@/shared/components/ui';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
@@ -56,6 +59,7 @@ function formatTime12(timeStr?: string): string {
 
 export default function ProctorDashboardScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { colors, isDark, fontMultiplier } = useAppTheme();
   const profile = useProctorStore((s) => s.profile);
   const [refreshing, setRefreshing] = useState(false);
@@ -251,26 +255,46 @@ export default function ProctorDashboardScreen() {
   };
 
   return (
-    <View style={[styles.screen, { backgroundColor: colors.background }]}>
-      <Header
-        title="Dashboard"
-        subtitle="Proctor Command Center"
-        hideBackSlot
-        right={
+    <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: insets.top }]}>
+      {/* 1. UNIFORM HEADER NAV BAR (Avatar on Left, Refresh/Logout on Right) */}
+      <View style={[styles.navBar, { backgroundColor: colors.background }]}>
+        {/* Proctor Avatar Circle */}
+        <View style={[styles.navAvatarCircle, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+          <Text style={[styles.navAvatarText, { color: colors.textPrimary }]}>
+            {profile?.displayName
+              ? profile.displayName
+                  .split(' ')
+                  .map((n) => n[0])
+                  .join('')
+                  .slice(0, 2)
+                  .toUpperCase()
+              : 'P1'}
+          </Text>
+        </View>
+
+        {/* Right Icon Actions: Refresh & Logout */}
+        <View style={styles.navRightRow}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Sign out"
-            onPress={handleLogout}
-            style={styles.signOutHeaderBtn}
+            style={[styles.navIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+            onPress={loadData}
+            accessibilityLabel="Refresh Data"
             hitSlop={8}
           >
-            <LogOut size={16} color={colors.danger} />
-            <Text style={[styles.signOutHeaderText, { color: colors.danger }]} maxFontSizeMultiplier={fontMultiplier}>
-              Sign Out
-            </Text>
+            <RefreshCw size={17} color={colors.textPrimary} />
           </Pressable>
-        }
-      />
+
+          <Pressable
+            accessibilityRole="button"
+            style={[styles.navIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+            onPress={handleLogout}
+            accessibilityLabel="Logout"
+            hitSlop={8}
+          >
+            <LogOut size={17} color="#7A1F2B" />
+          </Pressable>
+        </View>
+      </View>
 
       <ScrollView
         contentContainerStyle={styles.content}
@@ -279,10 +303,15 @@ export default function ProctorDashboardScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={loadData}
-            tintColor={colors.tabBarActive}
+            tintColor="#7A1F2B"
           />
         }
       >
+        {/* Screen Title Block */}
+        <View style={styles.screenTitleRow}>
+          <Text style={[styles.screenHeading, { color: colors.textPrimary }]}>Dashboard</Text>
+          <Text style={[styles.screenSubheading, { color: colors.textSecondary }]}>Proctor Command Center · Offline Mode</Text>
+        </View>
         {/* 1. WELCOME CARD */}
         <View
           style={[
@@ -351,8 +380,8 @@ export default function ProctorDashboardScreen() {
                 { backgroundColor: colors.card, borderColor: colors.cardBorder },
               ]}
             >
-              <View style={[styles.statIconWrap, { backgroundColor: colors.accentMuted }]}>
-                <Users size={20} color={colors.accent} />
+              <View style={[styles.statIconWrap, { backgroundColor: isDark ? '#2A1818' : '#FEE2E2' }]}>
+                <Users size={20} color="#7A1F2B" />
               </View>
               <View style={styles.statContent}>
                 <Text
@@ -379,8 +408,8 @@ export default function ProctorDashboardScreen() {
                 { backgroundColor: colors.card, borderColor: colors.cardBorder },
               ]}
             >
-              <View style={[styles.statIconWrap, { backgroundColor: colors.successMuted }]}>
-                <UserCheck size={20} color={colors.success} />
+              <View style={[styles.statIconWrap, { backgroundColor: isDark ? '#142918' : '#DCFCE7' }]}>
+                <UserCheck size={20} color="#22C55E" />
               </View>
               <View style={styles.statContent}>
                 <Text
@@ -410,8 +439,8 @@ export default function ProctorDashboardScreen() {
                 { backgroundColor: colors.card, borderColor: colors.cardBorder },
               ]}
             >
-              <View style={[styles.statIconWrap, { backgroundColor: colors.warningMuted }]}>
-                <Award size={20} color={colors.warning} />
+              <View style={[styles.statIconWrap, { backgroundColor: isDark ? '#291E0A' : '#FEF3C7' }]}>
+                <Award size={20} color="#F59E0B" />
               </View>
               <View style={styles.statContent}>
                 <Text
@@ -438,8 +467,8 @@ export default function ProctorDashboardScreen() {
                 { backgroundColor: colors.card, borderColor: colors.cardBorder },
               ]}
             >
-              <View style={[styles.statIconWrap, { backgroundColor: colors.accentMuted }]}>
-                <Clock size={20} color={colors.accent} />
+              <View style={[styles.statIconWrap, { backgroundColor: isDark ? '#2A1818' : '#FEE2E2' }]}>
+                <Clock size={20} color="#7A1F2B" />
               </View>
               <View style={styles.statContent}>
                 <Text
@@ -572,11 +601,15 @@ export default function ProctorDashboardScreen() {
           <View
             style={[
               styles.registeredBanner,
-              { backgroundColor: colors.accentMuted, borderColor: colors.accent },
+              {
+                backgroundColor: isDark ? '#141414' : colors.cardMuted,
+                borderWidth: 1.5,
+                borderColor: '#7A1F2B',
+              },
             ]}
           >
             <View style={styles.registeredBannerLeft}>
-              <GraduationCap size={20} color={colors.accent} />
+              <GraduationCap size={20} color="#7A1F2B" />
               <View>
                 <Text
                   style={[styles.registeredLabel, { color: colors.textSecondary }]}
@@ -585,7 +618,7 @@ export default function ProctorDashboardScreen() {
                   Registered Total Applicants
                 </Text>
                 <Text
-                  style={[styles.registeredCount, { color: colors.accent }]}
+                  style={[styles.registeredCount, { color: '#7A1F2B' }]}
                   maxFontSizeMultiplier={fontMultiplier}
                 >
                   {stats.todayRegistered} Examinees Scheduled
@@ -805,8 +838,7 @@ export default function ProctorDashboardScreen() {
           >
             <View
               style={[
-                styles.actionIcon,
-                { backgroundColor: activeLobby ? colors.success : colors.accent },
+                styles.actionIcon, { backgroundColor: '#7A1F2B' },
               ]}
             >
               <DoorOpen size={20} color="#FFFFFF" />
@@ -849,8 +881,8 @@ export default function ProctorDashboardScreen() {
             android_ripple={{ color: colors.cardBorder }}
             accessibilityRole="button"
           >
-            <View style={[styles.actionIcon, { backgroundColor: colors.accent }]}>
-              <BarChart3 size={20} color="#FFFFFF" />
+            <View style={[styles.actionIcon, { backgroundColor: isDark ? '#222222' : colors.cardMuted }]}>
+              <BarChart3 size={20} color={isDark ? '#FFFFFF' : colors.textPrimary} />
               {stats.pendingSyncCount > 0 && (
                 <View style={styles.actionRedDot} />
               )}
@@ -1049,7 +1081,52 @@ export default function ProctorDashboardScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  content: { padding: 16, gap: 14, paddingBottom: 40 },
+  navBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+  },
+  navAvatarCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navAvatarText: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  navRightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  navIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  screenTitleRow: {
+    marginBottom: 2,
+  },
+  screenHeading: {
+    fontSize: 26,
+    fontWeight: '900',
+    letterSpacing: -0.5,
+  },
+  screenSubheading: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 3,
+  },
+  content: { padding: 16, gap: 14, paddingBottom: 100 },
 
   // Welcome Card
   welcomeCard: {

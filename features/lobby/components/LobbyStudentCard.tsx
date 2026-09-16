@@ -3,6 +3,7 @@ import { Pressable, Text, View, StyleSheet } from 'react-native';
 import type { LobbyStudent } from '@/shared/types';
 import { colors } from '@/shared/theme';
 import { Avatar, Card, StatusChip } from '@/shared/components/ui';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 interface LobbyStudentCardProps {
   student: LobbyStudent;
@@ -11,19 +12,20 @@ interface LobbyStudentCardProps {
 }
 
 export function LobbyStudentCard({ student, delay = 0, onPress }: LobbyStudentCardProps) {
+  const { colors: themeColors } = useAppTheme();
   const showReconnect =
     student.status === 'disconnected' &&
     Boolean(student.reconnectCode && /^\d{6}$/.test(student.reconnectCode));
 
   return (
     <Pressable onPress={onPress} disabled={!onPress}>
-      <Card delay={delay} style={styles.card}>
+      <Card delay={delay} style={{ ...styles.card, backgroundColor: themeColors.card, borderColor: themeColors.cardBorder }}>
         <View style={styles.row}>
           <Avatar initials={student.avatarInitials} size={42} />
           <View style={styles.meta}>
-            <Text style={styles.name}>{student.fullName}</Text>
-            <Text style={styles.email}>{student.email}</Text>
-            <Text style={styles.program}>{student.programName}</Text>
+            <Text style={[styles.name, { color: themeColors.textPrimary }]}>{student.fullName}</Text>
+            <Text style={[styles.email, { color: themeColors.textMuted }]}>{student.email}</Text>
+            <Text style={[styles.program, { color: themeColors.textSecondary }]}>{student.programName}</Text>
             {student.downloadPercent != null || student.hashVerified != null || student.moduleReady != null || student.isReady != null ? (
               <Text style={styles.downloadLine}>
                 {`${Math.round(student.downloadPercent ?? (student.isReady ? 100 : 0))}% · ${
@@ -31,7 +33,7 @@ export function LobbyStudentCard({ student, delay = 0, onPress }: LobbyStudentCa
                 } · ${student.moduleReady || student.isReady ? 'Ready' : 'Not ready'}`}
               </Text>
             ) : null}
-            <Text style={styles.startPhase}>
+            <Text style={[styles.startPhase, { color: themeColors.textSecondary }]}>
               {student.startPhase === 'entered' || student.status === 'taking_exam'
                 ? 'Entered Examination'
                 : student.startPhase === 'received'
@@ -44,10 +46,10 @@ export function LobbyStudentCard({ student, delay = 0, onPress }: LobbyStudentCa
               <Text style={styles.violations}>Warnings: {student.violationCount}</Text>
             ) : null}
             {showReconnect ? (
-              <View style={styles.reconnectRow}>
-                <Text style={styles.reconnectLabel}>Reconnect code</Text>
+              <View style={[styles.reconnectRow, { backgroundColor: themeColors.accentMuted }]}>
+                <Text style={[styles.reconnectLabel, { color: themeColors.textMuted }]}>Reconnect code</Text>
                 <Text style={styles.reconnectCode}>{student.reconnectCode}</Text>
-                <Text style={styles.reconnectHint}>Tell the student this number</Text>
+                <Text style={[styles.reconnectHint, { color: themeColors.textSecondary }]}>Tell the student this number</Text>
               </View>
             ) : null}
           </View>

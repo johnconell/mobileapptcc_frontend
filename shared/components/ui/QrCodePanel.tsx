@@ -1,7 +1,7 @@
 import React from 'react';
 import { Text, View, StyleSheet, useWindowDimensions } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
-import { colors, radii, shadows } from '@/shared/theme';
+import { radii, shadows } from '@/shared/theme';
 
 interface QrCodePanelProps {
   value: string;
@@ -25,8 +25,8 @@ export function QrCodePanel({
           size={qrSize}
           ecl="L"
           quietZone={8}
-          color={colors.ink}
-          backgroundColor={colors.white}
+          color="#000000"
+          backgroundColor="#FFFFFF"
         />
       </View>
       <Text style={styles.note}>{note}</Text>
@@ -39,9 +39,9 @@ const styles = StyleSheet.create({
   frame: {
     padding: 18,
     borderRadius: radii.card,
-    backgroundColor: colors.surface,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#333333',
     ...shadows.card,
     alignItems: 'center',
     justifyContent: 'center',
@@ -49,7 +49,7 @@ const styles = StyleSheet.create({
   note: {
     fontSize: 13,
     lineHeight: 20,
-    color: colors.inkSecondary,
+    color: '#A1A1AA',
     textAlign: 'center',
     maxWidth: 280,
     fontWeight: '500',

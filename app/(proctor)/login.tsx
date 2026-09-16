@@ -29,10 +29,12 @@ import {
 } from '@/features/authentication/services/proctorGoogleAuth';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { colors } from '@/shared/theme';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 let lastConsumedGoogleUrl: string | null = null;
 
 export default function ProctorLoginScreen() {
+  const { colors: themeColors, isDark } = useAppTheme();
   const router = useRouter();
   const profile = useProctorStore((s) => s.profile);
   const setProfile = useProctorStore((s) => s.setProfile);
@@ -146,17 +148,17 @@ export default function ProctorLoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.screen}
+      style={[styles.screen, { backgroundColor: themeColors.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <Header title="Proctor Login" subtitle="Internet required to sign in" onBack={goToLanding} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <Card>
-          <View style={styles.iconWrap}>
+        <Card style={{ backgroundColor: themeColors.card, borderColor: themeColors.cardBorder }}>
+          <View style={[styles.iconWrap, { backgroundColor: themeColors.accentMuted }]}>
             <Shield size={28} color={colors.primary} />
           </View>
-          <Text style={styles.title}>Sign in</Text>
-          <Text style={styles.sub}>
+          <Text style={[styles.title, { color: themeColors.textPrimary }]}>Sign in</Text>
+          <Text style={[styles.sub, { color: themeColors.textSecondary }]}>
             Sign in online with your proctor account. Offline exam access starts after you
             download the exam pack from the Examination tab.
           </Text>

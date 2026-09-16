@@ -26,57 +26,56 @@ export type AppThemeColors = {
   searchBg: string;
 };
 
-// Light theme colors - clean executive navy & slate
+// Light theme — cream canvas + maroon accents (not bright red)
 const lightColors: AppThemeColors = {
-  background: '#F5F7FA',
-  card: '#FFFFFF',
-  cardBorder: '#E2E8F0',
-  cardMuted: '#F8FAFC',
-  textPrimary: '#003366',
-  textSecondary: '#475569',
-  textMuted: '#64748B',
-  accent: '#0055A4',
-  accentMuted: '#EBF3FE',
-  success: '#28A745',
-  successMuted: '#E6F4EA',
-  danger: '#DC3545',
-  dangerMuted: '#FEE2E2',
-  warning: '#D97706',
+  background: '#FAF7F2',
+  card: '#FFFDF8',
+  cardBorder: '#E8DFD3',
+  cardMuted: '#F5EFE6',
+  textPrimary: '#2C241C',
+  textSecondary: '#7A6E62',
+  textMuted: '#9A8E82',
+  accent: '#7A1F2B',
+  accentMuted: '#F5E8EA',
+  success: '#1B6B3A',
+  successMuted: '#EAF5EE',
+  danger: '#9B1C1C',
+  dangerMuted: '#F8E8E8',
+  warning: '#B45309',
   warningMuted: '#FEF3C7',
-  tabBarBg: '#FFFFFF',
-  tabBarBorder: '#E2E8F0',
-  tabBarActive: '#003366',
-  tabBarInactive: '#64748B',
-  inputBg: '#FFFFFF',
-  inputBorder: '#CBD5E1',
-  searchBg: '#FFFFFF',
+  tabBarBg: '#FFFDF8',
+  tabBarBorder: '#E8DFD3',
+  tabBarActive: '#7A1F2B',
+  tabBarInactive: '#9A8E82',
+  inputBg: '#FFFDF8',
+  inputBorder: '#DDD2C4',
+  searchBg: '#FFFDF8',
 };
 
-// High-contrast dark theme colors - NEVER blends into background!
-// Uses crisp elevated slate cards with distinct borders and bright text
+// Dark theme — deep charcoal with maroon accents
 const darkColors: AppThemeColors = {
-  background: '#0B1120',
-  card: '#1E293B',
-  cardBorder: '#334155',
-  cardMuted: '#0F172A',
-  textPrimary: '#F8FAFC',     // Pure high-contrast white
-  textSecondary: '#CBD5E1',   // Bright legible slate
-  textMuted: '#94A3B8',       // Medium legible slate
-  accent: '#38BDF8',         // Vivid sky blue
-  accentMuted: '#0369A130',
-  success: '#4ADE80',        // Vivid emerald green
-  successMuted: '#14532D40',
-  danger: '#F87171',         // Vivid coral red
-  dangerMuted: '#7F1D1D40',
-  warning: '#FBBF24',        // Bright amber
-  warningMuted: '#78350F40',
-  tabBarBg: '#0F172A',
-  tabBarBorder: '#1E293B',
-  tabBarActive: '#38BDF8',
-  tabBarInactive: '#94A3B8',
-  inputBg: '#0F172A',
-  inputBorder: '#475569',
-  searchBg: '#1E293B',
+  background: '#14110F',
+  card: '#1E1A17',
+  cardBorder: '#322C27',
+  cardMuted: '#25201C',
+  textPrimary: '#FAF7F2',
+  textSecondary: '#C9BDB0',
+  textMuted: '#9A8E82',
+  accent: '#A63A4A',
+  accentMuted: '#3A1C22',
+  success: '#3D9B5F',
+  successMuted: '#1A2E22',
+  danger: '#C45A5A',
+  dangerMuted: '#3A1C1C',
+  warning: '#D97706',
+  warningMuted: '#3A2A12',
+  tabBarBg: '#14110F',
+  tabBarBorder: '#322C27',
+  tabBarActive: '#A63A4A',
+  tabBarInactive: '#9A8E82',
+  inputBg: '#25201C',
+  inputBorder: '#3A322C',
+  searchBg: '#1E1A17',
 };
 
 export function useAppTheme() {

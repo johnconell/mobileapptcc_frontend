@@ -14,6 +14,7 @@ import {
   examProcess,
   type ExamProcessStepIndex,
 } from '@/shared/theme/examProcess';
+import { ExamProcessStepper } from '@/features/examinations/components/ExamProcessStepper';
 
 type ExamProcessChromeProps = {
   step: ExamProcessStepIndex;
@@ -45,14 +46,7 @@ export function ExamProcessChrome({
 
   const body = (
     <View style={[styles.card, contentStyle]}>
-      <View style={styles.progress}>
-        {EXAM_PROCESS_STEPS.map((_, index) => (
-          <View
-            key={EXAM_PROCESS_STEPS[index]}
-            style={[styles.progressSeg, index <= step && styles.progressSegOn]}
-          />
-        ))}
-      </View>
+      <ExamProcessStepper step={step} />
       <Text style={styles.stepLabel}>{label}</Text>
       <Text style={styles.title}>{title}</Text>
       {children}
@@ -174,7 +168,7 @@ const styles = StyleSheet.create({
   topBackText: {
     color: examProcess.accent,
     fontSize: 14,
-    fontWeight: '600',
+    fontFamily: examProcess.fontMedium,
   },
   topSpacer: { height: 8 },
   scrollContent: {
@@ -190,32 +184,19 @@ const styles = StyleSheet.create({
     borderRadius: examProcess.radiusCard,
     padding: examProcess.padCard,
     width: '100%',
-    maxWidth: 360,
-  },
-  progress: {
-    flexDirection: 'row',
-    gap: 6,
-    marginBottom: 8,
-  },
-  progressSeg: {
-    flex: 1,
-    height: 4,
-    borderRadius: examProcess.radiusProgress,
-    backgroundColor: examProcess.progressTrack,
-  },
-  progressSegOn: {
-    backgroundColor: examProcess.accent,
+    maxWidth: 400,
   },
   stepLabel: {
     color: examProcess.muted,
-    fontSize: 12,
-    marginBottom: 14,
+    fontSize: 13,
+    fontFamily: examProcess.fontRegular,
+    marginBottom: 10,
   },
   title: {
-    fontSize: 22,
-    fontWeight: '700',
+    fontSize: 20,
+    fontFamily: examProcess.fontSemiBold,
     color: examProcess.ink,
-    marginBottom: 8,
+    marginBottom: 10,
   },
   actions: {
     flexDirection: 'row',
@@ -232,9 +213,7 @@ const styles = StyleSheet.create({
   },
   btnFlex: { flex: 1 },
   btnPrimary: {
-    backgroundColor: examProcess.accentSoft,
-    borderWidth: 1,
-    borderColor: examProcess.accent,
+    backgroundColor: examProcess.accent,
   },
   btnBack: {
     backgroundColor: examProcess.cardElevated,
@@ -247,21 +226,21 @@ const styles = StyleSheet.create({
     borderColor: examProcess.danger,
   },
   btnDisabled: { opacity: 0.5 },
-  btnText: { fontSize: 14, fontWeight: '700' },
-  btnTextPrimary: { color: examProcess.accent },
+  btnText: { fontSize: 14, fontFamily: examProcess.fontMedium },
+  btnTextPrimary: { color: examProcess.white },
   btnTextBack: { color: examProcess.ink },
   btnTextDanger: { color: examProcess.error },
   ok: {
     backgroundColor: examProcess.okBg,
     borderRadius: examProcess.radiusControl,
     borderWidth: 1,
-    borderColor: examProcess.accentMuted,
+    borderColor: '#C5E0CF',
     padding: 12,
     marginTop: 12,
   },
   okText: {
     color: examProcess.okText,
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: examProcess.fontMedium,
   },
 });

@@ -30,6 +30,7 @@ import {
 } from '@/features/examinations/components/ExamProcessChrome';
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
+import { examProcess } from '@/shared/theme/examProcess';
 
 const codeSchema = z.object({
   code: z
@@ -188,6 +189,30 @@ export default function JoinExaminationScreen() {
 
   const close = () => router.replace('/');
 
+  const modeToggle = (
+    <View style={styles.modeToggle}>
+      <Pressable
+        style={[styles.modeSeg, mode === 'scan' && styles.modeSegOn]}
+        onPress={() => {
+          setMode('scan');
+          setError(null);
+          setScanning(true);
+        }}
+      >
+        <Text style={[styles.modeText, mode === 'scan' && styles.modeTextOn]}>Scan QR</Text>
+      </Pressable>
+      <Pressable
+        style={[styles.modeSeg, mode === 'code' && styles.modeSegOn]}
+        onPress={() => {
+          setMode('code');
+          setError(null);
+        }}
+      >
+        <Text style={[styles.modeText, mode === 'code' && styles.modeTextOn]}>Enter code</Text>
+      </Pressable>
+    </View>
+  );
+
   if (wifiBlocked) {
     return (
       <ExamProcessChrome
@@ -227,8 +252,56 @@ export default function JoinExaminationScreen() {
     );
   }
 
+  if (mode === 'code') {
+    return (
+      <KeyboardAvoidingView
+        style={styles.codeRoot}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ExamProcessChrome
+          step={0}
+          title="Enter Examination Code"
+          stepLabel="Step 1 of 6 · Join"
+          onBack={close}
+          backLabel="Cancel"
+        >
+          <Text style={styles.codeIntro}>
+            Type the room code from your proctor if the camera is unavailable.
+          </Text>
+          {modeToggle}
+          <Text style={styles.fieldLabel}>Examination Code</Text>
+          <Controller
+            control={control}
+            name="code"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <TextInput
+                style={[styles.codeInput, Boolean(errors.code) && styles.inputInvalid]}
+                placeholder="K7M2P9QX"
+                placeholderTextColor={examProcess.muted}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                value={value}
+                onChangeText={(text) => onChange(text.toUpperCase())}
+                onBlur={onBlur}
+                onSubmitEditing={onVerifyCode}
+              />
+            )}
+          />
+          {errors.code?.message ? <Text style={styles.error}>{errors.code.message}</Text> : null}
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+          <ExamProcessActions>
+            <ExamProcessButton
+              title={isSubmitting || busy ? 'Verifying…' : 'Continue'}
+              loading={isSubmitting || busy}
+              onPress={onVerifyCode}
+            />
+          </ExamProcessActions>
+        </ExamProcessChrome>
+      </KeyboardAvoidingView>
+    );
+  }
+
   const cameraReady = Boolean(permission?.granted);
-  const showLiveCamera = mode === 'scan' && cameraReady;
 
   return (
     <KeyboardAvoidingView
@@ -236,7 +309,7 @@ export default function JoinExaminationScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.root}>
-        {showLiveCamera ? (
+        {cameraReady ? (
           <CameraView
             style={StyleSheet.absoluteFill}
             facing="back"
@@ -253,81 +326,36 @@ export default function JoinExaminationScreen() {
           <View style={[StyleSheet.absoluteFill, styles.fallbackBg]} />
         )}
 
-        {/* Dimmed mask with clear viewfinder (scan) or full dim (enter code) */}
-        {mode === 'scan' ? (
-          <View style={styles.mask} pointerEvents="none">
-            <View style={styles.maskTop}>
-              <Text style={styles.heroTitle}>Scan QR Code</Text>
-              <Text style={styles.heroSub}>
-                Scan the proctor QR code shown in the examination room.
-              </Text>
-            </View>
-            <View style={styles.maskMiddle}>
-              <View style={styles.maskSide} />
-              <View style={styles.viewfinder} />
-              <View style={styles.maskSide} />
-            </View>
-            <View style={styles.maskBottom} />
-          </View>
-        ) : (
-          <View style={styles.codeOverlay}>
-            <Text style={styles.heroTitle}>Enter Examination Code</Text>
+        <View style={styles.mask} pointerEvents="none">
+          <View style={styles.maskTop}>
+            <Text style={styles.heroTitle}>Scan QR Code</Text>
             <Text style={styles.heroSub}>
-              Type the room code from your proctor if the camera is unavailable.
+              Scan the proctor QR code shown in the examination room.
             </Text>
-            <View style={styles.codeCard}>
-              <Text style={styles.fieldLabel}>Examination Code</Text>
-              <Controller
-                control={control}
-                name="code"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextInput
-                    style={[styles.input, Boolean(errors.code) && styles.inputInvalid]}
-                    placeholder="K7M2P9QX"
-                    placeholderTextColor="rgba(255,255,255,0.45)"
-                    autoCapitalize="characters"
-                    autoCorrect={false}
-                    value={value}
-                    onChangeText={(text) => onChange(text.toUpperCase())}
-                    onBlur={onBlur}
-                    onSubmitEditing={onVerifyCode}
-                  />
-                )}
-              />
-              {errors.code?.message ? (
-                <Text style={styles.error}>{errors.code.message}</Text>
-              ) : null}
-              {error ? <Text style={styles.error}>{error}</Text> : null}
-              <Pressable
-                style={[styles.continueBtn, (isSubmitting || busy) && styles.btnDisabled]}
-                disabled={isSubmitting || busy}
-                onPress={onVerifyCode}
-              >
-                <Text style={styles.continueBtnText}>
-                  {isSubmitting ? 'Verifying…' : 'Continue'}
-                </Text>
-              </Pressable>
-            </View>
           </View>
-        )}
+          <View style={styles.maskMiddle}>
+            <View style={styles.maskSide} />
+            <View style={styles.viewfinder} />
+            <View style={styles.maskSide} />
+          </View>
+          <View style={styles.maskBottom} />
+        </View>
 
-        {/* Close */}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Close"
           onPress={close}
           style={[styles.closeBtn, { top: Math.max(insets.top, 12) + 4 }]}
         >
-          <X size={18} color="#FFFFFF" strokeWidth={2.5} />
+          <X size={18} color={examProcess.white} strokeWidth={2.5} />
         </Pressable>
 
-        {/* Permission / errors on scan mode */}
-        {mode === 'scan' && !permission ? (
+        {!permission ? (
           <View style={styles.centerNotice}>
             <Text style={styles.noticeText}>Checking camera permission…</Text>
           </View>
         ) : null}
-        {mode === 'scan' && permission && !permission.granted ? (
+        {permission && !permission.granted ? (
           <View style={styles.centerNotice}>
             <Text style={styles.noticeTitle}>Camera access required</Text>
             <Text style={styles.noticeText}>
@@ -338,13 +366,13 @@ export default function JoinExaminationScreen() {
             </Pressable>
           </View>
         ) : null}
-        {mode === 'scan' && error ? (
+        {error ? (
           <View style={[styles.scanErrorWrap, { bottom: 110 + Math.max(insets.bottom, 12) }]}>
             <Text style={styles.scanError}>{error}</Text>
           </View>
         ) : null}
 
-        {__DEV__ && mode === 'scan' ? (
+        {__DEV__ ? (
           <Pressable
             style={[styles.devBtn, { bottom: 110 + Math.max(insets.bottom, 12) }]}
             onPress={() => void simulateScan()}
@@ -353,7 +381,6 @@ export default function JoinExaminationScreen() {
           </Pressable>
         ) : null}
 
-        {/* Bottom pill toggle */}
         <View
           style={[
             styles.toggleWrap,
@@ -361,28 +388,17 @@ export default function JoinExaminationScreen() {
           ]}
         >
           <View style={styles.togglePill}>
-            <Pressable
-              style={[styles.toggleSeg, mode === 'scan' && styles.toggleSegOn]}
-              onPress={() => {
-                setMode('scan');
-                setError(null);
-                setScanning(true);
-              }}
-            >
-              <Text style={[styles.toggleText, mode === 'scan' && styles.toggleTextOn]}>
-                Scan code
-              </Text>
+            <Pressable style={[styles.toggleSeg, styles.toggleSegOn]}>
+              <Text style={[styles.toggleText, styles.toggleTextOn]}>Scan QR</Text>
             </Pressable>
             <Pressable
-              style={[styles.toggleSeg, mode === 'code' && styles.toggleSegOn]}
+              style={styles.toggleSeg}
               onPress={() => {
                 setMode('code');
                 setError(null);
               }}
             >
-              <Text style={[styles.toggleText, mode === 'code' && styles.toggleTextOn]}>
-                Enter code
-              </Text>
+              <Text style={styles.toggleText}>Enter code</Text>
             </Pressable>
           </View>
         </View>
@@ -391,11 +407,12 @@ export default function JoinExaminationScreen() {
   );
 }
 
-const DIM = 'rgba(0,0,0,0.58)';
+const DIM = 'rgba(44, 36, 28, 0.55)';
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#0B0B0B' },
-  fallbackBg: { backgroundColor: '#121212' },
+  root: { flex: 1, backgroundColor: '#1A1410' },
+  codeRoot: { flex: 1, backgroundColor: examProcess.pageBg },
+  fallbackBg: { backgroundColor: '#2C241C' },
   mask: {
     ...StyleSheet.absoluteFillObject,
   },
@@ -419,34 +436,28 @@ const styles = StyleSheet.create({
     width: FRAME,
     height: FRAME,
     borderRadius: 22,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.85)',
+    borderWidth: 2,
+    borderColor: examProcess.white,
     backgroundColor: 'transparent',
-    // Soft edge glow feel
-    shadowColor: '#FFFFFF',
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 0 },
   },
   maskBottom: {
     flex: 1.15,
     backgroundColor: DIM,
   },
   heroTitle: {
-    color: '#FFFFFF',
-    fontSize: 28,
-    fontWeight: '800',
+    color: examProcess.white,
+    fontSize: 24,
+    fontFamily: examProcess.fontSemiBold,
     textAlign: 'center',
-    letterSpacing: -0.3,
   },
   heroSub: {
     marginTop: 8,
-    color: 'rgba(255,255,255,0.82)',
+    color: 'rgba(255,255,255,0.88)',
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
     textAlign: 'center',
     maxWidth: 300,
-    fontWeight: '500',
+    fontFamily: examProcess.fontRegular,
   },
   closeBtn: {
     position: 'absolute',
@@ -454,7 +465,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    backgroundColor: 'rgba(0,0,0,0.4)',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 5,
@@ -474,7 +485,7 @@ const styles = StyleSheet.create({
     maxWidth: 340,
     borderRadius: 999,
     padding: 4,
-    backgroundColor: 'rgba(255,255,255,0.38)',
+    backgroundColor: 'rgba(255,253,248,0.88)',
   },
   toggleSeg: {
     flex: 1,
@@ -485,90 +496,109 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   toggleSegOn: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: examProcess.accent,
   },
   toggleText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: 'rgba(0,0,0,0.72)',
+    fontSize: 14,
+    fontFamily: examProcess.fontMedium,
+    color: examProcess.ink,
   },
   toggleTextOn: {
-    color: '#111111',
+    color: examProcess.white,
   },
-  codeOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.72)',
+  modeToggle: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+    backgroundColor: examProcess.cardElevated,
+    borderRadius: examProcess.radiusControl,
+    padding: 4,
+  },
+  modeSeg: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 24,
-    paddingBottom: 80,
   },
-  codeCard: {
-    marginTop: 22,
-    width: '100%',
-    maxWidth: 360,
-    borderRadius: 16,
-    padding: 16,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
-    gap: 8,
+  modeSegOn: {
+    backgroundColor: examProcess.accent,
+  },
+  modeText: {
+    fontSize: 13,
+    fontFamily: examProcess.fontMedium,
+    color: examProcess.ink,
+  },
+  modeTextOn: {
+    color: examProcess.white,
+  },
+  codeIntro: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: examProcess.muted,
+    marginBottom: 12,
+    fontFamily: examProcess.fontRegular,
   },
   fieldLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.9)',
+    fontSize: 14,
+    fontFamily: examProcess.fontMedium,
+    color: examProcess.ink,
+    marginBottom: 6,
   },
-  input: {
-    backgroundColor: 'rgba(255,255,255,0.12)',
+  codeInput: {
+    backgroundColor: examProcess.inputBg,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.28)',
-    borderRadius: 10,
-    paddingHorizontal: 12,
+    borderColor: examProcess.inputBorder,
+    borderRadius: examProcess.radiusControl,
+    paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
-    color: '#FFFFFF',
+    fontFamily: examProcess.fontRegular,
+    color: examProcess.ink,
     letterSpacing: 1,
   },
-  inputInvalid: { borderColor: '#FF6B6B' },
+  inputInvalid: { borderColor: examProcess.error },
   error: {
-    color: '#FF8A80',
-    fontSize: 12,
-    fontWeight: '600',
+    color: examProcess.error,
+    fontSize: 13,
+    fontFamily: examProcess.fontMedium,
+    marginTop: 6,
+    lineHeight: 18,
   },
   continueBtn: {
     marginTop: 6,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    backgroundColor: examProcess.accent,
+    borderRadius: examProcess.radiusControl,
     minHeight: 46,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 20,
   },
   continueBtnText: {
-    color: '#111111',
+    color: examProcess.white,
     fontSize: 15,
-    fontWeight: '800',
+    fontFamily: examProcess.fontSemiBold,
   },
-  btnDisabled: { opacity: 0.55 },
   centerNotice: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
     gap: 10,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: 'rgba(44, 36, 28, 0.55)',
   },
   noticeTitle: {
-    color: '#FFFFFF',
+    color: examProcess.white,
     fontSize: 18,
-    fontWeight: '800',
+    fontFamily: examProcess.fontSemiBold,
     textAlign: 'center',
   },
   noticeText: {
-    color: 'rgba(255,255,255,0.85)',
+    color: 'rgba(255,255,255,0.9)',
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
     textAlign: 'center',
+    fontFamily: examProcess.fontRegular,
   },
   scanErrorWrap: {
     position: 'absolute',
@@ -577,10 +607,10 @@ const styles = StyleSheet.create({
     zIndex: 4,
   },
   scanError: {
-    color: '#FFCDD2',
-    backgroundColor: 'rgba(120,20,20,0.75)',
+    color: examProcess.white,
+    backgroundColor: 'rgba(122, 31, 43, 0.9)',
     textAlign: 'center',
-    fontWeight: '700',
+    fontFamily: examProcess.fontMedium,
     fontSize: 13,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -590,13 +620,17 @@ const styles = StyleSheet.create({
   devBtn: {
     position: 'absolute',
     alignSelf: 'center',
-    left: '30%',
-    right: '30%',
-    zIndex: 4,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    left: 24,
+    right: 24,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.45)',
     alignItems: 'center',
+    zIndex: 4,
   },
-  devBtnText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+  devBtnText: {
+    color: examProcess.white,
+    fontSize: 12,
+    fontFamily: examProcess.fontMedium,
+  },
 });

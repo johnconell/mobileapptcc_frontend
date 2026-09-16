@@ -22,6 +22,7 @@ export {
   ExamProcessButton,
   ExamProcessOk,
 } from '@/features/examinations/components/ExamProcessChrome';
+export { ExamProcessStepper } from '@/features/examinations/components/ExamProcessStepper';
 export {
   ExamCategoryNav,
   buildCategoryProgress,

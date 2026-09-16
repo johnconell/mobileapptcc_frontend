@@ -88,7 +88,7 @@ export default function SessionsScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#F5F7FA' },
+  screen: { flex: 1, backgroundColor: '#0D0D0D' },
   list: { padding: 16, gap: 12, paddingBottom: 40 },
-  intro: { fontSize: 13, lineHeight: 20, color: '#64748B', fontWeight: '500', marginBottom: 4 },
+  intro: { fontSize: 13, lineHeight: 20, color: '#A1A1AA', fontWeight: '500', marginBottom: 4 },
 });

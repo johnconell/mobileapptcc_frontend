@@ -525,24 +525,23 @@ export const LobbyRepository = {
       console.warn('[LobbyRepository] Peer LAN discovery failed:', err);
     }
 
-    // Only Proctor role can resolve offline codes locally without LAN peer server
-    const isProctorUser = Boolean(await appStorage.getItem(STORAGE_KEYS.proctorToken));
-    if (isProctorUser) {
-      const offline = await OfflineExamRepository.resolveOfflineCode(code);
-      if (offline) {
-        const canonical = offline.examinationCode || code;
-        await setStoredCode(canonical);
-        await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, offline.schedule.id);
-        await appStorage.setItem(STORAGE_KEYS.offlineExamCode, canonical);
-        await OfflineStore.setOfflineMode(true);
-        return {
-          valid: true,
-          message: offline.message,
-          schedule: offline.schedule as ExamCodeValidation['schedule'],
-          session: offline.session as ExamCodeValidation['session'],
-          examinationCode: canonical,
-        };
+    // Check if the code matches an opened offline room or offline pack schedule on this device
+    const offline = await OfflineExamRepository.resolveOfflineCode(code);
+    if (offline && offline.valid) {
+      const canonical = offline.examinationCode || code;
+      await setStoredCode(canonical);
+      if (offline.schedule?.id) {
+        await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, String(offline.schedule.id));
       }
+      await appStorage.setItem(STORAGE_KEYS.offlineExamCode, canonical);
+      await OfflineStore.setOfflineMode(true);
+      return {
+        valid: true,
+        message: offline.message || 'Offline examination room verified.',
+        schedule: offline.schedule as ExamCodeValidation['schedule'],
+        session: offline.session as ExamCodeValidation['session'],
+        examinationCode: canonical,
+      };
     }
 
     try {

@@ -15,7 +15,8 @@ import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { colors } from '@/shared/theme';
-import { EXAM_PROCESS_STEPS, examProcess } from '@/shared/theme/examProcess';
+import { examProcess } from '@/shared/theme/examProcess';
+import { ExamProcessStepper } from '@/features/examinations/components/ExamProcessStepper';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { ExamPreloader } from '@/features/examinations/services/examPreloader';
 import {
@@ -429,14 +430,7 @@ export default function StudentLobbyScreen() {
   return (
     <View style={styles.screen}>
       <View style={styles.processHeader}>
-        <View style={styles.progress}>
-          {EXAM_PROCESS_STEPS.map((label, index) => (
-            <View
-              key={label}
-              style={[styles.progressSeg, index <= 3 && styles.progressSegOn]}
-            />
-          ))}
-        </View>
+        <ExamProcessStepper step={3} />
         <Text style={styles.stepLabel}>Step 4 of 6 · Lobby</Text>
       </View>
       <Header
@@ -671,40 +665,105 @@ const styles = StyleSheet.create({
   processHeader: {
     paddingHorizontal: examProcess.padPage,
     paddingTop: 8,
-    gap: 6,
+    gap: 4,
   },
-  progress: { flexDirection: 'row', gap: 6 },
-  progressSeg: {
-    flex: 1,
-    height: 4,
-    borderRadius: examProcess.radiusProgress,
-    backgroundColor: examProcess.progressTrack,
+  stepLabel: {
+    color: examProcess.muted,
+    fontSize: 13,
+    fontFamily: examProcess.fontRegular,
+    marginBottom: 4,
   },
-  progressSegOn: { backgroundColor: examProcess.accent },
-  stepLabel: { color: examProcess.muted, fontSize: 12, marginBottom: 4 },
   content: { padding: 16, paddingBottom: 40 },
-  mainCard: { padding: 16 },
+  mainCard: {
+    padding: 16,
+    backgroundColor: examProcess.cardBg,
+    borderColor: examProcess.cardBorder,
+  },
   studentSection: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
-  avatarCircle: { width: 44, height: 44, borderRadius: 22, backgroundColor: examProcess.accent, alignItems: 'center', justifyContent: 'center' },
-  welcomeText: { fontSize: 16, fontWeight: '700', color: examProcess.ink },
-  programText: { fontSize: 13, color: examProcess.muted, fontWeight: '500' },
-  readinessBanner: { flexDirection: 'row', alignItems: 'center', padding: 10, borderRadius: examProcess.radiusControl, marginVertical: 8 },
+  avatarCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: examProcess.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  welcomeText: {
+    fontSize: 16,
+    fontFamily: examProcess.fontSemiBold,
+    color: examProcess.ink,
+  },
+  programText: {
+    fontSize: 13,
+    color: examProcess.muted,
+    fontFamily: examProcess.fontRegular,
+  },
+  readinessBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: examProcess.radiusControl,
+    marginVertical: 8,
+  },
   readyBg: { backgroundColor: examProcess.okBg },
-  progressBg: { backgroundColor: '#EEF1FD' },
-  readinessText: { fontSize: 13, fontWeight: '700', marginLeft: 8, flex: 1 },
+  progressBg: { backgroundColor: examProcess.accentSoft },
+  readinessText: {
+    fontSize: 13,
+    fontFamily: examProcess.fontMedium,
+    marginLeft: 8,
+    flex: 1,
+  },
   readyText: { color: examProcess.okText },
   progressText: { color: examProcess.accent },
   pendingText: { color: '#B45309' },
-  readinessCard: { marginTop: 12, padding: 14 },
-  readinessCardTitle: { fontSize: 13, fontWeight: '800', color: examProcess.ink, marginBottom: 8 },
-  readinessRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 5 },
-  readinessRowLabel: { fontSize: 12, fontWeight: '600', color: examProcess.muted },
-  readinessRowValue: { fontSize: 12, fontWeight: '800', color: examProcess.ink },
-  infoCard: { marginTop: 12, padding: 0, overflow: 'hidden' },
+  readinessCard: {
+    marginTop: 12,
+    padding: 14,
+    backgroundColor: examProcess.cardBg,
+    borderColor: examProcess.cardBorder,
+  },
+  readinessCardTitle: {
+    fontSize: 13,
+    fontFamily: examProcess.fontSemiBold,
+    color: examProcess.ink,
+    marginBottom: 8,
+  },
+  readinessRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 5,
+  },
+  readinessRowLabel: {
+    fontSize: 12,
+    fontFamily: examProcess.fontRegular,
+    color: examProcess.muted,
+  },
+  readinessRowValue: {
+    fontSize: 12,
+    fontFamily: examProcess.fontMedium,
+    color: examProcess.ink,
+  },
+  infoCard: {
+    marginTop: 12,
+    padding: 0,
+    overflow: 'hidden',
+    backgroundColor: examProcess.cardBg,
+  },
   infoGrid: { flexDirection: 'row', justifyContent: 'space-between', padding: 16 },
   infoItem: { alignItems: 'center' },
-  infoLabel: { fontSize: 10, fontWeight: '800', color: examProcess.muted, textTransform: 'uppercase' },
-  infoValue: { fontSize: 14, fontWeight: '700', color: examProcess.ink, marginTop: 2 },
+  infoLabel: {
+    fontSize: 10,
+    fontFamily: examProcess.fontMedium,
+    color: examProcess.muted,
+    textTransform: 'uppercase',
+  },
+  infoValue: {
+    fontSize: 14,
+    fontFamily: examProcess.fontSemiBold,
+    color: examProcess.ink,
+    marginTop: 2,
+  },
   waitingCard: {
     marginTop: 12,
     padding: 12,
@@ -722,32 +781,75 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: examProcess.radiusControl,
-    backgroundColor: '#EEF1FD',
+    backgroundColor: examProcess.accentSoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
   waitingBannerTitle: {
-    fontSize: 13,
-    fontWeight: '800',
+    fontSize: 14,
+    fontFamily: examProcess.fontSemiBold,
     color: examProcess.ink,
   },
   waitingBannerSub: {
-    fontSize: 11,
+    fontSize: 12,
     color: examProcess.muted,
     marginTop: 2,
-    fontWeight: '500',
-    lineHeight: 15,
+    fontFamily: examProcess.fontRegular,
+    lineHeight: 17,
   },
-  startingBox: { flexDirection: 'row', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: examProcess.cardBorder },
-  startingText: { fontSize: 14, fontWeight: '700', color: examProcess.accent, marginLeft: 8 },
-  networkBox: { flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: examProcess.cardBg, borderRadius: examProcess.radiusCard, borderWidth: 1, borderColor: examProcess.cardBorder, marginTop: 8 },
+  startingBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: examProcess.cardBorder,
+  },
+  startingText: {
+    fontSize: 14,
+    fontFamily: examProcess.fontMedium,
+    color: examProcess.accent,
+    marginLeft: 8,
+  },
+  networkBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: examProcess.cardElevated,
+    borderRadius: examProcess.radiusCard,
+    borderWidth: 1,
+    borderColor: examProcess.cardBorder,
+    marginTop: 8,
+  },
   pulse: { width: 8, height: 8, borderRadius: 4, marginRight: 10 },
-  networkText: { fontSize: 10, fontWeight: '700', color: examProcess.muted, flex: 1 },
+  networkText: {
+    fontSize: 11,
+    fontFamily: examProcess.fontMedium,
+    color: examProcess.muted,
+    flex: 1,
+  },
   refreshBtn: { padding: 4 },
   exitBtn: { marginTop: 16 },
-  loadingInfo: { fontSize: 13, color: examProcess.muted, fontStyle: 'italic', textAlign: 'center' },
-  crashWrap: { flex: 1, backgroundColor: examProcess.pageBg, alignItems: 'center', justifyContent: 'center', padding: 40 },
-  crashTitle: { fontSize: 20, fontWeight: '800', color: examProcess.ink, marginBottom: 12 },
+  loadingInfo: {
+    fontSize: 13,
+    color: examProcess.muted,
+    fontFamily: examProcess.fontRegular,
+    fontStyle: 'italic',
+    textAlign: 'center',
+  },
+  crashWrap: {
+    flex: 1,
+    backgroundColor: examProcess.pageBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 40,
+  },
+  crashTitle: {
+    fontSize: 20,
+    fontFamily: examProcess.fontSemiBold,
+    color: examProcess.ink,
+    marginBottom: 12,
+  },
 
   // RULES & REGULATIONS STYLES
   rulesCard: {
@@ -771,19 +873,19 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: examProcess.radiusControl,
-    backgroundColor: '#EEF1FD',
+    backgroundColor: examProcess.accentSoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
   rulesTitle: {
     fontSize: 14,
-    fontWeight: '800',
+    fontFamily: examProcess.fontSemiBold,
     color: examProcess.ink,
   },
   rulesSubtitle: {
     fontSize: 11,
     color: examProcess.muted,
-    fontWeight: '500',
+    fontFamily: examProcess.fontRegular,
     marginTop: 1,
   },
   rulesList: {
@@ -796,7 +898,7 @@ const styles = StyleSheet.create({
   },
   ruleBullet: {
     fontSize: 14,
-    fontWeight: '900',
+    fontFamily: examProcess.fontSemiBold,
     color: examProcess.accent,
     lineHeight: 18,
   },
@@ -805,9 +907,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
     color: examProcess.muted,
+    fontFamily: examProcess.fontRegular,
   },
   ruleBold: {
-    fontWeight: '700',
+    fontFamily: examProcess.fontSemiBold,
     color: examProcess.ink,
   },
 });

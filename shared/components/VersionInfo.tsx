@@ -4,11 +4,14 @@ import * as Updates from 'expo-updates';
 import Constants from 'expo-constants';
 import { colors } from '@/shared/theme';
 
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
+
 /**
  * VersionInfo — Displays current build and EAS Update information.
  * Helps verify that the latest JavaScript bundle is actually running.
  */
 export function VersionInfo() {
+  const { colors: themeColors, isDark } = useAppTheme();
   const {
     updateId,
     channel,
@@ -24,44 +27,52 @@ export function VersionInfo() {
   const updateDate = createdAt ? new Date(createdAt).toLocaleString() : 'N/A';
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>System Information</Text>
+    <View
+      style={[
+        styles.container,
+        {
+          backgroundColor: themeColors.card,
+          borderColor: themeColors.cardBorder,
+        },
+      ]}
+    >
+      <Text style={[styles.title, { color: themeColors.textMuted }]}>System Information</Text>
 
       <View style={styles.row}>
-        <Text style={styles.label}>App Version</Text>
-        <Text style={styles.value}>{appVersion} ({buildNumber})</Text>
+        <Text style={[styles.label, { color: themeColors.textSecondary }]}>App Version</Text>
+        <Text style={[styles.value, { color: themeColors.textPrimary }]}>{appVersion} ({buildNumber})</Text>
       </View>
 
       <View style={styles.row}>
-        <Text style={styles.label}>Runtime</Text>
-        <Text style={styles.value}>{String(runtimeVersion)}</Text>
+        <Text style={[styles.label, { color: themeColors.textSecondary }]}>Runtime</Text>
+        <Text style={[styles.value, { color: themeColors.textPrimary }]}>{String(runtimeVersion)}</Text>
       </View>
 
       <View style={styles.row}>
-        <Text style={styles.label}>Channel</Text>
-        <Text style={styles.value}>{channel || 'development'}</Text>
+        <Text style={[styles.label, { color: themeColors.textSecondary }]}>Channel</Text>
+        <Text style={[styles.value, { color: themeColors.textPrimary }]}>{channel || 'development'}</Text>
       </View>
 
       {updateId ? (
         <>
           <View style={styles.row}>
-            <Text style={styles.label}>Update ID</Text>
-            <Text style={styles.value} numberOfLines={1} ellipsizeMode="middle">{updateId}</Text>
+            <Text style={[styles.label, { color: themeColors.textSecondary }]}>Update ID</Text>
+            <Text style={[styles.value, { color: themeColors.textPrimary }]} numberOfLines={1} ellipsizeMode="middle">{updateId}</Text>
           </View>
           <View style={styles.row}>
-            <Text style={styles.label}>Update Date</Text>
-            <Text style={styles.value}>{updateDate}</Text>
+            <Text style={[styles.label, { color: themeColors.textSecondary }]}>Update Date</Text>
+            <Text style={[styles.value, { color: themeColors.textPrimary }]}>{updateDate}</Text>
           </View>
           <View style={styles.row}>
-            <Text style={styles.label}>Update Group</Text>
-            <Text style={styles.value} numberOfLines={1} ellipsizeMode="middle">{(Updates as any).updateGroup || 'N/A'}</Text>
+            <Text style={[styles.label, { color: themeColors.textSecondary }]}>Update Group</Text>
+            <Text style={[styles.value, { color: themeColors.textPrimary }]} numberOfLines={1} ellipsizeMode="middle">{(Updates as any).updateGroup || 'N/A'}</Text>
           </View>
         </>
       ) : null}
 
-      <View style={styles.statusRow}>
+      <View style={[styles.statusRow, { borderTopColor: themeColors.cardBorder }]}>
         <View style={[styles.dot, { backgroundColor: isEmbeddedLaunch ? colors.warning : colors.success }]} />
-        <Text style={styles.statusText}>
+        <Text style={[styles.statusText, { color: themeColors.textSecondary }]}>
           {isEmbeddedLaunch ? 'RUNNING EMBEDDED BUNDLE' : 'EAS UPDATE ACTIVE'}
         </Text>
       </View>

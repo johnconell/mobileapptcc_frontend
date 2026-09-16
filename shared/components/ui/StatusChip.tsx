@@ -20,7 +20,7 @@ const statusToneMap: Record<string, ChipTone> = {
   warning: 'danger',
   terminated: 'danger',
   scheduled: 'default',
-  lobby_open: 'warning',
+  lobby_open: 'danger',
   in_progress: 'primary',
   ended: 'success',
 };
@@ -58,19 +58,19 @@ const styles = StyleSheet.create({
 });
 
 const toneStyles = StyleSheet.create({
-  default: { backgroundColor: colors.surfaceMuted },
-  success: { backgroundColor: '#DCFCE7' },
-  warning: { backgroundColor: '#FEF3C7' },
-  danger: { backgroundColor: '#FEE2E2' },
-  info: { backgroundColor: '#DBEAFE' },
-  primary: { backgroundColor: '#F0D9DC' },
+  default: { backgroundColor: '#1A1A1A' },
+  success: { backgroundColor: '#142918' },
+  warning: { backgroundColor: '#291E0A' },
+  danger: { backgroundColor: '#2A1414' },
+  info: { backgroundColor: '#162238' },
+  primary: { backgroundColor: '#2A1414' },
 });
 
 const textColors: Record<ChipTone, string> = {
-  default: colors.inkSecondary,
-  success: colors.success,
-  warning: colors.warning,
-  danger: colors.danger,
-  info: colors.info,
-  primary: colors.primary,
+  default: '#A1A1AA',
+  success: '#22C55E',
+  warning: '#F59E0B',
+  danger: '#7A1F2B',
+  info: '#38BDF8',
+  primary: '#7A1F2B',
 };

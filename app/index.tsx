@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { QrCode, Shield } from 'lucide-react-native';
 import { APP_NAME, SCHOOL_NAME } from '@/shared/constants';
-import { colors, shadows } from '@/shared/theme';
+import { colors, shadows, typography } from '@/shared/theme';
 import { Card } from '@/shared/components/ui/Card';
 import { FloatingButton } from '@/shared/components/ui/FloatingButton';
 import { SchoolLogo } from '@/shared/components/SchoolLogo';
@@ -16,11 +16,13 @@ import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { useSettingsStore } from '@/features/settings/stores/settingsStore';
 import { VersionInfo } from '@/shared/components/VersionInfo';
 import { clearApplicantExamMaterial } from '@/features/applicants/services/applicantExamCleanup';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 /** Tracks whether the application process was just cold launched from OS */
 let isAppColdBoot = true;
 
 export default function HomeScreen() {
+  const { colors: themeColors, isDark } = useAppTheme();
   const router = useRouter();
   const params = useLocalSearchParams<{ stay?: string; from?: string }>();
   const insets = useSafeAreaInsets();
@@ -114,14 +116,14 @@ export default function HomeScreen() {
   }
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top + 8 }]}>
+    <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top + 8 }]}>
       <View style={styles.topBar}>
         <View style={{ flex: 1 }} />
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Proctor portal"
           onPress={() => router.push('/(proctor)/login')}
-          style={styles.proctorBtn}
+          style={[styles.proctorBtn, { backgroundColor: themeColors.card, borderColor: colors.primary }]}
         >
           <Shield size={14} color={colors.primary} />
           <Text style={styles.proctorText}>Proctor</Text>
@@ -195,7 +197,7 @@ export default function HomeScreen() {
               Alert.alert('Update error', String(err));
             }
           }}
-          style={[styles.proctorBtn, styles.updateBtn]}
+          style={[styles.proctorBtn, styles.updateBtn, { backgroundColor: themeColors.card, borderColor: colors.primary }]}
         >
           <Text style={[styles.proctorText, { color: colors.primary }]}>Update</Text>
         </Pressable>
@@ -205,14 +207,14 @@ export default function HomeScreen() {
         <Animated.View entering={FadeIn.duration(400)} style={styles.hero}>
           <SchoolLogo size="lg" />
           <Text style={styles.school}>{SCHOOL_NAME}</Text>
-          <Text style={styles.appName}>{APP_NAME}</Text>
-          <Text style={styles.tagline}>Secure Offline Examination</Text>
+          <Text style={[styles.appName, { color: themeColors.textPrimary }]}>{APP_NAME}</Text>
+          <Text style={[styles.tagline, { color: themeColors.textSecondary }]}>Secure Offline Examination</Text>
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(100).springify()}>
-          <Card>
-            <Text style={styles.cardTitle}>How to take the exam</Text>
-            <Text style={styles.cardBody}>
+          <Card style={{ backgroundColor: themeColors.card, borderColor: themeColors.cardBorder }}>
+            <Text style={[styles.cardTitle, { color: themeColors.textPrimary }]}>How to take the exam</Text>
+            <Text style={[styles.cardBody, { color: themeColors.textSecondary }]}>
               Connect to the examination Wi-Fi, then join with the proctor QR code or
               room code on one screen. Questions are sent from the proctor during the
               exam and removed from this phone after you submit.
@@ -257,7 +259,11 @@ const styles = StyleSheet.create({
     ...shadows.soft,
   },
   updateBtn: { marginLeft: 8, paddingHorizontal: 12 },
-  proctorText: { fontSize: 12, fontWeight: '700', color: colors.primary },
+  proctorText: {
+    fontSize: 13,
+    fontFamily: typography.label.fontFamily,
+    color: colors.primary,
+  },
   content: { flex: 1, paddingHorizontal: 20, gap: 20, justifyContent: 'center' },
   prepareSkeleton: {
     flex: 1,
@@ -267,8 +273,8 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
   },
   prepareNote: {
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 14,
+    fontFamily: typography.body.fontFamily,
     color: colors.inkMuted,
     textAlign: 'center',
   },
@@ -276,23 +282,36 @@ const styles = StyleSheet.create({
   school: {
     marginTop: 4,
     fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 1.4,
+    fontFamily: typography.label.fontFamily,
+    letterSpacing: 1.2,
     textTransform: 'uppercase',
     color: colors.primary,
     textAlign: 'center',
   },
   appName: {
-    fontSize: 24,
-    fontWeight: '700',
+    ...typography.hero,
     color: colors.ink,
     textAlign: 'center',
   },
-  tagline: { fontSize: 14, color: colors.inkMuted, fontWeight: '500' },
+  tagline: {
+    fontSize: 15,
+    color: colors.inkMuted,
+    fontFamily: typography.body.fontFamily,
+  },
   packCard: { borderColor: colors.border },
   packCardReady: { borderColor: colors.success, borderWidth: 1.5 },
-  cardTitle: { fontSize: 16, fontWeight: '700', color: colors.ink, marginBottom: 8 },
-  cardBody: { fontSize: 14, lineHeight: 21, color: colors.inkSecondary },
+  cardTitle: {
+    fontSize: 16,
+    fontFamily: typography.subtitle.fontFamily,
+    color: colors.ink,
+    marginBottom: 8,
+  },
+  cardBody: {
+    fontSize: 14,
+    lineHeight: 22,
+    color: colors.inkSecondary,
+    fontFamily: typography.body.fontFamily,
+  },
   progressBlock: { gap: 6, marginVertical: 8 },
   progressTrack: {
     height: 8,
@@ -305,7 +324,11 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: colors.primary,
   },
-  progressLabel: { fontSize: 12, fontWeight: '700', color: colors.inkSecondary },
+  progressLabel: {
+    fontSize: 13,
+    fontFamily: typography.label.fontFamily,
+    color: colors.inkSecondary,
+  },
   fabWrap: {
     alignItems: 'center',
     justifyContent: 'center',

@@ -291,10 +291,10 @@ export default function RoomsScreen() {
                   <View
                     style={[
                       styles.iconWrap,
-                      { backgroundColor: isOpen ? '#E6F4EA' : '#F1F5F9' },
+                      { backgroundColor: isOpen ? '#142918' : '#1F1F1F' },
                     ]}
                   >
-                    <DoorOpen size={24} color={isOpen ? '#28A745' : '#64748B'} />
+                    <DoorOpen size={24} color={isOpen ? '#22C55E' : '#71717A'} />
                   </View>
 
                   <View style={styles.meta}>
@@ -303,14 +303,14 @@ export default function RoomsScreen() {
                     </Text>
 
                     <View style={styles.infoRow}>
-                      <Users size={14} color="#64748B" />
+                      <Users size={14} color="#71717A" />
                       <Text style={styles.capacity} numberOfLines={1} maxFontSizeMultiplier={1.15}>
                         Capacity: {item.capacity} Applicants
                       </Text>
                     </View>
 
                     <View style={styles.infoRow}>
-                      <Layers size={14} color="#0055A4" />
+                      <Layers size={14} color="#7A1F2B" />
                       <Text style={styles.applicants} numberOfLines={1} maxFontSizeMultiplier={1.15}>
                         Current Applicants: {item.connectedCount ?? 0}
                       </Text>
@@ -348,7 +348,7 @@ export default function RoomsScreen() {
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <View style={styles.modalIconWrap}>
-                <DoorOpen size={24} color="#003366" />
+                <DoorOpen size={24} color="#7A1F2B" />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.modalTitle} maxFontSizeMultiplier={1.2}>
@@ -426,7 +426,7 @@ export default function RoomsScreen() {
                 style={{
                   ...styles.openButton,
                   backgroundColor:
-                    selectedRoom?.status === 'ended' ? '#003366' : '#28A745',
+                    selectedRoom?.status === 'ended' ? '#262626' : '#7A1F2B',
                 }}
               />
             </View>
@@ -438,16 +438,16 @@ export default function RoomsScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#F5F7FA' },
+  screen: { flex: 1, backgroundColor: '#0D0D0D' },
   list: { padding: 16, gap: 12, paddingBottom: 40 },
   headerBlock: { marginBottom: 4 },
-  intro: { fontSize: 13, lineHeight: 20, color: '#64748B', fontWeight: '500' },
+  intro: { fontSize: 13, lineHeight: 20, color: '#A1A1AA', fontWeight: '500' },
   roomCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#141414',
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#262626',
     ...shadows.card,
   },
   row: { flexDirection: 'row', alignItems: 'center', gap: 14 },
@@ -459,16 +459,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   meta: { flex: 1, gap: 4 },
-  roomName: { fontSize: 17, fontWeight: '800', color: '#003366' },
+  roomName: { fontSize: 17, fontWeight: '800', color: '#FFFFFF' },
   infoRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  capacity: { fontSize: 13, fontWeight: '600', color: '#64748B' },
-  applicants: { fontSize: 13, fontWeight: '700', color: '#0055A4' },
+  capacity: { fontSize: 13, fontWeight: '600', color: '#A1A1AA' },
+  applicants: { fontSize: 13, fontWeight: '700', color: '#7A1F2B' },
   badgeRow: { flexDirection: 'row', marginTop: 4 },
 
   // MODAL STYLING
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
@@ -476,11 +476,11 @@ const styles = StyleSheet.create({
   modalCard: {
     width: '100%',
     maxWidth: 440,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#141414',
     borderRadius: 20,
     padding: 22,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#262626',
     gap: 16,
     ...shadows.card,
   },
@@ -493,27 +493,27 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 12,
-    backgroundColor: '#EBF3FE',
+    backgroundColor: '#2A1414',
     alignItems: 'center',
     justifyContent: 'center',
   },
   modalTitle: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#003366',
+    color: '#FFFFFF',
   },
   modalSubtitle: {
     fontSize: 12,
-    color: '#64748B',
+    color: '#A1A1AA',
     fontWeight: '500',
     marginTop: 1,
   },
   detailTable: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#1A1A1A',
     borderRadius: 14,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#262626',
     gap: 10,
   },
   detailRow: {
@@ -523,22 +523,22 @@ const styles = StyleSheet.create({
   },
   detailLabel: {
     fontSize: 13,
-    color: '#64748B',
+    color: '#A1A1AA',
     fontWeight: '600',
   },
   detailValue: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#1E293B',
+    color: '#FFFFFF',
   },
   detailValueBold: {
     fontSize: 15,
     fontWeight: '800',
-    color: '#003366',
+    color: '#FFFFFF',
   },
   modalNotice: {
     fontSize: 12,
-    color: '#64748B',
+    color: '#A1A1AA',
     lineHeight: 18,
   },
   modalActions: {

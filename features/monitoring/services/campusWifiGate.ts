@@ -106,7 +106,7 @@ export async function assertCampusWifiForJoin(options?: {
   // Student Peer mode: "matching the proctor" means reaching the proctor's phone on the same Wi-Fi LAN.
   const peerTarget =
     (options?.scannedPayload ? parsePeerQr(options.scannedPayload) : null) ??
-    (await PeerExamClient.getTarget());
+    (options?.examinationCode ? null : (await PeerExamClient.getTarget()));
 
   if (peerTarget) {
     // 1. Strict SSID validation: If both SSIDs are known, require exact match

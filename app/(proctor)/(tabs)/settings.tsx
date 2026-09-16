@@ -9,6 +9,7 @@ import {
   Modal,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   User,
   Shield,
@@ -22,20 +23,18 @@ import {
   Check,
   X,
   History,
+  LogOut,
 } from 'lucide-react-native';
-import { Header, Button } from '@/shared/components/ui';
+import { Button } from '@/shared/components/ui';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { VersionInfo } from '@/shared/components/VersionInfo';
 import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
-import {
-  seedSampleResults,
-  clearSampleResults,
-} from '@/features/synchronization/services/resultsSeeder';
 import type { ThemeMode, AppFontSize } from '@/features/settings/stores/settingsStore';
 
 export default function ProctorSettingsScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const profile = useProctorStore((s) => s.profile);
   const { colors, isDark, themeMode, fontSize, setThemeMode, setFontSize, fontMultiplier } =
     useAppTheme();
@@ -47,14 +46,43 @@ export default function ProctorSettingsScreen() {
   };
 
   return (
-    <View style={[styles.screen, { backgroundColor: colors.background }]}>
-      <Header
-        title="Settings & Profile"
-        subtitle="Proctor Configuration & Security"
-        hideBackSlot
-      />
+    <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: insets.top }]}>
+      {/* 1. UNIFORM HEADER NAV BAR (Avatar on Left, Logout on Right) */}
+      <View style={[styles.navBar, { backgroundColor: colors.background }]}>
+        {/* Proctor Avatar Circle */}
+        <View style={[styles.navAvatarCircle, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+          <Text style={[styles.navAvatarText, { color: colors.textPrimary }]}>
+            {profile?.displayName
+              ? profile.displayName
+                  .split(' ')
+                  .map((n) => n[0])
+                  .join('')
+                  .slice(0, 2)
+                  .toUpperCase()
+              : 'P1'}
+          </Text>
+        </View>
+
+        {/* Right Icon Actions: Logout */}
+        <View style={styles.navRightRow}>
+          <Pressable
+            accessibilityRole="button"
+            style={[styles.navIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+            onPress={doLogout}
+            accessibilityLabel="Logout"
+            hitSlop={8}
+          >
+            <LogOut size={18} color="#7A1F2B" />
+          </Pressable>
+        </View>
+      </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {/* Screen Title Block */}
+        <View style={styles.screenTitleRow}>
+          <Text style={[styles.screenHeading, { color: colors.textPrimary }]}>Settings & Profile</Text>
+          <Text style={[styles.screenSubheading, { color: colors.textSecondary }]}>Proctor Configuration & Security</Text>
+        </View>
         {/* PROFILE CARD */}
         <View
           style={[
@@ -177,86 +205,13 @@ export default function ProctorSettingsScreen() {
           </Pressable>
         </View>
 
-        {/* DEVELOPER & TESTING TOOLS */}
-        <Text
-          style={[styles.groupHeading, { color: colors.textPrimary }]}
-          maxFontSizeMultiplier={fontMultiplier}
-        >
-          Developer & Testing Tools
-        </Text>
-
-        <View
-          style={[
-            styles.menuCard,
-            { backgroundColor: colors.card, borderColor: colors.cardBorder },
-          ]}
-        >
-          <Pressable
-            style={styles.menuItem}
-            onPress={() => {
-              Alert.alert(
-                'Examination Results Seeder',
-                'Seed realistic mock examination transactions and examinee scores (including passed, failed, and unsynced red-dot records) to test the UI.',
-                [
-                  {
-                    text: 'Seed Sample Results',
-                    onPress: async () => {
-                      try {
-                        const rep = await seedSampleResults();
-                        Alert.alert(
-                          'Results Seeded',
-                          `${rep.message}\n\nGo to the Results tab to inspect the seeded examination lobbies and verify the red dot notification badge!`,
-                        );
-                      } catch (err) {
-                        Alert.alert('Error', err instanceof Error ? err.message : 'Failed to seed sample results.');
-                      }
-                    },
-                  },
-                  {
-                    text: 'Clear Test Results',
-                    style: 'destructive',
-                    onPress: async () => {
-                      try {
-                        await clearSampleResults();
-                        Alert.alert('Cleared', 'All seeded sample results have been removed.');
-                      } catch (err) {
-                        Alert.alert('Error', 'Failed to clear sample results.');
-                      }
-                    },
-                  },
-                  { text: 'Cancel', style: 'cancel' },
-                ],
-              );
-            }}
-          >
-            <View style={[styles.menuIcon, { backgroundColor: colors.accentMuted }]}>
-              <Sparkles size={18} color={colors.accent} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text
-                style={[styles.menuTitle, { color: colors.textPrimary }]}
-                maxFontSizeMultiplier={fontMultiplier}
-              >
-                Results & Lobbies Seeder
-              </Text>
-              <Text
-                style={[styles.menuSub, { color: colors.textSecondary }]}
-                maxFontSizeMultiplier={fontMultiplier}
-              >
-                Load or reset mock results to test UI, filters & red dots
-              </Text>
-            </View>
-            <ChevronRight size={18} color={colors.textMuted} />
-          </Pressable>
-        </View>
-
         {/* LOGOUT BUTTON */}
         <Button
           title="Sign Out"
           variant="outline"
           size="lg"
           fullWidth
-          style={{ borderColor: colors.danger, marginTop: 10 }}
+          style={{ borderColor: '#7A1F2B', marginTop: 10 }}
           onPress={doLogout}
         />
 
@@ -518,7 +473,52 @@ export default function ProctorSettingsScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  content: { padding: 16, gap: 16, paddingBottom: 40 },
+  navBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+  },
+  navAvatarCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navAvatarText: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  navRightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  navIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  screenTitleRow: {
+    marginBottom: 2,
+  },
+  screenHeading: {
+    fontSize: 26,
+    fontWeight: '900',
+    letterSpacing: -0.5,
+  },
+  screenSubheading: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 3,
+  },
+  content: { padding: 16, gap: 16, paddingBottom: 100 },
 
   profileCard: {
     borderRadius: 16,

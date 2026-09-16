@@ -62,7 +62,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           keepAwakeDuringExam: parsed.keepAwakeDuringExam ?? true,
           reducedMotion: parsed.reducedMotion ?? false,
           allowUpdatesOnCellular: parsed.allowUpdatesOnCellular ?? false,
-          themeMode: parsed.themeMode ?? 'light',
+          themeMode: parsed.themeMode ?? 'dark',
           fontSize: parsed.fontSize ?? 'standard',
           hydrated: true,
         });
