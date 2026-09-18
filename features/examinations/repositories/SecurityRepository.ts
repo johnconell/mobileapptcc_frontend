@@ -1,11 +1,11 @@
 import { delay } from '@/shared/utils';
-import { MAX_EXAM_VIOLATIONS } from '@/shared/constants';
 import type {
   ExamTerminationReason,
   SecurityViolation,
   SecurityViolationType,
 } from '@/shared/types';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { resolveViolationLimit } from '@/shared/utils/violationLimit';
 
 let violations: SecurityViolation[] = [];
 
@@ -17,8 +17,8 @@ function createId() {
  * SecurityRepository — local violation log + Laravel POST /exam/violation.
  */
 export const SecurityRepository = {
-  getMaxViolations(): number {
-    return MAX_EXAM_VIOLATIONS;
+  async getMaxViolations(): Promise<number> {
+    return resolveViolationLimit();
   },
 
   async recordViolation(input: {
@@ -53,9 +53,10 @@ export const SecurityRepository = {
       input.message,
     );
 
+    const maxViolations = await resolveViolationLimit();
     const localCount = violations.filter((v) => v.studentId === input.studentId).length;
     const violationCount = Math.max(result.violationCount || 0, localCount);
-    const terminated = result.terminated || violationCount >= MAX_EXAM_VIOLATIONS;
+    const terminated = result.terminated || violationCount >= maxViolations;
 
     return {
       violation,

@@ -2,7 +2,7 @@ export const APP_NAME = 'Mobile Entrance Examination';
 export const SCHOOL_NAME = 'Tagoloan Community College';
 export const SCHOOL_SHORT = 'TCC';
 
-export const EXAM_DURATION_MINUTES = 90;
+export const EXAM_DURATION_MINUTES = 60;
 export const TOTAL_QUESTIONS = 80;
 export const MAX_EXAM_VIOLATIONS = 3;
 

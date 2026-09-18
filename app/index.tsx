@@ -1,8 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Pressable, Text, View, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import {
+  Pressable,
+  Text,
+  View,
+  StyleSheet,
+  Alert,
+  ActivityIndicator,
+  ScrollView,
+} from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { QrCode, Shield } from 'lucide-react-native';
 import { APP_NAME, SCHOOL_NAME } from '@/shared/constants';
 import { colors, shadows, typography } from '@/shared/theme';
@@ -22,7 +29,7 @@ import { useAppTheme } from '@/shared/hooks/useAppTheme';
 let isAppColdBoot = true;
 
 export default function HomeScreen() {
-  const { colors: themeColors, isDark } = useAppTheme();
+  const { colors: themeColors } = useAppTheme();
   const router = useRouter();
   const params = useLocalSearchParams<{ stay?: string; from?: string }>();
   const insets = useSafeAreaInsets();
@@ -107,127 +114,150 @@ export default function HomeScreen() {
     router.push('/(student)/scan');
   };
 
+  const checkForUpdates = async () => {
+    try {
+      const allowOnCellular = useSettingsStore.getState().allowUpdatesOnCellular;
+      const setAllow = useSettingsStore.getState().setAllowUpdatesOnCellular;
+
+      const doFetch = async () => {
+        Alert.alert('Update', 'Checking for updates…');
+        const update = await Updates.checkForUpdateAsync();
+        if (!update.isAvailable) {
+          Alert.alert('Update', 'No new update available');
+          return;
+        }
+        Alert.alert('Update', 'Update available — downloading now');
+        await Updates.fetchUpdateAsync();
+        Alert.alert('Update', 'Update downloaded — reloading to apply', [
+          { text: 'Reload now', onPress: () => void Updates.reloadAsync() },
+        ]);
+      };
+
+      Alert.alert('Update', 'Checking network…');
+      const net = await Network.getNetworkStateAsync();
+      if (!net.isConnected || !net.isInternetReachable) {
+        Alert.alert('No network', 'You must be online to check for updates.');
+        return;
+      }
+
+      const type = (net.type || '').toLowerCase();
+      if (type === 'wifi') {
+        await doFetch();
+        return;
+      }
+
+      if (type === 'cellular') {
+        if (allowOnCellular) {
+          await doFetch();
+          return;
+        }
+
+        Alert.alert(
+          'Mobile data',
+          'You are on mobile data. Downloading updates may use cellular data. Proceed?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Proceed once', onPress: async () => void (await doFetch()) },
+            {
+              text: 'Always allow',
+              onPress: async () => {
+                setAllow(true);
+                await doFetch();
+              },
+            },
+          ],
+        );
+        return;
+      }
+
+      Alert.alert(
+        'Update',
+        'Connected via an unknown network. Proceed with update?',
+        [{ text: 'Cancel' }, { text: 'Proceed', onPress: async () => void (await doFetch()) }],
+      );
+    } catch (err) {
+      Alert.alert('Update error', String(err));
+    }
+  };
+
   if (checkingAuth) {
     return (
-      <View style={[styles.screen, { alignItems: 'center', justifyContent: 'center' }]}>
+      <View
+        style={[
+          styles.screen,
+          { backgroundColor: themeColors.background, alignItems: 'center', justifyContent: 'center' },
+        ]}
+      >
         <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
   return (
-    <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top + 8 }]}>
-      <View style={styles.topBar}>
-        <View style={{ flex: 1 }} />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Proctor portal"
-          onPress={() => router.push('/(proctor)/login')}
-          style={[styles.proctorBtn, { backgroundColor: themeColors.card, borderColor: colors.primary }]}
-        >
-          <Shield size={14} color={colors.primary} />
-          <Text style={styles.proctorText}>Proctor</Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Check for updates"
-          onPress={async () => {
-            try {
-              const allowOnCellular = useSettingsStore.getState().allowUpdatesOnCellular;
-              const setAllow = useSettingsStore.getState().setAllowUpdatesOnCellular;
-
-              const doFetch = async () => {
-                Alert.alert('Update', 'Checking for updates…');
-                const update = await Updates.checkForUpdateAsync();
-                if (!update.isAvailable) {
-                  Alert.alert('Update', 'No new update available');
-                  return;
-                }
-                Alert.alert('Update', 'Update available — downloading now');
-                await Updates.fetchUpdateAsync();
-                Alert.alert('Update', 'Update downloaded — reloading to apply', [
-                  { text: 'Reload now', onPress: () => void Updates.reloadAsync() },
-                ]);
-              };
-
-              Alert.alert('Update', 'Checking network…');
-              const net = await Network.getNetworkStateAsync();
-              if (!net.isConnected || !net.isInternetReachable) {
-                Alert.alert('No network', 'You must be online to check for updates.');
-                return;
-              }
-
-              const type = (net.type || '').toLowerCase();
-              if (type === 'wifi') {
-                await doFetch();
-                return;
-              }
-
-              if (type === 'cellular') {
-                if (allowOnCellular) {
-                  await doFetch();
-                  return;
-                }
-
-                Alert.alert(
-                  'Mobile data',
-                  'You are on mobile data. Downloading updates may use cellular data. Proceed?',
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Proceed once', onPress: async () => void (await doFetch()) },
-                    {
-                      text: 'Always allow',
-                      onPress: async () => {
-                        setAllow(true);
-                        await doFetch();
-                      },
-                    },
-                  ],
-                );
-                return;
-              }
-
-              // Unknown connection type — default to prompting
-              Alert.alert(
-                'Update',
-                'Connected via an unknown network. Proceed with update?',
-                [{ text: 'Cancel' }, { text: 'Proceed', onPress: async () => void (await doFetch()) }],
-              );
-            } catch (err) {
-              Alert.alert('Update error', String(err));
-            }
-          }}
-          style={[styles.proctorBtn, styles.updateBtn, { backgroundColor: themeColors.card, borderColor: colors.primary }]}
-        >
-          <Text style={[styles.proctorText, { color: colors.primary }]}>Update</Text>
-        </Pressable>
-      </View>
-
-      <View style={styles.content}>
-        <Animated.View entering={FadeIn.duration(400)} style={styles.hero}>
-          <SchoolLogo size="lg" />
-          <Text style={styles.school}>{SCHOOL_NAME}</Text>
-          <Text style={[styles.appName, { color: themeColors.textPrimary }]}>{APP_NAME}</Text>
-          <Text style={[styles.tagline, { color: themeColors.textSecondary }]}>Secure Offline Examination</Text>
-        </Animated.View>
-
-        <Animated.View entering={FadeInDown.delay(100).springify()}>
-          <Card style={{ backgroundColor: themeColors.card, borderColor: themeColors.cardBorder }}>
-            <Text style={[styles.cardTitle, { color: themeColors.textPrimary }]}>How to take the exam</Text>
-            <Text style={[styles.cardBody, { color: themeColors.textSecondary }]}>
-              Connect to the examination Wi-Fi, then join with the proctor QR code or
-              room code on one screen. Questions are sent from the proctor during the
-              exam and removed from this phone after you submit.
-            </Text>
-          </Card>
-        </Animated.View>
-
-        <View style={{ marginTop: 8 }}>
-          <VersionInfo />
+    <View style={[styles.screen, { backgroundColor: themeColors.background }]}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 12) + 4 }]}>
+        <View style={styles.topBar}>
+          <View style={styles.topBarSpacer} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Proctor portal"
+            onPress={() => router.push('/(proctor)/login')}
+            style={[styles.headerBtn, { backgroundColor: themeColors.card, borderColor: colors.primary }]}
+          >
+            <Shield size={14} color={colors.primary} />
+            <Text style={styles.headerBtnText}>Proctor</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Check for updates"
+            onPress={() => void checkForUpdates()}
+            style={[
+              styles.headerBtn,
+              styles.updateBtn,
+              { backgroundColor: themeColors.card, borderColor: colors.primary },
+            ]}
+          >
+            <Text style={styles.headerBtnText}>Update</Text>
+          </Pressable>
         </View>
       </View>
 
-      <View style={[styles.fabWrap, { paddingBottom: Math.max(insets.bottom, 20) }]}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        bounces={false}
+      >
+        <View style={styles.hero}>
+          <SchoolLogo size="lg" />
+          <Text style={styles.school}>{SCHOOL_NAME}</Text>
+          <Text style={[styles.appName, { color: themeColors.textPrimary }]}>{APP_NAME}</Text>
+          <Text style={[styles.tagline, { color: themeColors.textSecondary }]}>
+            Secure Offline Examination
+          </Text>
+        </View>
+
+        <Card style={{ backgroundColor: themeColors.card, borderColor: themeColors.cardBorder }}>
+          <Text style={[styles.cardTitle, { color: themeColors.textPrimary }]}>How to take the exam</Text>
+          <Text style={[styles.cardBody, { color: themeColors.textSecondary }]}>
+            Connect to the examination Wi-Fi, then join with the proctor QR code or room code on one
+            screen. Questions are sent from the proctor during the exam and removed from this phone
+            after you submit.
+          </Text>
+        </Card>
+
+        <VersionInfo />
+      </ScrollView>
+
+      <View
+        style={[
+          styles.fabWrap,
+          {
+            paddingBottom: Math.max(insets.bottom, 16),
+            backgroundColor: themeColors.background,
+          },
+        ]}
+      >
         <FloatingButton
           label="Take Examination"
           icon={<QrCode size={20} color={colors.white} />}
@@ -240,13 +270,25 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.background },
+  screen: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  header: {
+    zIndex: 2,
+    backgroundColor: 'transparent',
+  },
   topBar: {
     paddingHorizontal: 16,
+    paddingBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
   },
-  proctorBtn: {
+  topBarSpacer: {
+    flex: 1,
+  },
+  headerBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -258,27 +300,29 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     ...shadows.soft,
   },
-  updateBtn: { marginLeft: 8, paddingHorizontal: 12 },
-  proctorText: {
+  updateBtn: {
+    paddingHorizontal: 14,
+  },
+  headerBtnText: {
     fontSize: 13,
     fontFamily: typography.label.fontFamily,
     color: colors.primary,
   },
-  content: { flex: 1, paddingHorizontal: 20, gap: 20, justifyContent: 'center' },
-  prepareSkeleton: {
+  scroll: {
     flex: 1,
+  },
+  scrollContent: {
     paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 16,
     gap: 16,
-    justifyContent: 'center',
-    alignItems: 'stretch',
   },
-  prepareNote: {
-    fontSize: 14,
-    fontFamily: typography.body.fontFamily,
-    color: colors.inkMuted,
-    textAlign: 'center',
+  hero: {
+    alignItems: 'center',
+    gap: 8,
+    paddingTop: 4,
+    paddingBottom: 4,
   },
-  hero: { alignItems: 'center', gap: 8, paddingBottom: 8 },
   school: {
     marginTop: 4,
     fontSize: 13,
@@ -298,8 +342,6 @@ const styles = StyleSheet.create({
     color: colors.inkMuted,
     fontFamily: typography.body.fontFamily,
   },
-  packCard: { borderColor: colors.border },
-  packCardReady: { borderColor: colors.success, borderWidth: 1.5 },
   cardTitle: {
     fontSize: 16,
     fontFamily: typography.subtitle.fontFamily,
@@ -312,35 +354,16 @@ const styles = StyleSheet.create({
     color: colors.inkSecondary,
     fontFamily: typography.body.fontFamily,
   },
-  progressBlock: { gap: 6, marginVertical: 8 },
-  progressTrack: {
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: colors.surfaceMuted,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 999,
-    backgroundColor: colors.primary,
-  },
-  progressLabel: {
-    fontSize: 13,
-    fontFamily: typography.label.fontFamily,
-    color: colors.inkSecondary,
-  },
   fabWrap: {
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 20,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(0,0,0,0.06)',
   },
-  fab: { width: '100%', maxWidth: 320 },
+  fab: {
+    width: '100%',
+    maxWidth: 320,
+  },
 });
-
-// small tweak styles for update button
-const extra = StyleSheet.create({
-  updateBtn: { marginLeft: 8, paddingHorizontal: 12 },
-});
-
-// merge into main styles to avoid adding new style object references in render
-Object.assign(styles, extra);

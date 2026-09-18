@@ -1,6 +1,7 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { MAX_EXAM_VIOLATIONS, VIOLATION_MESSAGES } from '@/shared/constants';
 import { SecurityRepository } from '@/features/examinations/repositories/SecurityRepository';
+import { resolveViolationLimit } from '@/shared/utils/violationLimit';
 import type { SecurityViolation, SecurityViolationType } from '@/shared/types';
 
 interface UseViolationMonitorOptions {
@@ -32,7 +33,17 @@ export function useViolationMonitor(options: UseViolationMonitorOptions) {
   const [violationCount, setViolationCount] = useState(0);
   const [latestViolation, setLatestViolation] = useState<SecurityViolation | null>(null);
   const [isRecording, setIsRecording] = useState(false);
-  const maxViolations = MAX_EXAM_VIOLATIONS;
+  const [maxViolations, setMaxViolations] = useState(MAX_EXAM_VIOLATIONS);
+
+  useEffect(() => {
+    let cancelled = false;
+    void resolveViolationLimit().then((n) => {
+      if (!cancelled) setMaxViolations(n);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, enabled]);
 
   const recordViolation = useCallback(
     async (type: SecurityViolationType, customMessage?: string) => {
@@ -50,12 +61,14 @@ export function useViolationMonitor(options: UseViolationMonitorOptions) {
           message: customMessage ?? VIOLATION_MESSAGES[type] ?? 'Unauthorized activity detected.',
         });
 
+        const limit = await resolveViolationLimit();
+        setMaxViolations(limit);
         setViolationCount(result.violationCount);
         setLatestViolation(result.violation);
         onViolation?.({
           violation: result.violation,
           violationCount: result.violationCount,
-          maxViolations,
+          maxViolations: limit,
         });
 
         if (result.terminated) {
@@ -75,7 +88,6 @@ export function useViolationMonitor(options: UseViolationMonitorOptions) {
       isRecording,
       onTerminated,
       onViolation,
-      maxViolations,
     ],
   );
 

@@ -21,6 +21,7 @@ import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { appStorage } from '@/shared/services/storage';
 import { examProcess } from '@/shared/theme/examProcess';
+import { userFacingError } from '@/shared/utils/userFacingError';
 
 const schema = z.object({
   passkey: z
@@ -141,7 +142,7 @@ export default function StudentPasskeyScreen() {
       setSelectedStudent(result.student);
       router.push('/(student)/confirmation');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid examination key.');
+      setError(userFacingError(err, 'Invalid examination key. Please check and try again.'));
     }
   });
 

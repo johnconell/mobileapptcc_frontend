@@ -8,8 +8,13 @@ import {
   OfflinePack,
   OfflineQueuedResult,
   OfflineStore,
+  sanitizePackToActiveBanks,
 } from '@/features/synchronization/services/offlineStore';
+import { assertCloudInternetReachable } from '@/features/monitoring/services/wifiLanIp';
 import type { ChoiceKey, Question, StudentRecord } from '@/shared/types';
+import * as Crypto from 'expo-crypto';
+import { appStorage } from '@/shared/services/storage';
+import { STORAGE_KEYS } from '@/shared/constants';
 
 /** Pull typed exam code from plain text or METCC QR JSON. */
 export function extractExaminationCode(raw: string): string {
@@ -77,9 +82,28 @@ async function cloudFetch<T>(
 
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
+    console.error(`[CLOUD FETCH] ${options.method ?? 'GET'} ${path} → HTTP ${res.status}`, json);
+    const serverMsg = (json as { message?: string })?.message || '';
+    if (res.status === 401 && /unauthorized sync/i.test(serverMsg)) {
+      throw new Error(
+        'Unauthorized sync: ADMIN_SYNC_TOKEN on api.masterexam.pro must match EXPO_PUBLIC_SYNC_TOKEN (metcc-lan-sync-secret). Set it in Hostinger .env, then run php artisan config:clear.',
+      );
+    }
+    throw new Error(
+      serverMsg ||
+        `Request failed (${res.status}).`,
+    );
+  }
+  if (
+    json &&
+    typeof json === 'object' &&
+    'success' in (json as object) &&
+    (json as { success?: boolean }).success === false
+  ) {
+    console.error(`[CLOUD FETCH] ${options.method ?? 'GET'} ${path} → success:false`, json);
     throw new Error(
       (json as { message?: string })?.message ||
-        `Request failed (${res.status}).`,
+        `Request rejected by server (${res.status}).`,
     );
   }
   return json as T;
@@ -155,18 +179,9 @@ export function selectedQuestions(pack: OfflinePack): Array<{
 }> {
   if (!pack.question_banks || !pack.question_banks.length) return [];
 
-  // 1. Try to find the bank explicitly marked active that has questions
-  let bank = pack.question_banks.find(
-    (b) => Boolean(b.is_active) && (b.subjects ?? []).some((s) => (s.questions ?? []).length > 0),
-  );
-
-  // 2. Fallback: find any bank with questions
-  if (!bank) {
-    bank =
-      pack.question_banks.find((b) => (b.subjects ?? []).some((s) => (s.questions ?? []).length > 0)) ??
-      pack.question_banks[0];
-  }
-  if (!bank) return [];
+  // Only banks marked active by admin. Never fall back to inactive banks.
+  const activeBanks = pack.question_banks.filter((b) => Boolean(b.is_active));
+  if (!activeBanks.length) return [];
 
   const rows: Array<{
     id: number;
@@ -176,24 +191,11 @@ export function selectedQuestions(pack: OfflinePack): Array<{
     category?: string;
   }> = [];
 
-  for (const subject of bank.subjects ?? []) {
-    for (const q of subject.questions ?? []) {
-      if (q.is_selected_for_exam === false) continue;
-      if (q.status && q.status !== 'active') continue;
-      rows.push({
-        id: q.id,
-        stem: q.stem,
-        options: q.options,
-        correct_answer: q.correct_answer,
-        category: subject.name,
-      });
-    }
-  }
-
-  // 3. Fallback: if no questions had is_selected_for_exam explicitly true, include active questions
-  if (rows.length === 0) {
+  for (const bank of activeBanks) {
     for (const subject of bank.subjects ?? []) {
+      if (subject.is_active === false) continue;
       for (const q of subject.questions ?? []) {
+        if (q.is_selected_for_exam === false) continue;
         if (q.status && q.status !== 'active') continue;
         rows.push({
           id: q.id,
@@ -202,6 +204,25 @@ export function selectedQuestions(pack: OfflinePack): Array<{
           correct_answer: q.correct_answer,
           category: subject.name,
         });
+      }
+    }
+  }
+
+  // If selected flags were missing from an older pack, still stay within active banks only.
+  if (rows.length === 0) {
+    for (const bank of activeBanks) {
+      for (const subject of bank.subjects ?? []) {
+        if (subject.is_active === false) continue;
+        for (const q of subject.questions ?? []) {
+          if (q.status && q.status !== 'active') continue;
+          rows.push({
+            id: q.id,
+            stem: q.stem,
+            options: q.options,
+            correct_answer: q.correct_answer,
+            category: subject.name,
+          });
+        }
       }
     }
   }
@@ -369,11 +390,19 @@ export function grade(
     };
   });
   const score = Math.round((correct / total) * 10000) / 100;
+  const passing =
+    Number((pack as { grading_settings?: Array<{ passing_percentage?: number }> }).grading_settings?.[0]
+      ?.passing_percentage) > 0
+      ? Number(
+          (pack as { grading_settings?: Array<{ passing_percentage?: number }> }).grading_settings?.[0]
+            ?.passing_percentage,
+        )
+      : 75;
   return {
     score,
     items_correct: correct,
     items_total: total,
-    result_status: score >= 75 ? 'passed' : 'failed',
+    result_status: score >= passing ? 'passed' : 'failed',
     answers: graded,
   };
 }
@@ -442,9 +471,17 @@ export const OfflineExamRepository = {
     }
 
     // Never leave password hashes in the on-disk exam pack (student devices).
-    const { proctors: _proctors, ...safePack } = json.data;
+    // Also drop inactive banks — cloud may still export them until Hostinger is updated.
+    const { proctors: _proctors, ...rawPack } = json.data;
+    const safePack = sanitizePackToActiveBanks(rawPack as OfflinePack);
     report(80, 'Saving securely on this phone…');
-    await OfflineStore.savePack(safePack as OfflinePack);
+    await OfflineStore.savePack(safePack);
+    try {
+      const { persistViolationLimit } = await import('@/shared/utils/violationLimit');
+      await persistViolationLimit(safePack.examination_settings?.violation_limit);
+    } catch {
+      // Non-fatal: devices fall back to default limit.
+    }
     try {
       const { useProctorStore } = await import('@/features/proctors/stores/proctorStore');
       const live = useProctorStore.getState().profile;
@@ -455,7 +492,176 @@ export const OfflineExamRepository = {
       // Pack is still usable without a bundled session.
     }
     report(100, 'Download complete');
-    return safePack as OfflinePack;
+    try {
+      const syncToken = getSyncToken();
+      if (syncToken) {
+        const params = new URLSearchParams();
+        if (examDate) params.set('exam_date', examDate);
+        const at = await appStorage.getItem(STORAGE_KEYS.offlinePackAt);
+        if (at) params.set('since', at);
+        const q = params.toString() ? `?${params.toString()}` : '';
+        const json = await cloudFetch<{
+          success: boolean;
+          data?: { content_fingerprint?: string };
+        }>(`/sync/exam-day-pack-status${q}`, {
+          token: syncToken,
+          timeoutMs: 12000,
+        });
+        if (json.data?.content_fingerprint) {
+          await appStorage.setItem(
+            'tcc.offline.pack.content_fingerprint',
+            json.data.content_fingerprint,
+          );
+        }
+      }
+    } catch {
+      // Fingerprint cache is optional.
+    }
+    return safePack;
+  },
+
+  /**
+   * Ask the cloud whether the local pack is stale (new reschedules / roster changes).
+   */
+  async checkPackUpdateStatus(options?: {
+    examDate?: string;
+  }): Promise<{
+    updateRequired: boolean;
+    rescheduledSince: number;
+    rescheduledToday: number;
+    questionsChangedSince: number;
+    questionsChangedToday: number;
+    registrationCount: number;
+    reason: 'reschedule' | 'questions' | 'fingerprint' | 'stale_day' | null;
+    message: string;
+    contentFingerprint?: string;
+  }> {
+    const todayCheck = await OfflineStore.isPackDownloadedToday();
+    if (!todayCheck.downloadedToday) {
+      return {
+        updateRequired: true,
+        rescheduledSince: 0,
+        rescheduledToday: 0,
+        questionsChangedSince: 0,
+        questionsChangedToday: 0,
+        registrationCount: 0,
+        reason: 'stale_day',
+        message: "Download or update today's exam pack before opening rooms.",
+      };
+    }
+
+    const syncToken = getSyncToken();
+    if (!syncToken) {
+      return {
+        updateRequired: false,
+        rescheduledSince: 0,
+        rescheduledToday: 0,
+        questionsChangedSince: 0,
+        questionsChangedToday: 0,
+        registrationCount: 0,
+        reason: null,
+        message: 'Unable to check cloud updates (missing sync token).',
+      };
+    }
+
+    const since = (await appStorage.getItem(STORAGE_KEYS.offlinePackAt)) || undefined;
+    const fingerprint =
+      (await appStorage.getItem('tcc.offline.pack.content_fingerprint')) || undefined;
+
+    const params = new URLSearchParams();
+    if (options?.examDate) params.set('exam_date', options.examDate);
+    if (since) params.set('since', since);
+    if (fingerprint) params.set('fingerprint', fingerprint);
+    const q = params.toString() ? `?${params.toString()}` : '';
+
+    try {
+      const json = await cloudFetch<{
+        success: boolean;
+        data?: {
+          update_required?: boolean;
+          rescheduled_since?: number;
+          rescheduled_today?: number;
+          questions_changed_since?: number;
+          questions_changed_today?: number;
+          registration_count?: number;
+          reason?: 'reschedule' | 'questions' | 'fingerprint' | null;
+          content_fingerprint?: string;
+        };
+      }>(`/sync/exam-day-pack-status${q}`, {
+        token: syncToken,
+        timeoutMs: 12000,
+      });
+
+      const data = json.data ?? {};
+      const rescheduledSince = Number(data.rescheduled_since ?? 0);
+      const rescheduledToday = Number(data.rescheduled_today ?? 0);
+      const questionsChangedSince = Number(data.questions_changed_since ?? 0);
+      const questionsChangedToday = Number(data.questions_changed_today ?? 0);
+      const updateRequired =
+        Boolean(data.update_required) ||
+        rescheduledSince > 0 ||
+        questionsChangedSince > 0;
+      if (data.content_fingerprint) {
+        await appStorage.setItem(
+          'tcc.offline.pack.cloud_fingerprint',
+          data.content_fingerprint,
+        );
+      }
+
+      let message = 'Exam pack is up to date.';
+      let reason: 'reschedule' | 'questions' | 'fingerprint' | null = null;
+      if (updateRequired) {
+        if (
+          data.reason === 'reschedule' ||
+          rescheduledSince > 0 ||
+          rescheduledToday > 0
+        ) {
+          reason = 'reschedule';
+          const n = rescheduledSince || rescheduledToday;
+          message =
+            n > 0
+              ? `${n} applicant(s) were rescheduled since your last download. Tap Update Examination.`
+              : 'Applicants were rescheduled. Tap Update Examination to refresh the roster.';
+        } else if (
+          data.reason === 'questions' ||
+          questionsChangedSince > 0 ||
+          questionsChangedToday > 0
+        ) {
+          reason = 'questions';
+          const n = questionsChangedSince || questionsChangedToday;
+          message =
+            n > 0
+              ? `${n} question(s) were added or updated since your last download. Tap Update Examination.`
+              : 'Questions were added or updated. Tap Update Examination to refresh the module.';
+        } else {
+          reason = data.reason === 'fingerprint' ? 'fingerprint' : 'questions';
+          message = 'Exam pack changed on the server. Tap Update Examination to refresh.';
+        }
+      }
+
+      return {
+        updateRequired,
+        rescheduledSince,
+        rescheduledToday,
+        questionsChangedSince,
+        questionsChangedToday,
+        registrationCount: Number(data.registration_count ?? 0),
+        reason: updateRequired ? reason : null,
+        message,
+        contentFingerprint: data.content_fingerprint,
+      };
+    } catch {
+      return {
+        updateRequired: false,
+        rescheduledSince: 0,
+        rescheduledToday: 0,
+        questionsChangedSince: 0,
+        questionsChangedToday: 0,
+        registrationCount: 0,
+        reason: null,
+        message: 'Could not reach the server to check for pack updates.',
+      };
+    }
   },
 
   async getCachedSchedules() {
@@ -777,7 +983,7 @@ export const OfflineExamRepository = {
         registeredStudents: pack.registrations.filter(
           (r) => Number(r.examination_schedule_id) === Number(schedule.id),
         ).length,
-        durationMinutes: pack.examination_settings?.duration_minutes ?? 90,
+        durationMinutes: pack.examination_settings?.duration_minutes ?? 60,
         totalQuestions: selectedQuestions(pack).length,
         examinationCode: examCode,
       },
@@ -818,7 +1024,7 @@ export const OfflineExamRepository = {
 
   durationMinutes(): Promise<number> {
     return OfflineStore.getPack().then(
-      (p) => p?.examination_settings?.duration_minutes ?? 90,
+      (p) => p?.examination_settings?.duration_minutes ?? 60,
     );
   },
 
@@ -831,8 +1037,12 @@ export const OfflineExamRepository = {
     const pack = await OfflineStore.getPack();
     if (!pack) throw new Error('No offline pack on this device.');
     const graded = grade(pack, input.answers);
+    const uuid =
+      typeof Crypto.randomUUID === 'function'
+        ? Crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     const row: OfflineQueuedResult = {
-      local_id: `${input.applicantCode}-${input.scheduleId}-${Date.now()}`,
+      local_id: uuid,
       applicant_code: input.applicantCode,
       examination_schedule_id: Number(input.scheduleId),
       applicant_name: input.applicantName,
@@ -850,6 +1060,8 @@ export const OfflineExamRepository = {
     if (!pending.length) {
       return { synced: 0, message: 'No offline results waiting to sync.' };
     }
+
+    await assertCloudInternetReachable();
 
     const syncToken = getSyncToken();
     if (!syncToken) {
@@ -918,6 +1130,8 @@ export const OfflineExamRepository = {
       throw error;
     }
 
+    console.log(`[SYNC AUDIT] Server response success=${json?.success} accepted_client_ids=${(json?.data?.accepted_client_ids ?? []).length}`);
+
     const acceptedClient = new Set(json?.data?.accepted_client_ids ?? []);
     const acceptedKeys = new Set(json?.data?.accepted_keys ?? []);
     const syncedIds = validPending
@@ -927,7 +1141,7 @@ export const OfflineExamRepository = {
       })
       .map((p) => p.local_id);
 
-    // FIX 6: Never claim success if 0 items were accepted by server!
+    // Never mark synced unless the server explicitly accepted the client_local_id / key.
     if (syncedIds.length === 0 || json?.success === false) {
       const serverMsg = json?.message || 'Server rejected all records in batch.';
       const rejectedList = (json as any)?.data?.rejected;
@@ -935,7 +1149,7 @@ export const OfflineExamRepository = {
         ? ` Rejection Reasons: ${rejectedList.map((r: any) => `${r.applicant_code}: ${r.reason}`).join('; ')}`
         : '';
 
-      console.error(`[SYNC AUDIT FAILURE] 0 records accepted. Server Message: ${serverMsg}.${rejDetails}`);
+      console.error(`[SYNC AUDIT FAILURE] 0 records accepted. Server Message: ${serverMsg}.${rejDetails}`, json);
       throw new Error(`Sync Failed: No results were accepted by the server. (${serverMsg})${rejDetails}`);
     }
 

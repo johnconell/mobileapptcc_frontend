@@ -1299,15 +1299,23 @@ export default function ProctorLobbyScreen() {
             } else {
               const snapshot = await LobbyRepository.endExamination(sessionId, roomId);
               setSnapshot(snapshot);
-              // Ensure this session is marked ended in offline store
-              const sid = String(sessionId).replace(/^offline-/, '');
+              // Ensure this session is marked ended in offline store (numeric schedule id).
               if (roomId) {
-                await OfflineStore.setOpenedRoom(
-                  sid,
-                  roomId,
-                  lobby?.examinationCode || 'ENDED',
-                  'ended',
+                const pack = await OfflineStore.getPack();
+                const { resolveNumericScheduleId } = await import(
+                  '@/features/examinations/services/peerExamServer'
                 );
+                const sid =
+                  resolveNumericScheduleId(String(sessionId).replace(/^offline-/, ''), pack) ||
+                  resolveNumericScheduleId(String(lobby?.session?.scheduleId ?? ''), pack);
+                if (sid > 0) {
+                  await OfflineStore.setOpenedRoom(
+                    sid,
+                    roomId,
+                    lobby?.examinationCode || 'ENDED',
+                    'ended',
+                  );
+                }
               }
             }
             await refresh();

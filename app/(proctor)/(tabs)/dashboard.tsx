@@ -29,6 +29,8 @@ import {
   LogOut,
   Search,
   Bell,
+  Sun,
+  Moon,
 } from 'lucide-react-native';
 import { Header, Button } from '@/shared/components/ui';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
@@ -60,16 +62,16 @@ function formatTime12(timeStr?: string): string {
 export default function ProctorDashboardScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { colors, isDark, fontMultiplier } = useAppTheme();
+  const { colors, isDark, themeMode, setThemeMode, fontMultiplier } = useAppTheme();
   const profile = useProctorStore((s) => s.profile);
   const [refreshing, setRefreshing] = useState(false);
   const [rulesModalOpen, setRulesModalOpen] = useState(false);
   const [activeLobby, setActiveLobby] = useState<ActiveLobbyDetails | null>(null);
 
   const [stats, setStats] = useState({
-    totalApplicants: 48,
-    examineesTaken: 42,
-    todayRegistered: 48,
+    totalApplicants: 0,
+    examineesTaken: 0,
+    todayRegistered: 0,
     passingGrade: '75.0%',
     duration: '60 mins',
     todayExamDate: new Date().toLocaleDateString(undefined, {
@@ -164,13 +166,10 @@ export default function ProctorDashboardScreen() {
       if (!todayRegistered && pack?.applicants?.length) {
         todayRegistered = pack.applicants.length;
       }
-      if (!todayRegistered) {
-        todayRegistered = 48;
-      }
 
       const durationMins = pack?.examination_settings?.duration_minutes ?? 60;
       const passingPercentage = (pack as any)?.grading_settings?.[0]?.passing_percentage ?? 75;
-      const takenCount = queued.length > 0 ? queued.length : (pack?.registrations?.length ?? 42);
+      const takenCount = queued.length;
 
       // Extract start and end times strictly based on the schedule
       let schedStart = '';
@@ -190,7 +189,7 @@ export default function ProctorDashboardScreen() {
       const venueText = primarySchedule?.venue || 'Testing Center · Main Campus';
 
       setStats({
-        totalApplicants: pack?.applicants?.length ?? 48,
+        totalApplicants: pack?.applicants?.length ?? 0,
         examineesTaken: takenCount,
         todayRegistered,
         passingGrade: `${Number(passingPercentage).toFixed(1)}%`,
@@ -272,8 +271,22 @@ export default function ProctorDashboardScreen() {
           </Text>
         </View>
 
-        {/* Right Icon Actions: Refresh & Logout */}
+        {/* Right Icon Actions: Theme, Refresh & Logout */}
         <View style={styles.navRightRow}>
+          <Pressable
+            accessibilityRole="button"
+            style={[styles.navIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+            onPress={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
+            accessibilityLabel={themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            hitSlop={8}
+          >
+            {themeMode === 'dark' ? (
+              <Moon size={17} color="#C4A35A" />
+            ) : (
+              <Sun size={17} color="#B45309" />
+            )}
+          </Pressable>
+
           <Pressable
             accessibilityRole="button"
             style={[styles.navIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}

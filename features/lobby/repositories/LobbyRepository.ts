@@ -1,4 +1,5 @@
-import { MAX_EXAM_VIOLATIONS, STORAGE_KEYS } from '@/shared/constants';
+import { STORAGE_KEYS } from '@/shared/constants';
+import { resolveViolationLimit, persistViolationLimit } from '@/shared/utils/violationLimit';
 import { apiRequest, ApiError } from '@/shared/services/api';
 import {
   extractExaminationCode,
@@ -6,7 +7,7 @@ import {
 } from '@/features/synchronization/services/offlineExamRepository';
 import { OfflineStore, computePackHash, computePackHashAsync } from '@/features/synchronization/services/offlineStore';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
-import { parsePeerQr, PeerExamServer } from '@/features/examinations/services/peerExamServer';
+import { parsePeerQr, PeerExamServer, resolveNumericScheduleId } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
 import type {
   ExamCodeValidation,
@@ -1193,12 +1194,14 @@ export const LobbyRepository = {
         if (json.data) {
           if (!peerSnapshot && roomId) {
             const code = json.data.examinationCode || 'ENDED';
-            await OfflineStore.setOpenedRoom(
+            const pack = await OfflineStore.getPack();
+            const sid = resolveNumericScheduleId(
               String(sessionId).replace(/^offline-/, ''),
-              roomId,
-              code,
-              'ended',
+              pack,
             );
+            if (sid > 0) {
+              await OfflineStore.setOpenedRoom(sid, roomId, code, 'ended');
+            }
           }
           return json.data;
         }
@@ -1292,7 +1295,11 @@ export const LobbyRepository = {
       method: 'POST',
       body: examSessionId != null ? { exam_session_id: Number(examSessionId) } : {},
     });
-    if (json.success) console.log('[SYNC] Sync to cloud successful.');
+    if (!json || json.success === false) {
+      console.error('[SYNC] Sync to cloud rejected:', json);
+      throw new Error(json?.message || json?.data?.message || 'Sync failed on the Admin server.');
+    }
+    console.log('[SYNC] Sync to cloud successful.', json.data);
     return {
       synced: json.data?.synced ?? 0,
       failed: json.data?.failed ?? 0,
@@ -1332,15 +1339,23 @@ export const LobbyRepository = {
       try {
         const json = await PeerExamClient.request<{
           violation_count: number;
+          violation_limit?: number;
           lobby_status?: string;
         }>('/violation', {
           method: 'POST',
           body: { participation_token: token, type, message: message || undefined },
         });
         const count = Number(json.violation_count ?? 0);
+        const limit =
+          json.violation_limit != null
+            ? Number(json.violation_limit)
+            : await resolveViolationLimit();
+        if (json.violation_limit != null) {
+          await persistViolationLimit(json.violation_limit);
+        }
         return {
           violationCount: count,
-          terminated: count >= MAX_EXAM_VIOLATIONS || json.lobby_status === 'terminated',
+          terminated: count >= limit || json.lobby_status === 'terminated',
         };
       } catch {
         return { violationCount: 0, terminated: false };
@@ -1355,6 +1370,7 @@ export const LobbyRepository = {
         success: boolean;
         data?: {
           violation_count: number;
+          violation_limit?: number;
           lobby_status?: string;
         };
       }>('/exam/violation', {
@@ -1367,9 +1383,16 @@ export const LobbyRepository = {
         },
       });
       const count = Number(json.data?.violation_count ?? 0);
+      const limit =
+        json.data?.violation_limit != null
+          ? Number(json.data.violation_limit)
+          : await resolveViolationLimit();
+      if (json.data?.violation_limit != null) {
+        await persistViolationLimit(json.data.violation_limit);
+      }
       return {
         violationCount: count,
-        terminated: count >= MAX_EXAM_VIOLATIONS || json.data?.lobby_status === 'terminated',
+        terminated: count >= limit || json.data?.lobby_status === 'terminated',
       };
     } catch {
       return { violationCount: 0, terminated: false };

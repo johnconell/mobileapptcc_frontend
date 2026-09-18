@@ -56,7 +56,9 @@
           "image": "./assets/tcc-logo.png",
           "imageWidth": 200
         }
-      ]
+      ],
+      "expo-font",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true

@@ -2,7 +2,7 @@ import { STORAGE_KEYS } from '@/shared/constants';
 import { isLoopbackApiHost, requiresLanApiHost } from '@/shared/services/apiReachability';
 import { appStorage } from '@/shared/services/storage';
 
-const DEFAULT_API_URL = 'https://metccapi.repohive.com/api/v1';
+const DEFAULT_API_URL = 'https://api.masterexam.pro/api/v1';
 /** Must match server ADMIN_SYNC_TOKEN (same value as eas.json production env). */
 const DEFAULT_SYNC_TOKEN = 'metcc-lan-sync-secret';
 

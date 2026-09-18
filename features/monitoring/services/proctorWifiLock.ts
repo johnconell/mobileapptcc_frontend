@@ -6,6 +6,7 @@
 import * as Network from 'expo-network';
 import { PeerExamServer } from '@/features/examinations/services/peerExamServer';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
+import { resolveWifiLanIp } from '@/features/monitoring/services/wifiLanIp';
 import { appStorage } from '@/shared/services/storage';
 
 const LOCK_STORAGE_PREFIX = 'tcc.proctor.wifi_lock.';
@@ -71,35 +72,45 @@ function lockStorageKey(examSessionId: number | string): string {
 export async function readProctorWifiIdentity(): Promise<ProctorWifiIdentity> {
   try {
     const net = await Network.getNetworkStateAsync();
-    const isWifi = net.type === Network.NetworkStateType.WIFI;
+    const lan = await resolveWifiLanIp();
+    const isWifi = lan.isWifi;
     const ssid = isWifi
       ? normalizeSsid((net as { ssid?: string | null }).ssid)
       : null;
     const bssid = isWifi
       ? normalizeBssid((net as { bssid?: string | null }).bssid)
       : null;
-    const localIp = await Network.getIpAddressAsync().catch(() => null);
-    const safeIp =
-      localIp && localIp !== '0.0.0.0' && !localIp.startsWith('169.254.')
-        ? localIp
-        : null;
-    return { ssid, bssid, localIp: safeIp, isWifi };
+    return { ssid, bssid, localIp: lan.ip, isWifi };
   } catch {
     return { ssid: null, bssid: null, localIp: null, isWifi: false };
   }
 }
 
 /**
- * Room open requires Wi‑Fi + a usable LAN IP. Throws a user-facing Error if not.
+ * Room open requires Wi‑Fi + a usable private LAN IP.
+ * Blocks when mobile data is the active route or when the resolved IP is not
+ * a campus/hotspot address (common dual Wi‑Fi+cellular failure mode).
  */
 export async function assertProctorWifiForRoomOpen(): Promise<ProctorWifiIdentity> {
+  const lan = await resolveWifiLanIp();
   const identity = await readProctorWifiIdentity();
+
+  if (lan.type === Network.NetworkStateType.CELLULAR || (!lan.isWifi && lan.cellularLikely)) {
+    throw new Error(
+      'Turn off mobile data, then connect only to the examination Wi‑Fi before opening a room. Dual Wi‑Fi + mobile data often binds the room to an unreachable address.',
+    );
+  }
   if (!identity.isWifi) {
     throw new Error(
       'Connect to the examination Wi‑Fi before opening a room. Mobile data alone cannot host a LAN exam session.',
     );
   }
   if (!identity.localIp) {
+    if (lan.cellularLikely) {
+      throw new Error(
+        'Could not read a Wi‑Fi LAN address (mobile data may be active). Turn off mobile data, stay on the exam Wi‑Fi, then try again.',
+      );
+    }
     throw new Error(
       'This phone has no Wi‑Fi address yet. Stay on the exam Wi‑Fi and try again in a few seconds.',
     );

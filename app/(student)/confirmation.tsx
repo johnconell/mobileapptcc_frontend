@@ -29,6 +29,7 @@ import { appStorage } from '@/shared/services/storage';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { examProcess } from '@/shared/theme/examProcess';
+import { userFacingError } from '@/shared/utils/userFacingError';
 
 const gmailSchema = z.object({
   email: z
@@ -148,7 +149,7 @@ export default function StudentConfirmationScreen() {
       await ExamLifecycle.applyFromServer(lobby.status, { sessionId: String(scannedSessionId) });
       router.replace('/(student)/lobby');
     } catch (error) {
-      setJoinError(error instanceof Error ? error.message : 'Unable to join examination.');
+      setJoinError(userFacingError(error, 'Unable to join examination. Please try again.'));
     } finally {
       setJoining(false);
       setStatusMessage(null);

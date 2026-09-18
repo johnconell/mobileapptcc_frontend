@@ -61,8 +61,21 @@ export default function ProctorSettingsScreen() {
           </Text>
         </View>
 
-        {/* Right Icon Actions: Logout */}
+        {/* Right Icon Actions: Theme + Logout */}
         <View style={styles.navRightRow}>
+          <Pressable
+            accessibilityRole="button"
+            style={[styles.navIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+            onPress={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
+            accessibilityLabel={themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            hitSlop={8}
+          >
+            {themeMode === 'dark' ? (
+              <Moon size={18} color="#C4A35A" />
+            ) : (
+              <Sun size={18} color="#B45309" />
+            )}
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             style={[styles.navIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}

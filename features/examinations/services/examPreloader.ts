@@ -5,6 +5,7 @@ import { STORAGE_KEYS } from '@/shared/constants';
 import { appStorage } from '@/shared/services/storage';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { encryptJson, decryptJson } from '@/features/synchronization/services/offlineStore';
+import { persistViolationLimit, clampViolationLimit } from '@/shared/utils/violationLimit';
 import {
   countMediaAssets,
   INITIAL_PACK_PROGRESS,
@@ -29,6 +30,7 @@ export type PreloadPackageResult = {
 
 type ExaminationSettings = {
   duration_minutes?: number;
+  violation_limit?: number;
   shuffle_questions?: boolean;
   shuffle_categories?: boolean;
   shuffle_both?: boolean;
@@ -162,7 +164,7 @@ export const ExamPreloader = {
 
     let questions: Question[] = [];
     let serverReportedHash = '';
-    let durationMinutes = 90;
+    let durationMinutes = 60;
     let examinationSettings: ExaminationSettings | null = null;
     let packageVersion = 1;
 
@@ -177,6 +179,7 @@ export const ExamPreloader = {
         questions: Question[];
         packageHash?: string;
         durationMinutes?: number;
+        violationLimit?: number;
         examinationSettings?: ExaminationSettings;
         packageVersion?: number;
       } | null = null;
@@ -194,6 +197,7 @@ export const ExamPreloader = {
             questions: Question[];
             packageHash?: string;
             durationMinutes?: number;
+            violationLimit?: number;
             examinationSettings?: ExaminationSettings;
             packageVersion?: number;
           }>('/package', {
@@ -214,8 +218,17 @@ export const ExamPreloader = {
       if (packageRes?.questions?.length) {
         questions = packageRes.questions;
         serverReportedHash = packageRes.packageHash || '';
-        durationMinutes = packageRes.durationMinutes || 90;
+        durationMinutes = packageRes.durationMinutes || 60;
         examinationSettings = packageRes.examinationSettings ?? { duration_minutes: durationMinutes };
+        if (packageRes.violationLimit != null) {
+          examinationSettings = {
+            ...examinationSettings,
+            violation_limit: clampViolationLimit(packageRes.violationLimit),
+          };
+        }
+        await persistViolationLimit(
+          examinationSettings?.violation_limit ?? packageRes.violationLimit,
+        );
         packageVersion = packageRes.packageVersion || 1;
         emitProgress({
           phase: 'downloading',

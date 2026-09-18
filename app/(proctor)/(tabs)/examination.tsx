@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
+  Bell,
   CheckCircle2,
   DoorOpen,
   LogOut,
@@ -32,6 +33,7 @@ import { QUERY_KEYS } from '@/shared/constants';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { ensureExamPackCached } from '@/features/synchronization/services/ensureExamPack';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
+import { OfflineExamRepository } from '@/features/synchronization/services/offlineExamRepository';
 import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
 import { shadows } from '@/shared/theme';
 import type { ExamSchedule, ExamSession } from '@/shared/types';
@@ -127,16 +129,43 @@ export default function ProctorExaminationTabScreen() {
     packDate: null,
     today: new Date().toISOString().slice(0, 10),
   });
+  const [packNotice, setPackNotice] = useState<{
+    updateRequired: boolean;
+    message: string;
+    rescheduledSince: number;
+    rescheduledToday: number;
+    questionsChangedSince: number;
+    questionsChangedToday: number;
+    reason: 'reschedule' | 'questions' | 'fingerprint' | 'stale_day' | null;
+  }>({
+    updateRequired: false,
+    message: '',
+    rescheduledSince: 0,
+    rescheduledToday: 0,
+    questionsChangedSince: 0,
+    questionsChangedToday: 0,
+    reason: null,
+  });
 
   const refreshPackData = useCallback(async () => {
-    const [summary, today, rooms] = await Promise.all([
+    const [summary, today, rooms, status] = await Promise.all([
       OfflineStore.getPackSummary(),
       OfflineStore.isPackDownloadedToday(),
       OfflineStore.getOpenedRooms(),
+      OfflineExamRepository.checkPackUpdateStatus(),
     ]);
     setPack(summary);
     setTodayStatus(today);
     setOpenedRooms(rooms);
+    setPackNotice({
+      updateRequired: status.updateRequired || !today.downloadedToday,
+      message: status.message,
+      rescheduledSince: status.rescheduledSince,
+      rescheduledToday: status.rescheduledToday,
+      questionsChangedSince: status.questionsChangedSince,
+      questionsChangedToday: status.questionsChangedToday,
+      reason: status.reason,
+    });
   }, []);
 
   useEffect(() => {
@@ -218,7 +247,11 @@ export default function ProctorExaminationTabScreen() {
     const roomObj = schedMatch?.rooms?.[0];
     const roomId = Number(session.roomId || roomObj?.id || 0) || 1;
     const roomName = session.roomName || roomObj?.room_name || session.venue || 'Room 101';
-    const capacity = roomObj?.capacity ?? 60;
+    const adminRoomLimit = Number(offlinePack?.examination_settings?.room_student_limit);
+    const capacity =
+      Number.isInteger(adminRoomLimit) && adminRoomLimit >= 1
+        ? adminRoomLimit
+        : (roomObj?.capacity ?? 60);
 
     const currentOpened = await OfflineStore.getOpenedRooms();
     setOpenedRooms(currentOpened);
@@ -456,63 +489,136 @@ export default function ProctorExaminationTabScreen() {
               style={[
                 styles.packCard,
                 {
-                  backgroundColor: todayStatus.downloadedToday
-                    ? colors.card
-                    : isDark
-                      ? '#1A1212'
-                      : '#FFF5F5',
-                  borderColor: todayStatus.downloadedToday
-                    ? colors.cardBorder
-                    : isDark
-                      ? '#7A1F2B50'
-                      : '#FECACA',
+                  backgroundColor:
+                    packNotice.updateRequired || !todayStatus.downloadedToday
+                      ? isDark
+                        ? '#1A1212'
+                        : '#FFF5F5'
+                      : colors.card,
+                  borderColor:
+                    packNotice.updateRequired || !todayStatus.downloadedToday
+                      ? isDark
+                        ? '#7A1F2B80'
+                        : '#FECACA'
+                      : colors.cardBorder,
                 },
               ]}
             >
+              {(packNotice.updateRequired || !todayStatus.downloadedToday) && (
+                <Pressable
+                  style={[
+                    styles.packNoticeBtn,
+                    {
+                      backgroundColor: isDark ? '#2A1414' : '#FEE2E2',
+                      borderColor: isDark ? '#7A1F2B70' : '#FECACA',
+                    },
+                  ]}
+                  onPress={() =>
+                    Alert.alert(
+                      packNotice.reason === 'reschedule'
+                        ? 'Reschedule Update Needed'
+                        : packNotice.reason === 'questions'
+                          ? 'Question Bank Updated'
+                          : 'Update Examination Pack',
+                      packNotice.message ||
+                        'Tap Update Examination to refresh today\'s roster, passkeys, and questions.',
+                      [
+                        { text: 'Later', style: 'cancel' },
+                        { text: 'Update Now', onPress: () => void downloadPack() },
+                      ],
+                    )
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel="Pack update notification"
+                >
+                  <View style={styles.packNoticeIcon}>
+                    <Bell size={16} color="#DC2626" />
+                    {(packNotice.rescheduledSince > 0 ||
+                      packNotice.rescheduledToday > 0 ||
+                      packNotice.questionsChangedSince > 0 ||
+                      packNotice.questionsChangedToday > 0) && (
+                      <View style={styles.packNoticeBadge}>
+                        <Text style={styles.packNoticeBadgeText}>
+                          {Math.min(
+                            99,
+                            packNotice.rescheduledSince ||
+                              packNotice.rescheduledToday ||
+                              packNotice.questionsChangedSince ||
+                              packNotice.questionsChangedToday,
+                          )}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[styles.packNoticeTitle, { color: isDark ? '#FECACA' : '#991B1B' }]}>
+                      {packNotice.reason === 'reschedule' || packNotice.rescheduledSince > 0
+                        ? 'Students were rescheduled'
+                        : packNotice.reason === 'questions' ||
+                            packNotice.questionsChangedSince > 0
+                          ? 'Questions were added or updated'
+                          : !todayStatus.downloadedToday
+                            ? 'Exam pack update required'
+                            : 'Examination pack changed'}
+                    </Text>
+                    <Text
+                      style={[styles.packNoticeBody, { color: isDark ? '#FCA5A5' : '#B91C1C' }]}
+                      numberOfLines={2}
+                    >
+                      {packNotice.message ||
+                        'Tap Update Examination below to refresh the latest applicants, passkeys, and questions.'}
+                    </Text>
+                  </View>
+                </Pressable>
+              )}
+
               <View style={styles.packRow}>
                 <View
                   style={[
                     styles.packIconWrap,
-                    todayStatus.downloadedToday
+                    todayStatus.downloadedToday && !packNotice.updateRequired
                       ? { backgroundColor: isDark ? '#142918' : '#DCFCE7' }
                       : { backgroundColor: isDark ? '#2A1414' : '#FEE2E2' },
                   ]}
                 >
-                  {todayStatus.downloadedToday ? (
+                  {todayStatus.downloadedToday && !packNotice.updateRequired ? (
                     <CheckCircle2 size={18} color={isDark ? '#22C55E' : '#16A34A'} />
                   ) : (
-                    <AlertTriangle size={18} color={isDark ? '#7A1F2B' : '#DC2626'} />
+                    <AlertTriangle size={18} color={isDark ? '#F87171' : '#DC2626'} />
                   )}
                 </View>
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={[styles.packTitle, { color: colors.textPrimary }]} numberOfLines={1}>
                     {todayStatus.downloadedToday
-                      ? "Today's Exam Pack Ready"
-                      : "Daily Exam Module Required"}
+                      ? packNotice.updateRequired
+                        ? 'Update Examination Pack'
+                        : "Today's Exam Pack Ready"
+                      : 'Download Exam Pack'}
                   </Text>
                   <Text style={[styles.packSub, { color: colors.textSecondary }]} numberOfLines={2}>
                     {todayStatus.downloadedToday
-                      ? `Updated Today (${todayStatus.today}) · ${pack?.students ?? 0} students · ${pack?.questions ?? 0} questions`
-                      : "Download today's passkeys and latest module to include rescheduled applicants."}
+                      ? packNotice.updateRequired
+                        ? 'Refresh now so rescheduled applicants and updated questions appear in your rooms.'
+                        : `Updated Today (${todayStatus.today}) · ${pack?.students ?? 0} students · ${pack?.questions ?? 0} questions`
+                      : "Download today's passkeys and latest module to include rescheduled applicants and new questions."}
                   </Text>
                 </View>
-                <View style={{ flexShrink: 0 }}>
-                  <Button
-                    title={todayStatus.downloadedToday ? 'Update' : 'Download'}
-                    variant="primary"
-                    size="sm"
-                    loading={refreshing}
-                    onPress={() => void downloadPack()}
-                    style={{
-                      backgroundColor: todayStatus.downloadedToday
-                        ? (isDark ? '#1F1F1F' : colors.cardMuted)
-                        : '#7A1F2B',
-                      borderColor: todayStatus.downloadedToday ? colors.cardBorder : '#7A1F2B',
-                      borderWidth: 1,
-                    }}
-                  />
-                </View>
               </View>
+
+              <Button
+                title={
+                  refreshing
+                    ? 'Updating…'
+                    : todayStatus.downloadedToday
+                      ? 'Update Examination'
+                      : 'Download Examination'
+                }
+                variant="primary"
+                size="md"
+                loading={refreshing}
+                onPress={() => void downloadPack()}
+                style={styles.packUpdateBtn}
+              />
             </View>
 
             <View style={[styles.legendContainer, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
@@ -767,7 +873,50 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 16,
     padding: 14,
+    gap: 12,
     ...shadows.card,
+  },
+  packNoticeBtn: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  packNoticeIcon: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  packNoticeBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#DC2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  packNoticeBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  packNoticeTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 2,
+  },
+  packNoticeBody: {
+    fontSize: 12,
+    fontWeight: '500',
+    lineHeight: 16,
   },
   packCardWarning: {
     borderColor: '#7A1F2B50',
@@ -801,6 +950,12 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#A1A1AA',
     lineHeight: 16,
+  },
+  packUpdateBtn: {
+    backgroundColor: '#7A1F2B',
+    borderColor: '#7A1F2B',
+    alignSelf: 'stretch',
+    minHeight: 48,
   },
   legendContainer: {
     borderRadius: 14,

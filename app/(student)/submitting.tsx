@@ -14,6 +14,7 @@ import { appStorage } from '@/shared/services/storage';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
 import { examProcess } from '@/shared/theme/examProcess';
+import { userFacingError } from '@/shared/utils/userFacingError';
 
 const MAX_ATTEMPTS = 3;
 
@@ -107,9 +108,10 @@ export default function SubmittingScreen() {
     }
 
     setError(
-      lastError instanceof Error
-        ? lastError.message
-        : 'Submission failed. Please try again.',
+      userFacingError(
+        lastError,
+        'Submission failed. Please stay on the exam Wi‑Fi and try again.',
+      ),
     );
   }, [
     answers,

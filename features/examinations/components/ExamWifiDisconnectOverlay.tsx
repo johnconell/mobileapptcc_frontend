@@ -4,6 +4,7 @@ import { WifiOff } from 'lucide-react-native';
 import { Button } from '@/shared/components/ui/Button';
 import { Input } from '@/shared/components/ui/Input';
 import { colors, shadows } from '@/shared/theme';
+import { userFacingError } from '@/shared/utils/userFacingError';
 
 interface ExamWifiDisconnectOverlayProps {
   visible: boolean;
@@ -43,7 +44,10 @@ export function ExamWifiDisconnectOverlay({
             <>
               <Text style={styles.title}>Examination ended</Text>
               <Text style={styles.message}>
-                This examination has already ended or the room was closed. You can return to the
+                Tapos na ang examination. Maghihintay lang kayo sa result sa inyong Gmail.
+              </Text>
+              <Text style={styles.message}>
+                Please wait for the official examination result in your Gmail. You can return to the
                 home screen — you are no longer in an active exam.
               </Text>
               <Button
@@ -61,7 +65,11 @@ export function ExamWifiDisconnectOverlay({
                 The proctor phone moved to a different Wi‑Fi network or got a new address. Stay on
                 the exam Wi‑Fi, then tap Reconnect. This is not counted as a violation.
               </Text>
-              {error ? <Text style={styles.error}>{error}</Text> : null}
+              {error ? (
+                <Text style={styles.error}>
+                  {userFacingError(error, 'Unable to reconnect. Please try again.')}
+                </Text>
+              ) : null}
               <Button
                 title="Reconnect"
                 size="lg"
@@ -92,7 +100,11 @@ export function ExamWifiDisconnectOverlay({
                     editable={!loading}
                     autoFocus
                   />
-                  {error ? <Text style={styles.error}>{error}</Text> : null}
+                  {error ? (
+                    <Text style={styles.error}>
+                      {userFacingError(error, 'Invalid reconnect code. Please try again.')}
+                    </Text>
+                  ) : null}
                   <Button
                     title="Unlock & Resume"
                     size="lg"

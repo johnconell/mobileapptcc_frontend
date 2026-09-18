@@ -35,3 +35,4 @@ export function clamp(value: number, min: number, max: number): number {
 }
 
 export { safeBack } from './navigation';
+export { userFacingError, userFacingAlertMessage } from './userFacingError';

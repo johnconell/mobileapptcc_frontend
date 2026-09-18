@@ -8,7 +8,6 @@ import {
   Pressable,
   Alert,
   Modal,
-  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import {
@@ -16,12 +15,6 @@ import {
   Shield,
   KeyRound,
   Mail,
-  Smartphone,
-  Laptop,
-  CheckCircle2,
-  Clock,
-  MapPin,
-  LogOut,
   Camera,
   ChevronRight,
   ShieldCheck,
@@ -34,50 +27,9 @@ import { Header, Button, Card } from '@/shared/components/ui';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { AuthRepository } from '@/features/authentication/repositories/AuthRepository';
-import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
 import { ProctorAuthCache } from '@/features/authentication/services/proctorAuthCache';
-
-type LoginSessionLog = {
-  id: string;
-  device: string;
-  platform: string;
-  ipAddress: string;
-  location: string;
-  time: string;
-  isCurrent: boolean;
-};
-
-const DEFAULT_LOGS: LoginSessionLog[] = [
-  {
-    id: 'sess-1',
-    device: Platform.OS === 'ios' ? 'Apple iPhone (Proctor Mobile)' : 'Android Device (Proctor Mobile)',
-    platform: Platform.OS === 'ios' ? 'iOS App' : 'Android App',
-    ipAddress: '192.168.1.104',
-    location: 'Campus Local Area Network',
-    time: 'Active Now',
-    isCurrent: true,
-  },
-  {
-    id: 'sess-2',
-    device: 'Mobile Proctor Workstation #1',
-    platform: 'Examination Portal',
-    ipAddress: '192.168.1.52',
-    location: 'Testing Center Room CL 1',
-    time: 'Yesterday at 03:45 PM',
-    isCurrent: false,
-  },
-  {
-    id: 'sess-3',
-    device: 'Proctor Tablet Console',
-    platform: 'Android Tab',
-    ipAddress: '192.168.1.88',
-    location: 'Testing Center Room CL 2',
-    time: 'Sep 4, 2026 at 09:12 AM',
-    isCurrent: false,
-  },
-];
 
 const AVATAR_COLORS = [
   { id: '1', bg: '#003366', border: '#0055A4', label: 'Classic Navy' },
@@ -107,9 +59,6 @@ export default function ProctorAccountScreen() {
   const [showPasswords, setShowPasswords] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
 
-  // Sessions / Login Activity
-  const [sessions, setSessions] = useState<LoginSessionLog[]>(DEFAULT_LOGS);
-
   useEffect(() => {
     void (async () => {
       const session = await AuthRepository.getCachedSessionFast();
@@ -117,12 +66,7 @@ export default function ProctorAccountScreen() {
         setName(session.displayName || '');
         setGmail(session.username || '');
       }
-      // Load saved logs
       try {
-        const storedLogs = await appStorage.getItem('tcc.proctor.login_logs');
-        if (storedLogs) {
-          setSessions(JSON.parse(storedLogs));
-        }
         const storedAvatar = await appStorage.getItem('tcc.proctor.avatar_color');
         if (storedAvatar) {
           setAvatarBg(storedAvatar);
@@ -207,54 +151,6 @@ export default function ProctorAccountScreen() {
       return;
     }
     router.replace('/(proctor)/(tabs)/settings');
-  };
-
-  // Log out of this device
-  const handleLogOutThisDevice = () => {
-    confirmProctorLogout();
-  };
-
-  // Log out of all other sessions (like Facebook)
-  const handleLogOutOtherSessions = () => {
-    Alert.alert(
-      'Log Out Of All Other Sessions',
-      'This will disconnect any other phones, tablets, or browser sessions currently logged into this proctor account.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Log Out Others',
-          style: 'destructive',
-          onPress: async () => {
-            const currentOnly = sessions.filter((s) => s.isCurrent);
-            setSessions(currentOnly);
-            await appStorage.setItem('tcc.proctor.login_logs', JSON.stringify(currentOnly));
-            Alert.alert('Success', 'You are now signed out of all other devices.');
-          },
-        },
-      ],
-    );
-  };
-
-  // Log out of all devices (including this device)
-  const handleLogOutAllDevices = () => {
-    Alert.alert(
-      'Log Out Of All Devices',
-      'Are you sure you want to log out of all devices? This will sign you out of this phone and terminate all other active proctor sessions.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Log Out Everywhere',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await AuthRepository.logout();
-            } catch (err) {
-              console.warn('[PROCTOR] Logout all devices failed:', err);
-            }
-          },
-        },
-      ],
-    );
   };
 
   const handleSelectAvatar = async (color: string) => {
@@ -513,167 +409,6 @@ export default function ProctorAccountScreen() {
             onPress={handleChangePassword}
           />
         </View>
-
-        {/* 4. WHERE YOU'RE LOGGED IN (Login Activity & Logs - Same as Facebook) */}
-        <View style={styles.sectionHeaderRow}>
-          <Text
-            style={[styles.sectionHeading, { color: colors.textPrimary }]}
-            maxFontSizeMultiplier={fontMultiplier}
-          >
-            Where You're Logged In
-          </Text>
-          <Text
-            style={[styles.sectionSubBadge, { color: colors.textMuted }]}
-            maxFontSizeMultiplier={fontMultiplier}
-          >
-            Login Activity
-          </Text>
-        </View>
-
-        <View
-          style={[
-            styles.logsCard,
-            { backgroundColor: colors.card, borderColor: colors.cardBorder },
-          ]}
-        >
-          <Text
-            style={[styles.logsExplanation, { color: colors.textSecondary }]}
-            maxFontSizeMultiplier={fontMultiplier}
-          >
-            We help keep your examination sessions safe by monitoring signed-in devices.
-          </Text>
-
-          {sessions.map((sess, idx) => (
-            <View key={sess.id}>
-              {idx > 0 && (
-                <View style={[styles.sessionDivider, { backgroundColor: colors.cardBorder }]} />
-              )}
-              <View style={styles.sessionItem}>
-                <View
-                  style={[
-                    styles.deviceIconWrap,
-                    {
-                      backgroundColor: sess.isCurrent ? colors.successMuted : colors.accentMuted,
-                    },
-                  ]}
-                >
-                  {sess.device.includes('Apple') || sess.device.includes('Android') ? (
-                    <Smartphone
-                      size={20}
-                      color={sess.isCurrent ? colors.success : colors.accent}
-                    />
-                  ) : (
-                    <Laptop size={20} color={colors.accent} />
-                  )}
-                </View>
-
-                <View style={styles.sessionMeta}>
-                  <View style={styles.sessionDeviceRow}>
-                    <Text
-                      style={[styles.sessionDeviceName, { color: colors.textPrimary }]}
-                      numberOfLines={1}
-                      maxFontSizeMultiplier={fontMultiplier}
-                    >
-                      {sess.device}
-                    </Text>
-                    {sess.isCurrent && (
-                      <View
-                        style={[
-                          styles.activeNowBadge,
-                          { backgroundColor: colors.successMuted },
-                        ]}
-                      >
-                        <View
-                          style={[styles.activeDot, { backgroundColor: colors.success }]}
-                        />
-                        <Text
-                          style={[styles.activeNowText, { color: colors.success }]}
-                          maxFontSizeMultiplier={fontMultiplier}
-                        >
-                          Active now
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-
-                  <View style={styles.sessionDetailsRow}>
-                    <MapPin size={12} color={colors.textMuted} />
-                    <Text
-                      style={[styles.sessionDetailText, { color: colors.textSecondary }]}
-                      maxFontSizeMultiplier={fontMultiplier}
-                    >
-                      {sess.location} · {sess.ipAddress}
-                    </Text>
-                  </View>
-
-                  <View style={styles.sessionDetailsRow}>
-                    <Clock size={12} color={colors.textMuted} />
-                    <Text
-                      style={[styles.sessionDetailText, { color: colors.textMuted }]}
-                      maxFontSizeMultiplier={fontMultiplier}
-                    >
-                      {sess.time} · {sess.platform}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            </View>
-          ))}
-
-          {sessions.length > 1 && (
-            <Pressable
-              style={[styles.logOutOthersBtn, { borderColor: colors.danger }]}
-              onPress={handleLogOutOtherSessions}
-            >
-              <LogOut size={16} color={colors.danger} />
-              <Text
-                style={[styles.logOutOthersText, { color: colors.danger }]}
-                maxFontSizeMultiplier={fontMultiplier}
-              >
-                Log Out Of All Other Sessions
-              </Text>
-            </Pressable>
-          )}
-
-          <Pressable
-            style={[
-              styles.logOutOthersBtn,
-              {
-                borderColor: colors.danger,
-                marginTop: 8,
-              },
-            ]}
-            onPress={handleLogOutThisDevice}
-          >
-            <LogOut size={16} color={colors.danger} />
-            <Text
-              style={[styles.logOutOthersText, { color: colors.danger }]}
-              maxFontSizeMultiplier={fontMultiplier}
-            >
-              Sign Out of This Phone
-            </Text>
-          </Pressable>
-
-          <Pressable
-            style={[
-              styles.logOutOthersBtn,
-              {
-                backgroundColor: colors.dangerMuted,
-                borderColor: colors.danger,
-                marginTop: 8,
-              },
-            ]}
-            onPress={handleLogOutAllDevices}
-          >
-            <LogOut size={16} color={colors.danger} />
-            <Text
-              style={[styles.logOutOthersText, { color: colors.danger }]}
-              maxFontSizeMultiplier={fontMultiplier}
-            >
-              Log Out Of All Devices (Sign Out Everywhere)
-            </Text>
-          </Pressable>
-        </View>
       </ScrollView>
 
       {/* AVATAR COLOR SELECTOR MODAL */}
@@ -858,96 +593,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
     fontWeight: '500',
-  },
-
-  // Where You're Logged In Card
-  logsCard: {
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    gap: 12,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-  },
-  logsExplanation: {
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: '500',
-  },
-  sessionDivider: {
-    height: 1,
-    marginVertical: 10,
-  },
-  sessionItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  deviceIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  sessionMeta: {
-    flex: 1,
-    gap: 3,
-  },
-  sessionDeviceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 6,
-  },
-  sessionDeviceName: {
-    fontSize: 13,
-    fontWeight: '700',
-    flex: 1,
-  },
-  activeNowBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 999,
-  },
-  activeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  activeNowText: {
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  sessionDetailsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  sessionDetailText: {
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  logOutOthersBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginTop: 6,
-  },
-  logOutOthersText: {
-    fontSize: 12,
-    fontWeight: '700',
   },
 
   // Modal

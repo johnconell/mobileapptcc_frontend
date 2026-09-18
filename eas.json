@@ -11,8 +11,8 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://metccapi.repohive.com/api/v1",
-        "EXPO_PUBLIC_CLOUD_API_URL": "https://metccapi.repohive.com/api/v1",
+        "EXPO_PUBLIC_API_URL": "https://api.masterexam.pro/api/v1",
+        "EXPO_PUBLIC_CLOUD_API_URL": "https://api.masterexam.pro/api/v1",
         "EXPO_PUBLIC_SYNC_TOKEN": "metcc-lan-sync-secret"
       },
       "channel": "development"
@@ -23,8 +23,8 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://metccapi.repohive.com/api/v1",
-        "EXPO_PUBLIC_CLOUD_API_URL": "https://metccapi.repohive.com/api/v1",
+        "EXPO_PUBLIC_API_URL": "https://api.masterexam.pro/api/v1",
+        "EXPO_PUBLIC_CLOUD_API_URL": "https://api.masterexam.pro/api/v1",
         "EXPO_PUBLIC_SYNC_TOKEN": "metcc-lan-sync-secret"
       },
       "channel": "preview"
@@ -36,8 +36,8 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://metccapi.repohive.com/api/v1",
-        "EXPO_PUBLIC_CLOUD_API_URL": "https://metccapi.repohive.com/api/v1",
+        "EXPO_PUBLIC_API_URL": "https://api.masterexam.pro/api/v1",
+        "EXPO_PUBLIC_CLOUD_API_URL": "https://api.masterexam.pro/api/v1",
         "EXPO_PUBLIC_SYNC_TOKEN": "metcc-lan-sync-secret"
       }
     },
@@ -47,8 +47,8 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://metccapi.repohive.com/api/v1",
-        "EXPO_PUBLIC_CLOUD_API_URL": "https://metccapi.repohive.com/api/v1",
+        "EXPO_PUBLIC_API_URL": "https://api.masterexam.pro/api/v1",
+        "EXPO_PUBLIC_CLOUD_API_URL": "https://api.masterexam.pro/api/v1",
         "EXPO_PUBLIC_SYNC_TOKEN": "metcc-lan-sync-secret"
       },
       "channel": "production-store"

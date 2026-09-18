@@ -11,11 +11,9 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { X } from 'lucide-react-native';
 import { CampusWifiBlockedCard } from '@/features/monitoring/components/CampusWifiBlockedCard';
 import { useCampusWifiJoinGate } from '@/features/monitoring/hooks/useCampusWifiJoinGate';
 import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
@@ -46,11 +44,10 @@ const codeSchema = z.object({
 type CodeForm = z.infer<typeof codeSchema>;
 type JoinMode = 'scan' | 'code';
 
-const FRAME = Math.min(Dimensions.get('window').width * 0.68, 260);
+const FRAME = Math.min(Dimensions.get('window').width * 0.72, 280);
 
 export default function JoinExaminationScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ mode?: string }>();
   const initialMode: JoinMode = params.mode === 'code' ? 'code' : 'scan';
   const [mode, setMode] = useState<JoinMode>(initialMode);
@@ -252,259 +249,125 @@ export default function JoinExaminationScreen() {
     );
   }
 
-  if (mode === 'code') {
-    return (
-      <KeyboardAvoidingView
-        style={styles.codeRoot}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <ExamProcessChrome
-          step={0}
-          title="Enter Examination Code"
-          stepLabel="Step 1 of 6 · Join"
-          onBack={close}
-          backLabel="Cancel"
-        >
-          <Text style={styles.codeIntro}>
-            Type the room code from your proctor if the camera is unavailable.
-          </Text>
-          {modeToggle}
-          <Text style={styles.fieldLabel}>Examination Code</Text>
-          <Controller
-            control={control}
-            name="code"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextInput
-                style={[styles.codeInput, Boolean(errors.code) && styles.inputInvalid]}
-                placeholder="K7M2P9QX"
-                placeholderTextColor={examProcess.muted}
-                autoCapitalize="characters"
-                autoCorrect={false}
-                value={value}
-                onChangeText={(text) => onChange(text.toUpperCase())}
-                onBlur={onBlur}
-                onSubmitEditing={onVerifyCode}
-              />
-            )}
-          />
-          {errors.code?.message ? <Text style={styles.error}>{errors.code.message}</Text> : null}
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-          <ExamProcessActions>
-            <ExamProcessButton
-              title={isSubmitting || busy ? 'Verifying…' : 'Continue'}
-              loading={isSubmitting || busy}
-              onPress={onVerifyCode}
-            />
-          </ExamProcessActions>
-        </ExamProcessChrome>
-      </KeyboardAvoidingView>
-    );
-  }
-
   const cameraReady = Boolean(permission?.granted);
+  const title = mode === 'code' ? 'Enter Examination Code' : 'Scan QR Code';
+  const intro =
+    mode === 'code'
+      ? 'Type the room code from your proctor if the camera is unavailable.'
+      : 'Scan the proctor QR code shown in the examination room.';
 
   return (
     <KeyboardAvoidingView
       style={styles.root}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <View style={styles.root}>
-        {cameraReady ? (
-          <CameraView
-            style={StyleSheet.absoluteFill}
-            facing="back"
-            barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-            onBarcodeScanned={
-              scanning && !busy
-                ? ({ data }) => {
-                    void handlePayload(data);
-                  }
-                : undefined
-            }
-          />
+      <ExamProcessChrome
+        step={0}
+        title={title}
+        stepLabel="Step 1 of 6 · Join"
+        onBack={close}
+        backLabel="Cancel"
+      >
+        <Text style={styles.intro}>{intro}</Text>
+        {modeToggle}
+
+        {mode === 'code' ? (
+          <>
+            <Text style={styles.fieldLabel}>Examination Code</Text>
+            <Controller
+              control={control}
+              name="code"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <TextInput
+                  style={[styles.codeInput, Boolean(errors.code) && styles.inputInvalid]}
+                  placeholder="K7M2P9QX"
+                  placeholderTextColor={examProcess.muted}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  value={value}
+                  onChangeText={(text) => onChange(text.toUpperCase())}
+                  onBlur={onBlur}
+                  onSubmitEditing={onVerifyCode}
+                />
+              )}
+            />
+            {errors.code?.message ? <Text style={styles.error}>{errors.code.message}</Text> : null}
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            <ExamProcessActions>
+              <ExamProcessButton
+                title={isSubmitting || busy ? 'Verifying…' : 'Continue'}
+                loading={isSubmitting || busy}
+                onPress={onVerifyCode}
+              />
+            </ExamProcessActions>
+          </>
         ) : (
-          <View style={[StyleSheet.absoluteFill, styles.fallbackBg]} />
+          <>
+            <View style={styles.qrCard}>
+              <View style={styles.cameraFrame}>
+                {cameraReady ? (
+                  <CameraView
+                    style={StyleSheet.absoluteFill}
+                    facing="back"
+                    barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                    onBarcodeScanned={
+                      scanning && !busy
+                        ? ({ data }) => {
+                            void handlePayload(data);
+                          }
+                        : undefined
+                    }
+                  />
+                ) : (
+                  <View style={[StyleSheet.absoluteFill, styles.cameraFallback]}>
+                    {!permission ? (
+                      <Text style={styles.cameraFallbackText}>Checking camera permission…</Text>
+                    ) : (
+                      <>
+                        <Text style={styles.cameraFallbackTitle}>Camera access required</Text>
+                        <Text style={styles.cameraFallbackText}>
+                          Allow camera access to scan the proctor QR, or switch to Enter code.
+                        </Text>
+                      </>
+                    )}
+                  </View>
+                )}
+                {cameraReady ? <View style={styles.viewfinderRing} pointerEvents="none" /> : null}
+              </View>
+            </View>
+
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+
+            {__DEV__ ? (
+              <Pressable style={styles.devBtn} onPress={() => void simulateScan()}>
+                <Text style={styles.devBtnText}>{busy ? '…' : 'Simulate scan'}</Text>
+              </Pressable>
+            ) : null}
+
+            {!permission?.granted ? (
+              <ExamProcessActions>
+                <ExamProcessButton title="Allow Camera" onPress={requestPermission} />
+              </ExamProcessActions>
+            ) : busy ? (
+              <ExamProcessActions>
+                <ExamProcessButton title="Scanning…" loading disabled onPress={() => undefined} />
+              </ExamProcessActions>
+            ) : null}
+          </>
         )}
-
-        <View style={styles.mask} pointerEvents="none">
-          <View style={styles.maskTop}>
-            <Text style={styles.heroTitle}>Scan QR Code</Text>
-            <Text style={styles.heroSub}>
-              Scan the proctor QR code shown in the examination room.
-            </Text>
-          </View>
-          <View style={styles.maskMiddle}>
-            <View style={styles.maskSide} />
-            <View style={styles.viewfinder} />
-            <View style={styles.maskSide} />
-          </View>
-          <View style={styles.maskBottom} />
-        </View>
-
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Close"
-          onPress={close}
-          style={[styles.closeBtn, { top: Math.max(insets.top, 12) + 4 }]}
-        >
-          <X size={18} color={examProcess.white} strokeWidth={2.5} />
-        </Pressable>
-
-        {!permission ? (
-          <View style={styles.centerNotice}>
-            <Text style={styles.noticeText}>Checking camera permission…</Text>
-          </View>
-        ) : null}
-        {permission && !permission.granted ? (
-          <View style={styles.centerNotice}>
-            <Text style={styles.noticeTitle}>Camera access required</Text>
-            <Text style={styles.noticeText}>
-              Allow camera access to scan the proctor QR, or switch to Enter code.
-            </Text>
-            <Pressable style={styles.continueBtn} onPress={requestPermission}>
-              <Text style={styles.continueBtnText}>Allow Camera</Text>
-            </Pressable>
-          </View>
-        ) : null}
-        {error ? (
-          <View style={[styles.scanErrorWrap, { bottom: 110 + Math.max(insets.bottom, 12) }]}>
-            <Text style={styles.scanError}>{error}</Text>
-          </View>
-        ) : null}
-
-        {__DEV__ ? (
-          <Pressable
-            style={[styles.devBtn, { bottom: 110 + Math.max(insets.bottom, 12) }]}
-            onPress={() => void simulateScan()}
-          >
-            <Text style={styles.devBtnText}>{busy ? '…' : 'Simulate scan'}</Text>
-          </Pressable>
-        ) : null}
-
-        <View
-          style={[
-            styles.toggleWrap,
-            { paddingBottom: Math.max(insets.bottom, 16) },
-          ]}
-        >
-          <View style={styles.togglePill}>
-            <Pressable style={[styles.toggleSeg, styles.toggleSegOn]}>
-              <Text style={[styles.toggleText, styles.toggleTextOn]}>Scan QR</Text>
-            </Pressable>
-            <Pressable
-              style={styles.toggleSeg}
-              onPress={() => {
-                setMode('code');
-                setError(null);
-              }}
-            >
-              <Text style={styles.toggleText}>Enter code</Text>
-            </Pressable>
-          </View>
-        </View>
-      </View>
+      </ExamProcessChrome>
     </KeyboardAvoidingView>
   );
 }
 
-const DIM = 'rgba(44, 36, 28, 0.55)';
-
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#1A1410' },
-  codeRoot: { flex: 1, backgroundColor: examProcess.pageBg },
-  fallbackBg: { backgroundColor: '#2C241C' },
-  mask: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  maskTop: {
-    flex: 1,
-    backgroundColor: DIM,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    paddingHorizontal: 28,
-    paddingBottom: 22,
-  },
-  maskMiddle: {
-    height: FRAME,
-    flexDirection: 'row',
-  },
-  maskSide: {
-    flex: 1,
-    backgroundColor: DIM,
-  },
-  viewfinder: {
-    width: FRAME,
-    height: FRAME,
-    borderRadius: 22,
-    borderWidth: 2,
-    borderColor: examProcess.white,
-    backgroundColor: 'transparent',
-  },
-  maskBottom: {
-    flex: 1.15,
-    backgroundColor: DIM,
-  },
-  heroTitle: {
-    color: examProcess.white,
-    fontSize: 24,
-    fontFamily: examProcess.fontSemiBold,
-    textAlign: 'center',
-  },
-  heroSub: {
-    marginTop: 8,
-    color: 'rgba(255,255,255,0.88)',
+  root: { flex: 1, backgroundColor: examProcess.pageBg },
+  intro: {
     fontSize: 14,
     lineHeight: 21,
-    textAlign: 'center',
-    maxWidth: 300,
+    color: examProcess.muted,
+    marginBottom: 12,
     fontFamily: examProcess.fontRegular,
-  },
-  closeBtn: {
-    position: 'absolute',
-    left: 16,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 5,
-  },
-  toggleWrap: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    zIndex: 5,
-  },
-  togglePill: {
-    flexDirection: 'row',
-    width: '100%',
-    maxWidth: 340,
-    borderRadius: 999,
-    padding: 4,
-    backgroundColor: 'rgba(255,253,248,0.88)',
-  },
-  toggleSeg: {
-    flex: 1,
-    minHeight: 44,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-  },
-  toggleSegOn: {
-    backgroundColor: examProcess.accent,
-  },
-  toggleText: {
-    fontSize: 14,
-    fontFamily: examProcess.fontMedium,
-    color: examProcess.ink,
-  },
-  toggleTextOn: {
-    color: examProcess.white,
   },
   modeToggle: {
     flexDirection: 'row',
@@ -532,13 +395,6 @@ const styles = StyleSheet.create({
   modeTextOn: {
     color: examProcess.white,
   },
-  codeIntro: {
-    fontSize: 14,
-    lineHeight: 21,
-    color: examProcess.muted,
-    marginBottom: 12,
-    fontFamily: examProcess.fontRegular,
-  },
   fieldLabel: {
     fontSize: 14,
     fontFamily: examProcess.fontMedium,
@@ -565,71 +421,59 @@ const styles = StyleSheet.create({
     marginTop: 6,
     lineHeight: 18,
   },
-  continueBtn: {
-    marginTop: 6,
-    backgroundColor: examProcess.accent,
+  qrCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: examProcess.inputBg,
+    borderWidth: 1,
+    borderColor: examProcess.inputBorder,
     borderRadius: examProcess.radiusControl,
-    minHeight: 46,
+    padding: 12,
+  },
+  cameraFrame: {
+    width: FRAME,
+    height: FRAME,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#1A1410',
+  },
+  cameraFallback: {
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 20,
+    gap: 8,
+    backgroundColor: '#2C241C',
   },
-  continueBtnText: {
+  cameraFallbackTitle: {
     color: examProcess.white,
-    fontSize: 15,
-    fontFamily: examProcess.fontSemiBold,
-  },
-  centerNotice: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-    gap: 10,
-    backgroundColor: 'rgba(44, 36, 28, 0.55)',
-  },
-  noticeTitle: {
-    color: examProcess.white,
-    fontSize: 18,
+    fontSize: 16,
     fontFamily: examProcess.fontSemiBold,
     textAlign: 'center',
   },
-  noticeText: {
+  cameraFallbackText: {
     color: 'rgba(255,255,255,0.9)',
-    fontSize: 14,
-    lineHeight: 21,
+    fontSize: 13,
+    lineHeight: 19,
     textAlign: 'center',
     fontFamily: examProcess.fontRegular,
   },
-  scanErrorWrap: {
-    position: 'absolute',
-    left: 24,
-    right: 24,
-    zIndex: 4,
-  },
-  scanError: {
-    color: examProcess.white,
-    backgroundColor: 'rgba(122, 31, 43, 0.9)',
-    textAlign: 'center',
-    fontFamily: examProcess.fontMedium,
-    fontSize: 13,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
-    overflow: 'hidden',
+  viewfinderRing: {
+    ...StyleSheet.absoluteFillObject,
+    margin: 14,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.85)',
   },
   devBtn: {
-    position: 'absolute',
+    marginTop: 12,
     alignSelf: 'center',
-    left: 24,
-    right: 24,
-    paddingVertical: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: 10,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    alignItems: 'center',
-    zIndex: 4,
+    backgroundColor: examProcess.cardElevated,
   },
   devBtnText: {
-    color: examProcess.white,
+    color: examProcess.ink,
     fontSize: 12,
     fontFamily: examProcess.fontMedium,
   },

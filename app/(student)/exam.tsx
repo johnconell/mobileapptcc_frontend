@@ -6,20 +6,29 @@ import {
   Text,
   View,
   StyleSheet,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
+  LayoutChangeEvent,
 } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { CloudUpload, Moon, Sun, Type, Shield } from 'lucide-react-native';
+import {
+  ArrowLeft,
+  CloudUpload,
+  MoreVertical,
+  Shield,
+  Type,
+  Moon,
+  Sun,
+} from 'lucide-react-native';
 import { ConfirmationModal, CountdownTimer, QuestionCard } from '@/shared/components/ui';
 import { ExamSecurityOverlay } from '@/features/examinations/components/ExamSecurityOverlay';
 import { ExamWifiDisconnectOverlay } from '@/features/examinations/components/ExamWifiDisconnectOverlay';
 import {
-  ExamCategoryNav,
   buildCategoryProgress,
   type CategoryProgress,
 } from '@/features/examinations/components/ExamCategoryNav';
-import { ExamProcessStepper } from '@/features/examinations/components/ExamProcessStepper';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
 import { useExamTimer } from '@/features/examinations/hooks/useExamTimer';
@@ -33,11 +42,15 @@ import { PeerExamClient } from '@/features/examinations/services/peerExamClient'
 import { parseStartPulse } from '@/features/examinations/services/examStartCoordinator';
 import { playExamTimeWarning } from '@/features/examinations/services/examTimeWarning';
 import { examProcess } from '@/shared/theme/examProcess';
-import type { ChoiceKey } from '@/shared/types';
+import type { ChoiceKey, Question } from '@/shared/types';
 
 const FONT_MIN = 0.9;
 const FONT_MAX = 1.35;
 const FONT_STEP = 0.1;
+
+function categoryKeyOf(question: Question): string {
+  return (question.category || question.subjectId || 'General').trim() || 'General';
+}
 
 export default function ExamScreen() {
   useKeepAwake();
@@ -45,15 +58,18 @@ export default function ExamScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
-  const categoryY = useRef<Record<string, number>>({});
+  const questionY = useRef<Record<string, number>>({});
   const [incompleteOpen, setIncompleteOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const [reconnectLoading, setReconnectLoading] = useState(false);
   const [reconnectError, setReconnectError] = useState<string | null>(null);
   const [roomEnded, setRoomEnded] = useState(false);
-  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
   const [fontScale, setFontScale] = useState(1);
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(true);
   const restoredRef = useRef(false);
   const lowTimeWarnedRef = useRef(false);
   const autoSubmittedRef = useRef(false);
@@ -81,11 +97,31 @@ export default function ExamScreen() {
     [questions, answers],
   );
 
-  useEffect(() => {
-    if (!activeCategory && categories[0]) {
-      setActiveCategory(categories[0].key);
-    }
-  }, [categories, activeCategory]);
+  const questionsByCategory = useMemo(() => {
+    const map = new Map<string, Array<{ question: Question; index: number }>>();
+    questions.forEach((question, index) => {
+      const key = categoryKeyOf(question);
+      const list = map.get(key) ?? [];
+      list.push({ question, index });
+      map.set(key, list);
+    });
+    return map;
+  }, [questions]);
+
+  const answered = answeredCount();
+  const total = questions.length;
+  const progressPct = total > 0 ? Math.round((answered / total) * 100) : 0;
+  const safeIndex = Math.min(Math.max(0, activeIndex), Math.max(0, questions.length - 1));
+  const activeQuestion = questions[safeIndex] ?? null;
+  const activeCategoryKey = activeQuestion ? categoryKeyOf(activeQuestion) : categories[0]?.key;
+  const activeCategory = categories.find((c) => c.key === activeCategoryKey) ?? categories[0];
+
+  const localNumberInCategory = useMemo(() => {
+    if (!activeQuestion || !activeCategoryKey) return 1;
+    const list = questionsByCategory.get(activeCategoryKey) ?? [];
+    const found = list.findIndex((item) => item.question.id === activeQuestion.id);
+    return found >= 0 ? found + 1 : 1;
+  }, [activeQuestion, activeCategoryKey, questionsByCategory]);
 
   useEffect(() => {
     console.log('[STUDENT] Exam Screen Opened');
@@ -93,7 +129,6 @@ export default function ExamScreen() {
     void LobbyRepository.acknowledgeStart('entered');
   }, []);
 
-  // Flush local checkpoint when the browser tab is hidden/closed so resume works.
   useEffect(() => {
     if (typeof document === 'undefined') return;
     const flush = () => {
@@ -120,7 +155,6 @@ export default function ExamScreen() {
   }, []);
 
   const onWifiDisconnect = useCallback((reason: 'wifi_lost' | 'proctor_network_change') => {
-    // Do not mark / penalize the examinee when the proctor phone changed networks.
     if (reason === 'proctor_network_change') return;
     void LobbyRepository.reportWifiDisconnect();
   }, []);
@@ -380,8 +414,6 @@ export default function ExamScreen() {
     if (questions.length > 0 && (remainingSeconds <= 0 || ended)) {
       autoSubmittedRef.current = true;
       if (ended) {
-        // Prefer a hard exit home when the room is over — avoids submit loops
-        // while the proctor phone is already offline.
         void leaveEndedExam();
       } else {
         goSubmit('time_expired');
@@ -396,182 +428,410 @@ export default function ExamScreen() {
     return `${nums.slice(0, 12).join(', ')}… (+${nums.length - 12} more)`;
   }, [answers, questions, unansweredNumbers]);
 
-  const jumpToCategory = useCallback((category: CategoryProgress) => {
-    setActiveCategory(category.key);
-    const y = categoryY.current[category.key];
-    if (typeof y === 'number') {
-      scrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true });
-    }
-  }, []);
+  const scrollToIndex = useCallback(
+    (index: number, animated = true) => {
+      const q = questions[index];
+      if (!q) return;
+      setActiveIndex(index);
+      const y = questionY.current[q.id];
+      if (typeof y === 'number') {
+        scrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated });
+      }
+    },
+    [questions],
+  );
 
-  const jumpNextCategory = useCallback(() => {
-    if (!categories.length) return;
-    const idx = Math.max(
-      0,
-      categories.findIndex((c) => c.key === activeCategory),
-    );
-    const next = categories[Math.min(idx + 1, categories.length - 1)];
-    if (next) jumpToCategory(next);
-  }, [categories, activeCategory, jumpToCategory]);
+  const openPicker = useCallback(() => {
+    setExpandedCategory(activeCategoryKey ?? categories[0]?.key ?? null);
+    setPickerOpen(true);
+  }, [activeCategoryKey, categories]);
+
+  const onScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const y = event.nativeEvent.contentOffset.y + 80;
+      let nearest = 0;
+      let best = Number.POSITIVE_INFINITY;
+      questions.forEach((q, index) => {
+        const top = questionY.current[q.id];
+        if (typeof top !== 'number') return;
+        const dist = Math.abs(top - y);
+        if (dist < best) {
+          best = dist;
+          nearest = index;
+        }
+      });
+      if (nearest !== activeIndex) setActiveIndex(nearest);
+    },
+    [questions, activeIndex],
+  );
+
+  const jumpToFirstUnanswered = useCallback(() => {
+    const idx = questions.findIndex((q) => !answers[q.id]?.selectedAnswer);
+    if (idx >= 0) {
+      setIncompleteOpen(false);
+      setPickerOpen(false);
+      scrollToIndex(idx);
+    }
+  }, [questions, answers, scrollToIndex]);
 
   if (!questions.length) return null;
 
   const appearance = { fontScale, darkMode };
-  const screenBg = darkMode ? '#0B0F14' : examProcess.pageBg;
-  const ink = darkMode ? '#F3F4F6' : examProcess.ink;
-  const muted = darkMode ? '#9CA3AF' : examProcess.muted;
+  const screenBg = darkMode ? '#0A0A0A' : examProcess.pageBg;
+  const ink = darkMode ? '#F4F4F5' : examProcess.ink;
+  const muted = darkMode ? '#A1A1AA' : examProcess.muted;
+  const barBg = darkMode ? '#141414' : examProcess.cardBg;
+  const barBorder = darkMode ? '#2A2A2A' : examProcess.cardBorder;
+  const pillBg = darkMode ? '#1C1C1E' : '#FFFFFF';
+  const pickerBg = darkMode ? '#0A0A0A' : examProcess.pageBg;
+  const chapterIdleBg = darkMode ? '#1C1C1E' : '#FFFFFF';
+  const chapterDoneBg = darkMode ? '#1F3A2A' : examProcess.okBg;
+  const chapterDoneInk = darkMode ? '#86EFAC' : examProcess.okText;
+  const bookExpandedBg = darkMode
+    ? 'rgba(122, 31, 43, 0.35)'
+    : examProcess.accentSoft;
 
   return (
-    <View style={[styles.screen, { paddingTop: Math.max(insets.top, 8), backgroundColor: screenBg }]}>
+    <View style={[styles.screen, { paddingTop: Math.max(insets.top, 6), backgroundColor: screenBg }]}>
+      {/* Compact top chrome — Bible-app style */}
       <View style={styles.topBar}>
-        <ExamProcessStepper step={4} />
-        <Text style={[styles.stepLabel, { color: muted }]}>Step 5 of 6 · Exam</Text>
-        <View style={styles.titleRow}>
-          <Text style={[styles.title, { color: ink }]}>Entrance Examination</Text>
-          <View style={styles.headerRight}>
-            <View style={styles.secureBadge}>
-              <Shield size={12} color={examProcess.accent} />
-              <Text style={styles.secureText}>{`${violationCount}/${maxViolations}`}</Text>
-            </View>
-            <CountdownTimer remainingSeconds={remainingSeconds} compact warningThreshold={10} />
+        <View style={styles.topIcons}>
+          <CountdownTimer remainingSeconds={remainingSeconds} compact warningThreshold={300} />
+          <View style={styles.secureBadge}>
+            <Shield size={12} color={darkMode ? '#C45C6A' : examProcess.accent} />
+            <Text style={[styles.secureText, darkMode && { color: '#C45C6A' }]}>
+              {`${violationCount}/${maxViolations}`}
+            </Text>
+          </View>
+          <Pressable
+            style={styles.iconBtn}
+            onPress={() => setDarkMode((v) => !v)}
+            disabled={paused}
+            accessibilityLabel={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {darkMode ? (
+              <Sun size={18} color="#FBBF24" />
+            ) : (
+              <Moon size={18} color={examProcess.accent} />
+            )}
+          </Pressable>
+          <Pressable
+            style={styles.iconBtn}
+            onPress={() => setSettingsOpen(true)}
+            disabled={paused}
+            accessibilityLabel="Reading settings"
+          >
+            <Type size={18} color={muted} />
+          </Pressable>
+          <Pressable
+            style={styles.iconBtn}
+            onPress={requestSubmit}
+            disabled={paused}
+            accessibilityLabel="Submit examination"
+          >
+            <MoreVertical size={18} color={muted} />
+          </Pressable>
+        </View>
+
+        <View style={styles.progressMeta}>
+          <Text style={[styles.progressText, { color: muted }]}>
+            {answered}/{total} answered · {progressPct}%
+          </Text>
+          <View style={styles.saveRow}>
+            <CloudUpload size={12} color={darkMode ? '#6FBF8A' : examProcess.okText} />
+            <Text style={[styles.saveText, { color: muted }]}>
+              {autoSavedAt
+                ? `Saved ${new Date(autoSavedAt).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}`
+                : 'Saving…'}
+            </Text>
           </View>
         </View>
-        {remainingSeconds <= 10 && remainingSeconds > 0 ? (
+
+        {remainingSeconds <= 60 && remainingSeconds > 0 ? (
           <View style={styles.timeWarn}>
             <Text style={styles.timeWarnText}>
-              {`${remainingSeconds} second${remainingSeconds === 1 ? '' : 's'} remaining`}
+              {remainingSeconds <= 10
+                ? `${remainingSeconds}s remaining`
+                : 'Less than 1 minute remaining'}
             </Text>
           </View>
         ) : null}
-        <View style={styles.saveRow}>
-          <CloudUpload size={14} color={examProcess.okText} />
-          <Text style={[styles.saveText, { color: muted }]}>
-            {`${answeredCount()} of ${questions.length} answered${
-              autoSavedAt
-                ? ` · Auto-saved ${new Date(autoSavedAt).toLocaleTimeString()}`
-                : ''
-            }`}
-          </Text>
-        </View>
-
-        <View style={[styles.settingsPanel, darkMode && styles.settingsPanelDark]}>
-          <View style={styles.settingsGroup}>
-            <Type size={14} color={darkMode ? '#93C5FD' : examProcess.accent} />
-            <Text style={[styles.settingsLabel, { color: ink }]}>Text</Text>
-            <Pressable
-              style={styles.settingsBtn}
-              onPress={() => setFontScale((v) => Math.max(FONT_MIN, Number((v - FONT_STEP).toFixed(2))))}
-              disabled={paused || fontScale <= FONT_MIN}
-            >
-              <Text style={styles.settingsBtnText}>A−</Text>
-            </Pressable>
-            <Pressable
-              style={styles.settingsBtn}
-              onPress={() => setFontScale((v) => Math.min(FONT_MAX, Number((v + FONT_STEP).toFixed(2))))}
-              disabled={paused || fontScale >= FONT_MAX}
-            >
-              <Text style={styles.settingsBtnText}>A+</Text>
-            </Pressable>
-          </View>
-          <Pressable
-            style={styles.settingsGroup}
-            onPress={() => setDarkMode((v) => !v)}
-            disabled={paused}
-          >
-            {darkMode ? (
-              <Sun size={14} color="#FBBF24" />
-            ) : (
-              <Moon size={14} color={examProcess.accent} />
-            )}
-            <Text style={[styles.settingsLabel, { color: ink }]}>
-              {darkMode ? 'Day mode' : 'Night mode'}
-            </Text>
-          </Pressable>
-        </View>
       </View>
 
-      <ExamCategoryNav
-        categories={categories}
-        activeKey={activeCategory}
-        onSelect={jumpToCategory}
-      />
-
+      {/* Continuous scroll — like reading verses */}
       <ScrollView
         ref={scrollRef}
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator
+        style={styles.scroll}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: Math.max(insets.bottom, 12) + 88 },
+        ]}
+        showsVerticalScrollIndicator={false}
         scrollEnabled={!paused}
         keyboardShouldPersistTaps="handled"
+        onScroll={onScroll}
+        scrollEventThrottle={48}
       >
         {questions.map((question, index) => {
-          const categoryKey =
-            (question.category || question.subjectId || 'General').trim() || 'General';
-          const prevCategory =
-            index > 0
-              ? (questions[index - 1]?.category ||
-                  questions[index - 1]?.subjectId ||
-                  'General'
-                ).trim() || 'General'
+          const key = categoryKeyOf(question);
+          const prevKey =
+            index > 0 ? categoryKeyOf(questions[index - 1]!) : null;
+          const nextKey =
+            index < questions.length - 1
+              ? categoryKeyOf(questions[index + 1]!)
               : null;
-          const showCategory = categoryKey !== prevCategory;
+          const showHeading = key !== prevKey;
+          const endOfCategory = key !== nextKey;
           return (
             <View
               key={question.id}
-              style={styles.questionBlock}
-              onLayout={(event) => {
-                if (showCategory) {
-                  categoryY.current[categoryKey] = event.nativeEvent.layout.y;
-                }
+              onLayout={(event: LayoutChangeEvent) => {
+                questionY.current[question.id] = event.nativeEvent.layout.y;
               }}
+              style={[
+                styles.questionBlock,
+                endOfCategory && styles.questionBlockCategoryEnd,
+              ]}
             >
-              {showCategory ? (
-                <View style={styles.categoryHeadingRow}>
-                  <Text style={styles.categoryHeading}>{categoryKey}</Text>
-                  <Text style={styles.categoryMeta}>
-                    {categories.find((c) => c.key === categoryKey)
-                      ? `${categories.find((c) => c.key === categoryKey)!.answered}/${
-                          categories.find((c) => c.key === categoryKey)!.total
-                        }`
-                      : null}
-                  </Text>
-                </View>
+              {showHeading ? (
+                <Text style={[styles.sectionHeading, { color: muted }]}>{key}</Text>
               ) : null}
               <QuestionCard
                 question={question}
                 selectedAnswer={answers[question.id]?.selectedAnswer ?? null}
                 secure
                 appearance={appearance}
+                readerMode
                 onSelect={(choice: ChoiceKey) => {
                   if (paused) return;
                   selectAnswer(question.id, choice);
-                  setActiveCategory(categoryKey);
+                  setActiveIndex(index);
                   if (verifiedStudent?.id) {
                     void LobbyRepository.touchActivity(verifiedStudent.id);
                   }
                 }}
               />
+              {endOfCategory ? (
+                <View style={styles.categoryEnd}>
+                  <View
+                    style={[styles.categoryEndLine, { backgroundColor: barBorder }]}
+                  />
+                  <Text style={[styles.categoryEndText, { color: muted }]}>
+                    End of {key}
+                  </Text>
+                  <View
+                    style={[styles.categoryEndLine, { backgroundColor: barBorder }]}
+                  />
+                </View>
+              ) : null}
             </View>
           );
         })}
 
-        <View style={styles.submitBlock}>
-          {categories.length > 1 ? (
-            <Pressable style={styles.nextCategory} onPress={jumpNextCategory} disabled={paused}>
-              <Text style={styles.nextCategoryText}>Next category</Text>
-            </Pressable>
-          ) : null}
+        <View style={styles.endBlock}>
           <Pressable
-            style={[styles.submitBtn, paused && styles.submitDisabled]}
+            style={[styles.submitPill, paused && styles.disabled]}
             disabled={paused}
             onPress={requestSubmit}
           >
-            <Text style={styles.submitBtnText}>Submit Examination</Text>
+            <Text style={styles.submitPillText}>Submit Examination</Text>
           </Pressable>
-          <Text style={styles.submitHint}>
-            Jump categories above, then submit when every question is answered.
+          <Text style={[styles.endHint, { color: muted }]}>
+            Scroll through questions, or tap the category below to jump.
           </Text>
         </View>
       </ScrollView>
+
+      {/* Floating category button — YouVersion style */}
+      <View
+        pointerEvents="box-none"
+        style={[
+          styles.floatingDock,
+          { paddingBottom: Math.max(insets.bottom, 14) },
+        ]}
+      >
+        <Pressable
+          style={[
+            styles.categoryPill,
+            {
+              backgroundColor: pillBg,
+              borderColor: barBorder,
+              shadowColor: darkMode ? '#000' : '#2C241C',
+            },
+          ]}
+          onPress={openPicker}
+          disabled={paused}
+          accessibilityLabel="Choose category and question"
+        >
+          <Text style={[styles.categoryPillText, { color: ink }]} numberOfLines={1}>
+            {activeCategory?.label || 'Questions'} {localNumberInCategory}
+          </Text>
+        </Pressable>
+      </View>
+
+      {/* Category + question grid picker (Books / chapters style) */}
+      <Modal
+        visible={pickerOpen}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setPickerOpen(false)}
+      >
+        <View
+          style={[
+            styles.pickerScreen,
+            { paddingTop: Math.max(insets.top, 10), backgroundColor: pickerBg },
+          ]}
+        >
+          <View style={styles.pickerHeader}>
+            <Pressable
+              style={styles.iconBtn}
+              onPress={() => setPickerOpen(false)}
+              accessibilityLabel="Back"
+            >
+              <ArrowLeft size={22} color={ink} />
+            </Pressable>
+            <Text style={[styles.pickerTitle, { color: ink }]}>Categories</Text>
+            <View style={{ width: 40 }} />
+          </View>
+
+          <ScrollView
+            contentContainerStyle={styles.pickerList}
+            showsVerticalScrollIndicator={false}
+          >
+            {categories.map((category: CategoryProgress) => {
+              const expanded = expandedCategory === category.key;
+              const items = questionsByCategory.get(category.key) ?? [];
+              return (
+                <View key={category.key}>
+                  <Pressable
+                    style={[
+                      styles.bookRow,
+                      expanded && { backgroundColor: bookExpandedBg },
+                    ]}
+                    onPress={() =>
+                      setExpandedCategory((cur) =>
+                        cur === category.key ? null : category.key,
+                      )
+                    }
+                  >
+                    <Text style={[styles.bookLabel, { color: ink }]}>{category.label}</Text>
+                    <Text style={[styles.bookMeta, { color: muted }]}>
+                      {category.answered}/{category.total}
+                    </Text>
+                  </Pressable>
+
+                  {expanded ? (
+                    <View style={styles.chapterGrid}>
+                      {items.map(({ question, index }, localIdx) => {
+                        const done = Boolean(answers[question.id]?.selectedAnswer);
+                        const current = index === safeIndex;
+                        return (
+                          <Pressable
+                            key={question.id}
+                            onPress={() => {
+                              setPickerOpen(false);
+                              requestAnimationFrame(() => scrollToIndex(index));
+                            }}
+                            style={[
+                              styles.chapterCell,
+                              {
+                                backgroundColor: current
+                                  ? '#FFFFFF'
+                                  : done
+                                    ? chapterDoneBg
+                                    : chapterIdleBg,
+                              },
+                              !darkMode && !current && {
+                                borderWidth: StyleSheet.hairlineWidth,
+                                borderColor: examProcess.cardBorder,
+                              },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.chapterText,
+                                {
+                                  color: current
+                                    ? '#111111'
+                                    : done
+                                      ? chapterDoneInk
+                                      : ink,
+                                },
+                              ]}
+                            >
+                              {localIdx + 1}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  ) : null}
+                </View>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Settings */}
+      <Modal
+        visible={settingsOpen}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setSettingsOpen(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setSettingsOpen(false)}>
+          <Pressable
+            style={[styles.settingsSheet, { backgroundColor: barBg, borderColor: barBorder }]}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <Text style={[styles.modalTitle, { color: ink }]}>Reading comfort</Text>
+            <View style={styles.settingsRow}>
+              <Type size={16} color={darkMode ? '#C45C6A' : examProcess.accent} />
+              <Text style={[styles.settingsLabel, { color: ink }]}>Text size</Text>
+              <Pressable
+                style={[styles.settingsBtn, { borderColor: barBorder }]}
+                onPress={() =>
+                  setFontScale((v) => Math.max(FONT_MIN, Number((v - FONT_STEP).toFixed(2))))
+                }
+              >
+                <Text style={[styles.settingsBtnText, { color: ink }]}>A−</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.settingsBtn, { borderColor: barBorder }]}
+                onPress={() =>
+                  setFontScale((v) => Math.min(FONT_MAX, Number((v + FONT_STEP).toFixed(2))))
+                }
+              >
+                <Text style={[styles.settingsBtnText, { color: ink }]}>A+</Text>
+              </Pressable>
+            </View>
+            <Pressable
+              style={[
+                styles.settingsRow,
+                styles.themeToggleRow,
+                { backgroundColor: darkMode ? '#1C1C1E' : examProcess.cardElevated },
+              ]}
+              onPress={() => setDarkMode((v) => !v)}
+            >
+              {darkMode ? (
+                <Sun size={16} color="#FBBF24" />
+              ) : (
+                <Moon size={16} color={examProcess.accent} />
+              )}
+              <Text style={[styles.settingsLabel, { color: ink, flex: 1 }]}>
+                {darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+              </Text>
+            </Pressable>
+            <Pressable style={styles.submitPill} onPress={() => setSettingsOpen(false)}>
+              <Text style={styles.submitPillText}>Done</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal
         visible={incompleteOpen}
@@ -580,23 +840,24 @@ export default function ExamScreen() {
         onRequestClose={() => setIncompleteOpen(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
-            <Text style={styles.modalTitle}>Unanswered questions</Text>
-            <Text style={styles.modalBody}>
+          <View style={[styles.modalSheet, { backgroundColor: barBg, borderColor: barBorder }]}>
+            <Text style={[styles.modalTitle, { color: ink }]}>Unanswered questions</Text>
+            <Text style={[styles.modalBody, { color: muted }]}>
               {`Please answer all questions before submitting. Still unanswered: ${
                 missingLabel || unansweredCount()
               }.`}
             </Text>
+            <Pressable style={styles.submitPill} onPress={jumpToFirstUnanswered}>
+              <Text style={styles.submitPillText}>Go to unanswered</Text>
+            </Pressable>
             <Pressable
-              style={styles.submitBtn}
+              style={[styles.secondaryBtn, { borderColor: darkMode ? '#333' : examProcess.accent }]}
               onPress={() => {
                 setIncompleteOpen(false);
-                const unfinished = categories.find((c) => c.answered < c.total);
-                if (unfinished) jumpToCategory(unfinished);
-                else scrollRef.current?.scrollTo({ y: 0, animated: true });
+                openPicker();
               }}
             >
-              <Text style={styles.submitBtnText}>Review answers</Text>
+              <Text style={[styles.secondaryBtnText, { color: ink }]}>Open category picker</Text>
             </Pressable>
           </View>
         </View>
@@ -607,7 +868,7 @@ export default function ExamScreen() {
         title="Submit Examination?"
         description="Once submitted, you cannot change your answers. Secure Examination Mode will end."
         confirmLabel="Submit Exam"
-        cancelLabel="Review Answers"
+        cancelLabel="Keep answering"
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => {
           setConfirmOpen(false);
@@ -640,182 +901,266 @@ export default function ExamScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: examProcess.pageBg },
+  screen: { flex: 1, backgroundColor: '#000' },
   topBar: {
-    paddingHorizontal: examProcess.padPage,
-    gap: 6,
-    marginBottom: 4,
+    paddingHorizontal: 16,
+    gap: 8,
+    paddingBottom: 6,
   },
-  stepLabel: {
-    color: examProcess.muted,
-    fontSize: 13,
-    fontFamily: examProcess.fontRegular,
-  },
-  titleRow: {
+  topIcons: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     gap: 8,
   },
-  title: {
-    flex: 1,
-    fontSize: 18,
-    fontFamily: examProcess.fontSemiBold,
-    color: examProcess.ink,
+  iconBtn: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   secureBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: examProcess.accentSoft,
     paddingHorizontal: 8,
     paddingVertical: 5,
-    borderRadius: examProcess.radiusControl,
+    borderRadius: 999,
+    backgroundColor: 'rgba(196,92,106,0.15)',
   },
   secureText: {
     fontSize: 12,
     fontFamily: examProcess.fontMedium,
     color: examProcess.accent,
   },
-  saveRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  saveText: {
-    fontSize: 12,
-    color: examProcess.muted,
-    fontFamily: examProcess.fontRegular,
-    flex: 1,
-  },
-  settingsPanel: {
-    marginTop: 10,
+  progressMeta: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: examProcess.radiusControl,
-    backgroundColor: examProcess.cardElevated,
-    borderWidth: 1,
-    borderColor: examProcess.cardBorder,
-  },
-  settingsPanelDark: {
-    backgroundColor: '#111827',
-    borderColor: '#374151',
-  },
-  settingsGroup: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
   },
-  settingsLabel: {
-    fontSize: 13,
+  progressText: {
+    fontSize: 12,
     fontFamily: examProcess.fontMedium,
   },
-  settingsBtn: {
-    minWidth: 34,
-    height: 28,
-    borderRadius: examProcess.radiusControl,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: examProcess.white,
-    borderWidth: 1,
-    borderColor: examProcess.inputBorder,
-    paddingHorizontal: 8,
-  },
-  settingsBtnText: {
-    fontSize: 13,
-    fontFamily: examProcess.fontMedium,
-    color: examProcess.ink,
-  },
+  saveRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  saveText: { fontSize: 11, fontFamily: examProcess.fontRegular },
   timeWarn: {
-    marginTop: 8,
     paddingVertical: 8,
     paddingHorizontal: 10,
-    borderRadius: examProcess.radiusControl,
-    backgroundColor: examProcess.dangerSoft,
+    borderRadius: 10,
+    backgroundColor: 'rgba(155,28,28,0.2)',
     borderWidth: 1,
-    borderColor: examProcess.danger,
+    borderColor: '#9B1C1C',
   },
   timeWarnText: {
     fontSize: 13,
     fontFamily: examProcess.fontMedium,
-    color: examProcess.danger,
+    color: '#FCA5A5',
     textAlign: 'center',
   },
-  content: { padding: examProcess.padPage, paddingBottom: 40, gap: 14 },
-  questionBlock: { gap: 0 },
-  categoryHeadingRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
+  scroll: { flex: 1 },
+  content: {
+    paddingHorizontal: 18,
+    paddingTop: 8,
+  },
+  questionBlock: {
+    marginBottom: 28,
+  },
+  questionBlockCategoryEnd: {
     marginBottom: 8,
-    marginTop: 4,
   },
-  categoryHeading: {
-    fontSize: 13,
-    fontFamily: examProcess.fontSemiBold,
-    color: examProcess.accent,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  categoryMeta: {
+  sectionHeading: {
+    marginTop: 8,
+    marginBottom: 14,
     fontSize: 12,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    fontFamily: examProcess.fontSemiBold,
+  },
+  categoryEnd: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 28,
+    marginBottom: 20,
+    paddingHorizontal: 8,
+  },
+  categoryEndLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+  },
+  categoryEndText: {
+    fontSize: 11,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
     fontFamily: examProcess.fontMedium,
-    color: examProcess.muted,
   },
-  submitBlock: { marginTop: 8, gap: 10 },
-  nextCategory: {
-    alignSelf: 'flex-start',
-    paddingVertical: 8,
-    paddingHorizontal: 2,
-  },
-  nextCategoryText: {
-    color: examProcess.accent,
-    fontSize: 14,
-    fontFamily: examProcess.fontMedium,
-  },
-  submitBtn: {
-    backgroundColor: examProcess.accent,
-    borderRadius: examProcess.radiusControl,
-    paddingVertical: 14,
-    paddingHorizontal: 12,
+  endBlock: {
+    marginTop: 12,
+    gap: 12,
     alignItems: 'center',
   },
-  submitDisabled: { opacity: 0.5 },
-  submitBtnText: {
-    color: examProcess.white,
+  endHint: {
+    fontSize: 13,
+    textAlign: 'center',
+    fontFamily: examProcess.fontRegular,
+    maxWidth: 280,
+  },
+  submitPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    minHeight: 48,
+    paddingHorizontal: 20,
+    borderRadius: 999,
+    backgroundColor: examProcess.accent,
+    alignSelf: 'stretch',
+  },
+  submitPillText: {
+    color: '#fff',
     fontSize: 15,
     fontFamily: examProcess.fontSemiBold,
   },
-  submitHint: {
-    fontSize: 13,
-    color: examProcess.muted,
-    textAlign: 'center',
+  disabled: { opacity: 0.45 },
+  floatingDock: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    paddingHorizontal: 28,
+    pointerEvents: 'box-none',
+  },
+  categoryPill: {
+    minWidth: '72%',
+    maxWidth: 420,
+    minHeight: 52,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  categoryPillText: {
+    fontSize: 15,
+    fontFamily: examProcess.fontSemiBold,
+  },
+  pickerScreen: { flex: 1 },
+  pickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+    paddingBottom: 8,
+  },
+  pickerTitle: {
+    fontSize: 17,
+    fontFamily: examProcess.fontSemiBold,
+  },
+  pickerList: {
+    paddingBottom: 40,
+  },
+  bookRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+  },
+  bookLabel: {
+    fontSize: 17,
     fontFamily: examProcess.fontRegular,
+  },
+  bookMeta: {
+    fontSize: 13,
+    fontFamily: examProcess.fontMedium,
+  },
+  chapterGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+    gap: 10,
+  },
+  chapterCell: {
+    width: '17.5%',
+    aspectRatio: 1,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chapterText: {
+    fontSize: 15,
+    fontFamily: examProcess.fontSemiBold,
+  },
+  themeToggleRow: {
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: examProcess.overlay,
+    backgroundColor: 'rgba(0,0,0,0.55)',
     justifyContent: 'center',
     padding: 24,
   },
-  modalSheet: {
-    backgroundColor: examProcess.cardBg,
-    borderRadius: examProcess.radiusCard,
+  settingsSheet: {
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: examProcess.cardBorder,
+    padding: 20,
+    gap: 14,
+  },
+  modalSheet: {
+    borderRadius: 16,
+    borderWidth: 1,
     padding: 20,
     gap: 14,
   },
   modalTitle: {
     fontSize: 17,
     fontFamily: examProcess.fontSemiBold,
-    color: examProcess.ink,
   },
   modalBody: {
     fontSize: 14,
     lineHeight: 21,
-    color: examProcess.muted,
     fontFamily: examProcess.fontRegular,
+  },
+  settingsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 44,
+  },
+  settingsLabel: {
+    fontSize: 14,
+    fontFamily: examProcess.fontMedium,
+  },
+  settingsBtn: {
+    minWidth: 40,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    paddingHorizontal: 10,
+  },
+  settingsBtnText: {
+    fontSize: 14,
+    fontFamily: examProcess.fontMedium,
+  },
+  secondaryBtn: {
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+  },
+  secondaryBtnText: {
+    fontSize: 14,
+    fontFamily: examProcess.fontMedium,
   },
 });

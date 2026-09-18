@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -7,12 +7,11 @@ import {
   RefreshControl,
   TextInput,
   Pressable,
-  Alert,
-  ActivityIndicator,
   Share,
   Platform,
+  DeviceEventEmitter,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Rect, Circle, Line, Defs, LinearGradient, Stop } from 'react-native-svg';
 import { useHardwareBack } from '@/shared/hooks/useHardwareBack';
@@ -39,20 +38,23 @@ import {
   Share2,
   RotateCcw,
   X,
-  Bell,
   TrendingUp,
   ArrowUpRight,
   ArrowDownRight,
+  Sun,
+  Moon,
+  AlertTriangle,
 } from 'lucide-react-native';
 import { Button } from '@/shared/components/ui';
-import { OfflineExamRepository } from '@/features/synchronization/services/offlineExamRepository';
 import {
   OfflineStore,
+  RESULTS_CHANGED_EVENT,
   type OfflineQueuedResult,
   type OfflinePack,
 } from '@/features/synchronization/services/offlineStore';
 import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { VIOLATION_MESSAGES } from '@/shared/constants';
 
 // =============================================================================
 // TYPES
@@ -221,7 +223,7 @@ const chartStyles = StyleSheet.create({
 export default function ProctorResultsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useAppTheme();
+  const { colors, isDark, themeMode, setThemeMode } = useAppTheme();
   const profile = useProctorStore((s) => s.profile);
 
   const [refreshing, setRefreshing] = useState(false);
@@ -230,6 +232,9 @@ export default function ProctorResultsScreen() {
   const [openedRooms, setOpenedRooms] = useState<
     Record<string, { code: string; openedAt: string; status: 'lobby_open' | 'in_progress' | 'ended' }>
   >({});
+  const [recordedViolations, setRecordedViolations] = useState<
+    Array<{ type: string; message?: string | null }>
+  >([]);
 
   // Navigation & Drill-Down
   const [selectedLobbyId, setSelectedLobbyId] = useState<string | null>(null);
@@ -246,9 +251,6 @@ export default function ProctorResultsScreen() {
   const [studentSearch, setStudentSearch] = useState('');
   const [studentFilter, setStudentFilter] = useState<'all' | 'passed' | 'failed'>('all');
 
-  // Async action flags
-  const [syncing, setSyncing] = useState(false);
-
   useHardwareBack(() => {
     if (selectedLobbyId) {
       setSelectedLobbyId(null);
@@ -257,47 +259,43 @@ export default function ProctorResultsScreen() {
     return false;
   });
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setRefreshing(true);
-      const [cachedPack, queued, opened] = await Promise.all([
+      const [cachedPack, queued, opened, peer] = await Promise.all([
         OfflineStore.getPack(),
         OfflineStore.getResults(),
         OfflineStore.getOpenedRooms(),
+        OfflineStore.getPeerSession<{
+          violations?: Array<{ type?: string; message?: string | null }>;
+        }>(),
       ]);
 
       setPack(cachedPack);
       setRawResults(queued);
       setOpenedRooms(opened);
+      setRecordedViolations(
+        (peer?.violations ?? [])
+          .map((v) => ({
+            type: String(v.type ?? 'unknown'),
+            message: v.message ?? null,
+          }))
+          .filter((v) => v.type.length > 0),
+      );
     } finally {
       setRefreshing(false);
     }
-  };
-
-  useEffect(() => {
-    void loadData();
   }, []);
 
-  const handleDirectSync = async () => {
-    if (syncing) return;
-    try {
-      setSyncing(true);
-      const result = await OfflineExamRepository.syncQueuedToCloud();
-      await loadData();
-      Alert.alert('Sync Successful', result.message);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Connect to the internet and try again.';
-      Alert.alert('Sync Status', msg, [
-        { text: 'OK' },
-        {
-          text: 'More Options',
-          onPress: () => router.push('/offline-prepare' as any),
-        },
-      ]);
-    } finally {
-      setSyncing(false);
-    }
-  };
+  useFocusEffect(
+    useCallback(() => {
+      void loadData();
+      const sub = DeviceEventEmitter.addListener(RESULTS_CHANGED_EVENT, () => {
+        void loadData();
+      });
+      return () => sub.remove();
+    }, [loadData]),
+  );
 
   // Build examination lobbies list
   const lobbies: ExamLobby[] = useMemo(() => {
@@ -310,13 +308,6 @@ export default function ProctorResultsScreen() {
       if (a.applicant_code) {
         applicantMap.set(a.applicant_code.toUpperCase(), a);
       }
-    }
-
-    const regBySchedule = new Map<number, NonNullable<OfflinePack['registrations']>>();
-    for (const reg of pack?.registrations ?? []) {
-      const arr = regBySchedule.get(reg.examination_schedule_id) || [];
-      arr.push(reg);
-      regBySchedule.set(reg.examination_schedule_id, arr);
     }
 
     const processedKeys = new Set<string>();
@@ -343,9 +334,10 @@ export default function ProctorResultsScreen() {
 
       const students: LobbyStudentItem[] = [];
       const seenCodes = new Set<string>();
-      const scheduledRegs = regBySchedule.get(schedIdNum) || [];
 
-      const schedResults = rawResults.filter((r) => r.examination_schedule_id === schedIdNum);
+      const schedResults = rawResults.filter(
+        (r) => Number(r.examination_schedule_id) === Number(schedIdNum),
+      );
       for (const res of schedResults) {
         const codeUpper = (res.applicant_code || '').toUpperCase();
         seenCodes.add(codeUpper);
@@ -398,14 +390,17 @@ export default function ProctorResultsScreen() {
 
     const resultsBySchedule = new Map<number, OfflineQueuedResult[]>();
     for (const r of rawResults) {
-      if (!r.examination_schedule_id) continue;
-      const arr = resultsBySchedule.get(r.examination_schedule_id) || [];
+      const sid = Number(r.examination_schedule_id);
+      if (!Number.isInteger(sid) || sid <= 0) continue;
+      const arr = resultsBySchedule.get(sid) || [];
       arr.push(r);
-      resultsBySchedule.set(r.examination_schedule_id, arr);
+      resultsBySchedule.set(sid, arr);
     }
 
     for (const [schedId, sResults] of resultsBySchedule.entries()) {
-      const alreadyInList = list.some((item) => item.scheduleId === schedId);
+      const alreadyInList = list.some(
+        (item) => Number(item.scheduleId) === Number(schedId) && item.students.length > 0,
+      );
       if (alreadyInList) continue;
 
       const sched = pack?.schedules?.find((s) => s.id === schedId);
@@ -472,26 +467,41 @@ export default function ProctorResultsScreen() {
     return list;
   }, [pack, rawResults, openedRooms]);
 
-  // Overall calculations
+  // Overall calculations — real pack/results data only (no demo placeholders)
+  const passingPercentage =
+    Number((pack as any)?.grading_settings?.[0]?.passing_percentage) > 0
+      ? Number((pack as any).grading_settings[0].passing_percentage)
+      : 75;
   const totalSubmissions = rawResults.length;
-  const passedSubmissions = rawResults.filter((r) => Number(r.score) >= 75).length;
+  const passedSubmissions = rawResults.filter(
+    (r) => Number(r.score) >= passingPercentage,
+  ).length;
   const failedSubmissions = totalSubmissions - passedSubmissions;
   const overallPassRate =
-    totalSubmissions > 0 ? (passedSubmissions / totalSubmissions) * 100 : 87.4;
+    totalSubmissions > 0 ? (passedSubmissions / totalSubmissions) * 100 : 0;
   const pendingSyncCount = rawResults.filter((r) => !r.synced).length;
 
-  // Score distribution breakdown (Portfolio Risk Score Replication)
-  const highDistinction = rawResults.filter((r) => Number(r.score) >= 85).length;
-  const standardPass = rawResults.filter(
-    (r) => Number(r.score) >= 75 && Number(r.score) < 85,
-  ).length;
-
-  const highPct =
-    totalSubmissions > 0 ? Math.round((highDistinction / totalSubmissions) * 100) : 34;
-  const stdPct =
-    totalSubmissions > 0 ? Math.round((standardPass / totalSubmissions) * 100) : 57;
-  const lowPct =
-    totalSubmissions > 0 ? Math.max(0, 100 - highPct - stdPct) : 9;
+  const violationBreakdown = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const v of recordedViolations) {
+      const key = v.type.trim() || 'unknown';
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const total = recordedViolations.length;
+    const rows = [...counts.entries()]
+      .map(([type, count]) => ({
+        type,
+        count,
+        pct: total > 0 ? Math.round((count / total) * 100) : 0,
+        label:
+          VIOLATION_MESSAGES[type] ??
+          type
+            .replace(/_/g, ' ')
+            .replace(/\b\w/g, (c) => c.toUpperCase()),
+      }))
+      .sort((a, b) => b.count - a.count);
+    return { total, rows, top: rows[0] ?? null };
+  }, [recordedViolations]);
 
   // Selected Lobby for Level 2 drill-down
   const selectedLobby = useMemo(() => {
@@ -573,20 +583,6 @@ export default function ProctorResultsScreen() {
             </Text>
           </View>
           <View style={styles.navRightRow}>
-            {selectedLobby.hasUnsynced && (
-              <Pressable
-                onPress={handleDirectSync}
-                disabled={syncing}
-                style={[styles.navIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-                hitSlop={8}
-              >
-                {syncing ? (
-                  <ActivityIndicator size="small" color="#7A1F2B" />
-                ) : (
-                  <RefreshCw size={18} color="#7A1F2B" />
-                )}
-              </Pressable>
-            )}
             <Pressable
               style={[styles.navIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
               onPress={() => confirmProctorLogout()}
@@ -881,28 +877,6 @@ export default function ProctorResultsScreen() {
 
           <View style={{ height: 100 }} />
         </ScrollView>
-
-        {/* Sync Floating Action Button (FAB) */}
-        {selectedLobby.hasUnsynced && (
-          <Pressable
-            style={[styles.syncFab, styles.syncFabPending]}
-            onPress={handleDirectSync}
-            disabled={syncing}
-            accessibilityRole="button"
-            accessibilityLabel="Sync Results to Cloud"
-          >
-            {syncing ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <RefreshCw size={22} color="#FFFFFF" />
-            )}
-            {pendingSyncCount > 0 && !syncing && (
-              <View style={styles.syncFabBadge}>
-                <Text style={styles.syncFabBadgeText}>{pendingSyncCount}</Text>
-              </View>
-            )}
-          </Pressable>
-        )}
       </View>
     );
   }
@@ -913,7 +887,7 @@ export default function ProctorResultsScreen() {
   return (
     <View style={[styles.screen, { paddingTop: insets.top, backgroundColor: colors.background }]}>
       {/* =================================================================== */}
-      {/* 1. REFERENCE HEADER NAV BAR (Avatar on Left, Search/Bell on Right)  */}
+      {/* 1. REFERENCE HEADER NAV BAR (Avatar on Left, Search/Logout on Right)  */}
       {/* =================================================================== */}
       <View style={[styles.navBar, { backgroundColor: colors.background }]}>
         {/* Proctor Avatar Circle */}
@@ -930,8 +904,24 @@ export default function ProctorResultsScreen() {
           </Text>
         </View>
 
-        {/* Right Icon Actions: Search & Bell / Sync */}
+        {/* Right Icon Actions: Theme, Search & Logout */}
         <View style={styles.navRightRow}>
+          <Pressable
+            style={[
+              styles.navIconBtn,
+              { backgroundColor: colors.card, borderColor: colors.cardBorder },
+            ]}
+            onPress={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
+            accessibilityLabel={themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            hitSlop={8}
+          >
+            {themeMode === 'dark' ? (
+              <Moon size={18} color="#C4A35A" />
+            ) : (
+              <Sun size={18} color="#B45309" />
+            )}
+          </Pressable>
+
           <Pressable
             style={[
               styles.navIconBtn,
@@ -948,26 +938,6 @@ export default function ProctorResultsScreen() {
               size={18}
               color={isSearchOpen ? '#FFFFFF' : colors.textPrimary}
             />
-          </Pressable>
-
-          <Pressable
-            style={[
-              styles.navIconBtn,
-              { backgroundColor: colors.card, borderColor: colors.cardBorder },
-            ]}
-            onPress={handleDirectSync}
-            disabled={syncing}
-            accessibilityLabel="Notifications & Sync"
-            hitSlop={8}
-          >
-            {syncing ? (
-              <ActivityIndicator size="small" color="#7A1F2B" />
-            ) : (
-              <Bell size={18} color={colors.textPrimary} />
-            )}
-            {pendingSyncCount > 0 && !syncing && (
-              <View style={styles.navBadgeDot} />
-            )}
           </Pressable>
 
           <Pressable
@@ -1063,22 +1033,20 @@ export default function ProctorResultsScreen() {
           {/* Hero Row: Big Number on Left, Passed/Failed Compact Chips on Right */}
           <View style={styles.walletHeroMainRow}>
             <Text style={styles.walletValueNumber}>
-              {totalSubmissions > 0
-                ? `${overallPassRate.toFixed(1)}%`
-                : '87.4%'}
+              {totalSubmissions > 0 ? `${overallPassRate.toFixed(1)}%` : '—'}
             </Text>
 
             <View style={styles.walletSubMetricsWrap}>
               <View style={styles.walletCompactPill}>
                 <ArrowUpRight size={12} color="#22C55E" />
                 <Text style={styles.walletCompactPillText}>
-                  +{passedSubmissions > 0 ? passedSubmissions : 218} Passed
+                  {passedSubmissions} Passed
                 </Text>
               </View>
               <View style={styles.walletCompactPill}>
                 <ArrowDownRight size={12} color="rgba(255,255,255,0.7)" />
                 <Text style={styles.walletCompactPillText}>
-                  {failedSubmissions > 0 ? failedSubmissions : 32} Retake
+                  {failedSubmissions} Failed
                 </Text>
               </View>
             </View>
@@ -1092,14 +1060,14 @@ export default function ProctorResultsScreen() {
             <TrendingUp size={12} color="rgba(255,255,255,0.9)" />
             <Text style={styles.walletTickerText} numberOfLines={1}>
               {rawResults.length > 0
-                ? `Latest: ${rawResults[rawResults.length - 1].applicant_name || rawResults[rawResults.length - 1].applicant_code} scored ${rawResults[rawResults.length - 1].score}%`
-                : 'Live Proctor Telemetry · System synchronized & active'}
+                ? `Latest: ${rawResults[rawResults.length - 1].applicant_name || rawResults[rawResults.length - 1].applicant_code} scored ${rawResults[rawResults.length - 1].score}% · Pass mark ${passingPercentage}%`
+                : `No submissions yet · Pass mark ${passingPercentage}%`}
             </Text>
           </View>
         </View>
 
         {/* ================================================================= */}
-        {/* 3. COMPACT VIOLATION & TELEMETRY BREAKDOWN ("SAKTO LANG")         */}
+        {/* 3. VIOLATIONS — most common type from recorded exam activity       */}
         {/* ================================================================= */}
         <View
           style={[
@@ -1117,7 +1085,7 @@ export default function ProctorResultsScreen() {
                 { color: isDark ? '#FFFFFF' : colors.textPrimary },
               ]}
             >
-              Violation & Sync Telemetry
+              Violations
             </Text>
             <View
               style={[
@@ -1134,92 +1102,120 @@ export default function ProctorResultsScreen() {
                   { color: isDark ? '#A1A1AA' : colors.textSecondary },
                 ]}
               >
-                Live Detection
+                {violationBreakdown.total} recorded
               </Text>
             </View>
           </View>
 
-          {/* Slim Horizontal Segmented Bar */}
+          {/* Most common violation highlight */}
           <View
             style={[
-              styles.segmentedBar,
-              { backgroundColor: isDark ? '#1F1F1F' : colors.cardMuted },
+              styles.topViolationBanner,
+              {
+                backgroundColor: isDark ? '#2A1414' : '#FEF2F2',
+                borderColor: isDark ? '#7A1F2B55' : '#FECACA',
+              },
             ]}
           >
-            <View
-              style={[
-                styles.segmentedSegment,
-                { flex: Math.max(1, highPct), backgroundColor: '#7A1F2B' },
-              ]}
-            />
-            <View
-              style={[
-                styles.segmentedSegment,
-                { flex: Math.max(1, stdPct), backgroundColor: isDark ? '#3B82F6' : '#2563EB' },
-              ]}
-            />
-            <View
-              style={[
-                styles.segmentedSegment,
-                { flex: Math.max(1, lowPct), backgroundColor: '#F59E0B' },
-              ]}
-            />
-          </View>
-
-          {/* Compact 3-Chip Row */}
-          <View style={styles.riskChipsRow}>
-            <View style={styles.riskChip}>
-              <View style={[styles.riskChipDot, { backgroundColor: '#7A1F2B' }]} />
+            <AlertTriangle size={18} color="#7A1F2B" />
+            <View style={{ flex: 1 }}>
               <Text
                 style={[
-                  styles.riskChipText,
-                  { color: isDark ? '#D4D4D8' : colors.textSecondary },
+                  styles.topViolationEyebrow,
+                  { color: isDark ? '#F87171' : '#9B1C1C' },
                 ]}
               >
-                Tab Switch:{' '}
-                <Text style={{ fontWeight: '800', color: isDark ? '#FFFFFF' : colors.textPrimary }}>
-                  {highPct}%
-                </Text>
+                Most common violation
               </Text>
+              <Text
+                style={[
+                  styles.topViolationTitle,
+                  { color: isDark ? '#FFFFFF' : colors.textPrimary },
+                ]}
+                numberOfLines={2}
+              >
+                {violationBreakdown.top
+                  ? violationBreakdown.top.label
+                  : 'No violations recorded yet'}
+              </Text>
+              {violationBreakdown.top ? (
+                <Text
+                  style={[
+                    styles.topViolationMeta,
+                    { color: isDark ? '#A1A1AA' : colors.textSecondary },
+                  ]}
+                >
+                  {violationBreakdown.top.count} times · {violationBreakdown.top.pct}% of all
+                  violations
+                </Text>
+              ) : null}
             </View>
+          </View>
 
-            <View style={styles.riskChip}>
+          {violationBreakdown.rows.length > 0 ? (
+            <>
               <View
                 style={[
-                  styles.riskChipDot,
-                  { backgroundColor: isDark ? '#3B82F6' : '#2563EB' },
-                ]}
-              />
-              <Text
-                style={[
-                  styles.riskChipText,
-                  { color: isDark ? '#D4D4D8' : colors.textSecondary },
+                  styles.segmentedBar,
+                  { backgroundColor: isDark ? '#1F1F1F' : colors.cardMuted },
                 ]}
               >
-                Wi-Fi/LAN:{' '}
-                <Text style={{ fontWeight: '800', color: isDark ? '#FFFFFF' : colors.textPrimary }}>
-                  {stdPct}%
-                </Text>
-              </Text>
-            </View>
+                {violationBreakdown.rows.slice(0, 3).map((row, i) => (
+                  <View
+                    key={row.type}
+                    style={[
+                      styles.segmentedSegment,
+                      {
+                        flex: Math.max(1, row.pct),
+                        backgroundColor:
+                          i === 0 ? '#7A1F2B' : i === 1 ? (isDark ? '#3B82F6' : '#2563EB') : '#F59E0B',
+                      },
+                    ]}
+                  />
+                ))}
+              </View>
 
-            <View style={styles.riskChip}>
-              <View style={[styles.riskChipDot, { backgroundColor: '#F59E0B' }]} />
-              <Text
-                style={[
-                  styles.riskChipText,
-                  { color: isDark ? '#D4D4D8' : colors.textSecondary },
-                ]}
-              >
-                Orientation:{' '}
-                <Text style={{ fontWeight: '800', color: isDark ? '#FFFFFF' : colors.textPrimary }}>
-                  {lowPct}%
-                </Text>
-              </Text>
-            </View>
-          </View>
+              <View style={styles.riskChipsRow}>
+                {violationBreakdown.rows.slice(0, 3).map((row, i) => (
+                  <View style={styles.riskChip} key={row.type}>
+                    <View
+                      style={[
+                        styles.riskChipDot,
+                        {
+                          backgroundColor:
+                            i === 0
+                              ? '#7A1F2B'
+                              : i === 1
+                                ? isDark
+                                  ? '#3B82F6'
+                                  : '#2563EB'
+                                : '#F59E0B',
+                        },
+                      ]}
+                    />
+                    <Text
+                      style={[
+                        styles.riskChipText,
+                        { color: isDark ? '#D4D4D8' : colors.textSecondary },
+                      ]}
+                      numberOfLines={2}
+                    >
+                      {row.type.replace(/_/g, ' ')}:{' '}
+                      <Text
+                        style={{
+                          fontWeight: '800',
+                          color: isDark ? '#FFFFFF' : colors.textPrimary,
+                        }}
+                      >
+                        {row.count} ({row.pct}%)
+                      </Text>
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </>
+          ) : null}
 
-          {/* Compact 2-Item Quick Status Row */}
           <View
             style={[
               styles.telemetryFooterRow,
@@ -1235,38 +1231,25 @@ export default function ProctorResultsScreen() {
                 ]}
                 numberOfLines={1}
               >
-                Top Room:{' '}
+                Top room:{' '}
                 <Text style={{ fontWeight: '700', color: isDark ? '#FFFFFF' : colors.textPrimary }}>
-                  {highestScoreLobby?.roomName || 'Room CL 1'}
-                </Text>{' '}
-                ({highestScoreLobby?.averageScore != null
-                  ? `+${highestScoreLobby.averageScore.toFixed(1)}%`
-                  : '+96.5%'})
+                  {highestScoreLobby?.roomName || '—'}
+                </Text>
+                {highestScoreLobby?.averageScore != null
+                  ? ` (${highestScoreLobby.averageScore.toFixed(1)}%)`
+                  : ''}
               </Text>
             </View>
 
             <View style={styles.telemetryFooterItem}>
-              <RefreshCw
-                size={13}
-                color={pendingSyncCount > 0 ? '#7A1F2B' : '#22C55E'}
-              />
+              <Users size={13} color={isDark ? '#A1A1AA' : colors.textSecondary} />
               <Text
                 style={[
                   styles.telemetryFooterText,
-                  {
-                    color:
-                      pendingSyncCount > 0
-                        ? '#7A1F2B'
-                        : isDark
-                        ? '#A1A1AA'
-                        : colors.textSecondary,
-                    fontWeight: pendingSyncCount > 0 ? '700' : '500',
-                  },
+                  { color: isDark ? '#A1A1AA' : colors.textSecondary },
                 ]}
               >
-                {pendingSyncCount > 0
-                  ? `${pendingSyncCount} Pending Sync`
-                  : 'All Results Synced'}
+                {totalSubmissions} submission{totalSubmissions === 1 ? '' : 's'}
               </Text>
             </View>
           </View>
@@ -1477,32 +1460,9 @@ export default function ProctorResultsScreen() {
           })
         )}
 
-        {/* Bottom padding for tab bar floating capsule */}
-        <View style={{ height: 88 }} />
+        {/* Bottom padding for tab bar floating capsule + center Sync FAB */}
+        <View style={{ height: 108 }} />
       </ScrollView>
-
-      {/* Sync Floating Action Button (FAB) */}
-      <Pressable
-        style={[
-          styles.syncFab,
-          pendingSyncCount > 0 && styles.syncFabPending,
-        ]}
-        onPress={handleDirectSync}
-        disabled={syncing}
-        accessibilityRole="button"
-        accessibilityLabel="Sync Results to Cloud"
-      >
-        {syncing ? (
-          <ActivityIndicator size="small" color="#FFFFFF" />
-        ) : (
-          <RefreshCw size={22} color="#FFFFFF" />
-        )}
-        {pendingSyncCount > 0 && !syncing && (
-          <View style={styles.syncFabBadge}>
-            <Text style={styles.syncFabBadgeText}>{pendingSyncCount}</Text>
-          </View>
-        )}
-      </Pressable>
     </View>
   );
 }
@@ -1765,6 +1725,32 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  topViolationBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginBottom: 12,
+  },
+  topViolationEyebrow: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    marginBottom: 2,
+  },
+  topViolationTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  topViolationMeta: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 4,
   },
   riskCardTitle: {
     fontSize: 14,
@@ -2187,48 +2173,5 @@ const styles = StyleSheet.create({
     marginTop: 10,
     flexWrap: 'wrap',
     justifyContent: 'center',
-  },
-
-  // Floating Action Button (FAB) for Sync
-  syncFab: {
-    position: 'absolute',
-    bottom: 96,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#7A1F2B',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    elevation: 8,
-    zIndex: 900,
-  },
-  syncFabPending: {
-    shadowColor: '#7A1F2B',
-    shadowOpacity: 0.55,
-    shadowRadius: 8,
-  },
-  syncFabBadge: {
-    position: 'absolute',
-    top: -3,
-    right: -3,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    minWidth: 20,
-    height: 20,
-    paddingHorizontal: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#7A1F2B',
-  },
-  syncFabBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#7A1F2B',
   },
 });

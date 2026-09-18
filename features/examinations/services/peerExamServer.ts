@@ -10,6 +10,8 @@ import {
   type ChoiceDisplayMap,
 } from '@/features/synchronization/services/offlineExamRepository';
 import { OfflineStore, computePackHash, computePackHashAsync, type OfflinePack } from '@/features/synchronization/services/offlineStore';
+import { resolveWifiLanIp } from '@/features/monitoring/services/wifiLanIp';
+import { clampViolationLimit } from '@/shared/utils/violationLimit';
 import type {
   ExamTerminationReason,
   LobbySnapshot,
@@ -21,6 +23,12 @@ import type {
 export const PEER_PORT = 9777;
 export const PEER_PATH_PREFIX = '/p2p';
 export const MAX_ROOM_CAPACITY = 60;
+
+function resolveRoomStudentLimit(pack: OfflinePack | null | undefined): number {
+  const n = Number(pack?.examination_settings?.room_student_limit);
+  if (Number.isInteger(n) && n >= 1 && n <= 500) return n;
+  return MAX_ROOM_CAPACITY;
+}
 
 /** Prevents two devices racing the same passkey into one seat on first join. */
 const joinLocks = new Set<number>();
@@ -102,6 +110,8 @@ type PeerSessionState = {
   startedAt: string | null;
   endedAt: string | null;
   durationMinutes: number;
+  /** Auto-warn / auto-submit threshold from admin examination settings (pack). */
+  violationLimit: number;
   students: Record<number, PeerStudentState>; // Keyed by registrationId (unique)
   tokenMap: Record<string, number>; // Maps token -> registrationId for fast lookup
   violations: PeerViolation[];
@@ -819,9 +829,17 @@ function registerRoutes(mod: HttpServerModule) {
     return ok({
       questions: sanitizedQuestions,
       durationMinutes: session.durationMinutes,
+      violationLimit: clampViolationLimit(
+        pack.examination_settings?.violation_limit ?? session.violationLimit,
+      ),
       packageHash,
       packageVersion: pack.pack_version || 1,
-      examinationSettings: pack.examination_settings,
+      examinationSettings: {
+        ...(pack.examination_settings ?? {}),
+        violation_limit: clampViolationLimit(
+          pack.examination_settings?.violation_limit ?? session.violationLimit,
+        ),
+      },
     });
   });
 
@@ -905,8 +923,12 @@ function registerRoutes(mod: HttpServerModule) {
       );
     }
 
-    if (!existing && Object.keys(session.students).length >= MAX_ROOM_CAPACITY) {
-      return fail(409, 'Room Full. Maximum capacity of 60 students reached. Please contact the Proctor.');
+    const roomLimit = resolveRoomStudentLimit(pack);
+    if (!existing && Object.keys(session.students).length >= roomLimit) {
+      return fail(
+        409,
+        `Room Full. Maximum capacity of ${roomLimit} students reached. Please contact the Proctor.`,
+      );
     }
 
     // Guard against two devices racing past the uniqueness check on first join.
@@ -1066,6 +1088,9 @@ function registerRoutes(mod: HttpServerModule) {
     return ok({
       questions: outgoing,
       durationMinutes: session.durationMinutes,
+      violationLimit: clampViolationLimit(
+        session.violationLimit ?? pack.examination_settings?.violation_limit,
+      ),
       answers: student.answers,
     });
   });
@@ -1096,6 +1121,9 @@ function registerRoutes(mod: HttpServerModule) {
     return ok({
       questions: outgoing,
       durationMinutes: session.durationMinutes,
+      violationLimit: clampViolationLimit(
+        session.violationLimit ?? pack.examination_settings?.violation_limit,
+      ),
       answers: student.answers,
     });
   });
@@ -1225,7 +1253,11 @@ function registerRoutes(mod: HttpServerModule) {
     if (session.violations.length > 60) {
       session.violations = session.violations.slice(-60);
     }
-    if (student.violationCount >= 3 && student.status === 'taking_exam') {
+    const limit = clampViolationLimit(
+      session.violationLimit ?? _packCache?.examination_settings?.violation_limit,
+    );
+    session.violationLimit = limit;
+    if (student.violationCount >= limit && student.status === 'taking_exam') {
       student.status = 'warning';
     }
 
@@ -1235,6 +1267,7 @@ function registerRoutes(mod: HttpServerModule) {
 
     return ok({
       violation_count: student.violationCount,
+      violation_limit: limit,
       lobby_status: student.status,
     });
   });
@@ -1374,13 +1407,8 @@ function registerRoutes(mod: HttpServerModule) {
 }
 
 async function resolveHostIp(): Promise<string | null> {
-  try {
-    const ip = await Network.getIpAddressAsync();
-    if (ip && ip !== '0.0.0.0' && !ip.startsWith('127.')) return ip;
-    return null;
-  } catch {
-    return null;
-  }
+  const lan = await resolveWifiLanIp();
+  return lan.ip;
 }
 
 /**
@@ -1470,6 +1498,17 @@ export const PeerExamServer = {
       if (!saved) return false;
       session = saved;
       session.startSeq = Number(session.startSeq ?? (session.status === 'in_progress' ? 1 : 0));
+      try {
+        const pack = await OfflineStore.getPack();
+        session.violationLimit = clampViolationLimit(
+          pack?.examination_settings?.violation_limit ?? session.violationLimit,
+        );
+        if (pack?.examination_settings?.duration_minutes) {
+          session.durationMinutes = pack.examination_settings.duration_minutes;
+        }
+      } catch {
+        session.violationLimit = clampViolationLimit(session.violationLimit);
+      }
       for (const student of Object.values(session.students || {})) {
         student.downloadPercent = Number(student.downloadPercent ?? (student.isReady ? 100 : 0));
         student.hashVerified = Boolean(student.hashVerified ?? student.isReady);
@@ -1556,13 +1595,21 @@ export const PeerExamServer = {
         ? Number(input.roomId)
         : null;
 
-    hostIp = await resolveHostIp();
+    const lan = await resolveWifiLanIp();
+    hostIp = lan.ip;
     const netState = await Network.getNetworkStateAsync();
     const wifiSsid = netState.type === Network.NetworkStateType.WIFI ? (netState as any).ssid : null;
 
+    if (lan.type === Network.NetworkStateType.CELLULAR || (!lan.isWifi && lan.cellularLikely)) {
+      throw new Error(
+        'Turn off mobile data and stay on examination Wi‑Fi only. Dual Wi‑Fi + mobile data can bind the room to an unreachable address.',
+      );
+    }
     if (!hostIp) {
       throw new Error(
-        'This phone has no Wi‑Fi address. Connect to the exam Wi‑Fi (or turn on a hotspot) and try again.',
+        lan.cellularLikely
+          ? 'Could not read a Wi‑Fi LAN address (mobile data may be active). Turn off mobile data, connect to the exam Wi‑Fi, then try again.'
+          : 'This phone has no Wi‑Fi address. Connect to the exam Wi‑Fi (or turn on a hotspot) and try again.',
       );
     }
 
@@ -1581,6 +1628,10 @@ export const PeerExamServer = {
 
     if (reopening && session) {
       session.startSeq = Number(session.startSeq ?? 0);
+      // Always refresh admin settings from the latest downloaded pack.
+      session.violationLimit = clampViolationLimit(pack.examination_settings?.violation_limit);
+      session.durationMinutes =
+        pack.examination_settings?.duration_minutes ?? session.durationMinutes;
     }
 
     if (!reopening) {
@@ -1593,7 +1644,8 @@ export const PeerExamServer = {
         openedAt: new Date().toISOString(),
         startedAt: null,
         endedAt: null,
-        durationMinutes: pack.examination_settings?.duration_minutes ?? 90,
+        durationMinutes: pack.examination_settings?.duration_minutes ?? 60,
+        violationLimit: clampViolationLimit(pack.examination_settings?.violation_limit),
         students: {},
         tokenMap: {},
         violations: [],
@@ -1697,7 +1749,7 @@ export const PeerExamServer = {
     }
     if (session.roomId != null) {
       await OfflineStore.setOpenedRoom(
-        session.scheduleId,
+        numericScheduleId > 0 ? numericScheduleId : session.scheduleId,
         session.roomId,
         session.examCode,
         'ended',

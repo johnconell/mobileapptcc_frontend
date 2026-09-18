@@ -1,10 +1,16 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Crypto from 'expo-crypto';
-import { Platform } from 'react-native';
+import { DeviceEventEmitter, Platform } from 'react-native';
 import { gcm } from '@noble/ciphers/aes.js';
 import { bytesToHex, hexToBytes } from '@noble/ciphers/utils.js';
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
+
+export const RESULTS_CHANGED_EVENT = 'tcc.offline.results.changed';
+
+export function emitResultsChanged(): void {
+  DeviceEventEmitter.emit(RESULTS_CHANGED_EVENT);
+}
 
 const PACK_FILE = `${FileSystem.documentDirectory ?? ''}metcc-offline-pack.json`;
 const PACK_ENC_FILE = `${FileSystem.documentDirectory ?? ''}metcc-offline-pack.enc`;
@@ -52,6 +58,7 @@ export type OfflinePack = {
     subjects: Array<{
       id: number;
       name: string;
+      is_active?: boolean;
       questions: Array<{
         id: number;
         stem: string;
@@ -65,6 +72,8 @@ export type OfflinePack = {
   }>;
   examination_settings?: {
     duration_minutes?: number;
+    violation_limit?: number;
+    room_student_limit?: number;
     shuffle_questions?: boolean;
     shuffle_categories?: boolean;
     shuffle_both?: boolean;
@@ -325,7 +334,7 @@ export function normalizePackForHashing(pack: OfflinePack | null): string {
 
   const settings = pack.examination_settings;
   const settingsSig = settings
-    ? `${settings.duration_minutes ?? 90}:${Boolean(settings.shuffle_questions)}:${Boolean(settings.shuffle_categories)}:${Boolean(settings.shuffle_both)}`
+    ? `${settings.duration_minutes ?? 60}:${settings.violation_limit ?? 3}:${settings.room_student_limit ?? 60}:${Boolean(settings.shuffle_questions)}:${Boolean(settings.shuffle_categories)}:${Boolean(settings.shuffle_both)}`
     : 'default-settings';
 
   const raw = `${pack.pack_version || 1}-${settingsSig}-${sigs.sort().join('|')}`;
@@ -362,6 +371,33 @@ export function computePackHash(pack: OfflinePack | null): string {
   return (hash >>> 0).toString(16);
 }
 
+/**
+ * Keep only the admin-activated bank(s) and their selected questions.
+ * Guards against cloud APIs that still export inactive banks.
+ */
+export function sanitizePackToActiveBanks(pack: OfflinePack): OfflinePack {
+  const banks = (pack.question_banks ?? [])
+    .filter((b) => Boolean(b.is_active))
+    .map((bank) => ({
+      ...bank,
+      subjects: (bank.subjects ?? [])
+        .filter((s) => s.is_active !== false)
+        .map((subject) => ({
+          ...subject,
+          questions: (subject.questions ?? []).filter((q) => {
+            if (q.is_selected_for_exam === false) return false;
+            if (q.status && q.status !== 'active') return false;
+            return true;
+          }),
+        })),
+    }));
+
+  return {
+    ...pack,
+    question_banks: banks,
+  };
+}
+
 export const OfflineStore = {
   // In-memory pack avoids AES decrypt + JSON.parse on every navigation (was 3–6 min).
   _packCache: null as OfflinePack | null,
@@ -371,8 +407,9 @@ export const OfflineStore = {
   },
 
   async savePack(pack: OfflinePack): Promise<void> {
-    this._packCache = pack;
-    await writeEncrypted(PACK_ENC_FILE, WEB_PACK_ENC_KEY, pack);
+    const safe = sanitizePackToActiveBanks(pack);
+    this._packCache = safe;
+    await writeEncrypted(PACK_ENC_FILE, WEB_PACK_ENC_KEY, safe);
     // Remove legacy plaintext after successful encrypt.
     await deleteIfExists(PACK_FILE, WEB_PACK_KEY);
     await appStorage.setItem(STORAGE_KEYS.offlinePackReady, '1');
@@ -380,10 +417,16 @@ export const OfflineStore = {
     const nowIso = new Date().toISOString();
     await appStorage.setItem(STORAGE_KEYS.offlinePackAt, nowIso);
     try {
-      const sha256 = await computePackHashAsync(pack);
+      const sha256 = await computePackHashAsync(safe);
       await appStorage.setItem('tcc.offline.pack.sha256', sha256);
     } catch {
       // ignore
+    }
+    try {
+      const { persistViolationLimit } = await import('@/shared/utils/violationLimit');
+      await persistViolationLimit(safe.examination_settings?.violation_limit);
+    } catch {
+      // Non-fatal: devices fall back to default limit.
     }
   },
 
@@ -421,7 +464,11 @@ export const OfflineStore = {
   },
 
   async getPack(): Promise<OfflinePack | null> {
-    if (this._packCache) return this._packCache;
+    if (this._packCache) {
+      const cached = sanitizePackToActiveBanks(this._packCache);
+      this._packCache = cached;
+      return cached;
+    }
 
     const { data, needsMigrate } = await readEncryptedOrLegacy<OfflinePack>(
       PACK_ENC_FILE,
@@ -429,13 +476,20 @@ export const OfflineStore = {
       WEB_PACK_ENC_KEY,
       WEB_PACK_KEY,
     );
-    if (data && needsMigrate) {
-      // Migrate plaintext → encrypted at rest on next successful read.
-      await this.savePack(data);
-      return data;
+    if (!data) return null;
+
+    const safe = sanitizePackToActiveBanks(data);
+    const hadInactive =
+      (data.question_banks?.length ?? 0) !== (safe.question_banks?.length ?? 0);
+
+    if (needsMigrate || hadInactive) {
+      // Migrate plaintext → encrypted, and drop inactive banks from older packs.
+      await this.savePack(safe);
+      return safe;
     }
-    if (data) this._packCache = data;
-    return data;
+
+    this._packCache = safe;
+    return safe;
   },
 
   async hasPack(): Promise<boolean> {
@@ -484,8 +538,25 @@ export const OfflineStore = {
     code: string,
     status: 'lobby_open' | 'in_progress' | 'ended' = 'lobby_open',
   ): Promise<void> {
-    const key = `${Number(scheduleId)}:${Number(roomId)}`;
+    const sid = await this.resolveOpenedScheduleId(scheduleId);
+    const rid = Number(roomId);
+    if (!Number.isInteger(sid) || sid <= 0 || !Number.isInteger(rid) || rid <= 0) {
+      console.error('[OfflineStore] Refusing setOpenedRoom with invalid ids', {
+        scheduleId,
+        roomId,
+        sid,
+        rid,
+      });
+      return;
+    }
+    const key = `${sid}:${rid}`;
     const all = await this.getOpenedRooms();
+    // Drop legacy NaN keys for the same room if present.
+    for (const existing of Object.keys(all)) {
+      if (existing.startsWith('NaN:') && existing.endsWith(`:${rid}`)) {
+        delete all[existing];
+      }
+    }
     all[key] = {
       code: code.trim().toUpperCase(),
       openedAt: all[key]?.openedAt || new Date().toISOString(),
@@ -499,13 +570,31 @@ export const OfflineStore = {
     scheduleId: string | number,
     roomId: string | number,
   ): Promise<void> {
-    const key = `${Number(scheduleId)}:${Number(roomId)}`;
+    const sid = await this.resolveOpenedScheduleId(scheduleId);
+    const rid = Number(roomId);
+    if (!Number.isInteger(sid) || sid <= 0 || !Number.isInteger(rid) || rid <= 0) {
+      return;
+    }
+    const key = `${sid}:${rid}`;
     const all = await this.getOpenedRooms();
     if (!all[key]) return;
     delete all[key];
     await appStorage.setItem(STORAGE_KEYS.offlineOpenedRooms, JSON.stringify(all));
   },
 
+  async resolveOpenedScheduleId(scheduleId: string | number): Promise<number> {
+    const direct = Number(String(scheduleId).replace(/^offline-/, '').split(/[:-]/)[0]);
+    if (Number.isInteger(direct) && direct > 0) return direct;
+    try {
+      const pack = this._packCache ?? (await this.getPack());
+      const { resolveNumericScheduleId } = await import(
+        '@/features/examinations/services/peerExamServer'
+      );
+      return resolveNumericScheduleId(scheduleId, pack);
+    } catch {
+      return 0;
+    }
+  },
   async findOpenedRoomByCode(code: string): Promise<{
     scheduleId: number;
     roomId: number;
@@ -660,6 +749,7 @@ export const OfflineStore = {
     );
     next.push(row);
     await this.saveResults(next);
+    emitResultsChanged();
   },
 
   async pendingResults(): Promise<OfflineQueuedResult[]> {
@@ -673,6 +763,7 @@ export const OfflineStore = {
     await this.saveResults(
       rows.map((r) => (set.has(r.local_id) ? { ...r, synced: true } : r)),
     );
+    emitResultsChanged();
   },
 
   async setOfflineMode(enabled: boolean): Promise<void> {
