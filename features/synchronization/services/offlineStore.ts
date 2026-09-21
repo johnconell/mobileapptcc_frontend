@@ -73,6 +73,8 @@ export type OfflinePack = {
   examination_settings?: {
     duration_minutes?: number;
     violation_limit?: number;
+    disconnect_grace_seconds?: number;
+    tab_switch_grace_seconds?: number;
     room_student_limit?: number;
     shuffle_questions?: boolean;
     shuffle_categories?: boolean;
@@ -428,6 +430,13 @@ export const OfflineStore = {
     } catch {
       // Non-fatal: devices fall back to default limit.
     }
+    try {
+      const { persistDisconnectGraceSeconds, persistTabSwitchGraceSeconds } = await import('@/shared/utils/gracePeriod');
+      await persistDisconnectGraceSeconds(safe.examination_settings?.disconnect_grace_seconds);
+      await persistTabSwitchGraceSeconds(safe.examination_settings?.tab_switch_grace_seconds);
+    } catch {
+      // Non-fatal: devices fall back to default limit.
+    }
   },
 
   /** Layer 3: Tamper Detection & Integrity Verification */
@@ -660,30 +669,51 @@ export const OfflineStore = {
   },
 
   /**
-   * Check whether the exam pack was downloaded TODAY (local date YYYY-MM-DD).
-   * Proctors are required to download the pack daily to include rescheduled applicants.
+   * Check whether the exam pack was downloaded TODAY (local date YYYY-MM-DD)
+   * or within the last 24 hours.
    */
   async isPackDownloadedToday(): Promise<{
     downloadedToday: boolean;
     packDate: string | null;
     today: string;
+    hasPack: boolean;
   }> {
     const has = await this.hasPack();
     const today = toLocalDateString();
     if (!has) {
-      return { downloadedToday: false, packDate: null, today };
+      return { downloadedToday: false, packDate: null, today, hasPack: false };
     }
 
     const at = await appStorage.getItem(STORAGE_KEYS.offlinePackAt);
     const pack = await this.getPack();
     const timestamp = at || pack?.exported_at || null;
     const packDate = timestamp ? toLocalDateString(timestamp) : null;
+    let downloadedToday = Boolean(packDate && packDate === today);
+
+    // Also consider valid if downloaded/acknowledged within the past 24 hours
+    if (!downloadedToday && timestamp) {
+      const tsMs = new Date(timestamp).getTime();
+      if (!isNaN(tsMs) && tsMs > 0 && Date.now() - tsMs < 24 * 3600 * 1000 && Date.now() >= tsMs) {
+        downloadedToday = true;
+      }
+    }
 
     return {
-      downloadedToday: Boolean(packDate && packDate === today),
+      downloadedToday,
       packDate,
       today,
+      hasPack: true,
     };
+  },
+
+  /**
+   * Mark the cached offline exam pack as acknowledged/ready for today.
+   * Updates offlinePackAt so the proctor can open examination rooms without redundant prompts.
+   */
+  async markPackAcknowledgedToday(): Promise<void> {
+    const nowIso = new Date().toISOString();
+    await appStorage.setItem(STORAGE_KEYS.offlinePackAt, nowIso);
+    await appStorage.setItem(STORAGE_KEYS.offlinePackReady, '1');
   },
 
   /**

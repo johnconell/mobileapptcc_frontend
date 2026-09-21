@@ -571,29 +571,70 @@ export type PeerQrTarget = {
   host: string;
   port: number;
   code: string;
-  scheduleId: number | null;
-  roomId: number | null;
-  wifiSsid: string | null;
+  scheduleId?: number | null;
+  roomId?: number | null;
+  wifiSsid?: string | null;
 };
 
 /** Read a scanned QR string; returns null when it is not a peer QR. */
 export function parsePeerQr(raw: string): PeerQrTarget | null {
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith('{')) return null;
+  const trimmed = (raw || '').trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
   try {
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    if (parsed.type !== 'metcc_peer') return null;
-    const host = String(parsed.h ?? parsed.host ?? '').trim();
-    const code = String(parsed.c ?? parsed.examinationCode ?? parsed.code ?? '')
+    const host = String(
+      parsed.h ??
+        parsed.host ??
+        parsed.ip ??
+        parsed.local_ip ??
+        parsed.proctor_local_ip ??
+        parsed.local_server_ip ??
+        '',
+    ).trim();
+    const code = String(
+      parsed.c ??
+        parsed.code ??
+        parsed.session_code ??
+        parsed.exam_code ??
+        parsed.examinationCode ??
+        '',
+    )
       .trim()
       .toUpperCase();
     if (!host || !code) return null;
-    const scheduleId = parsed.s != null ? Number(parsed.s) : (parsed.schedule_id != null ? Number(parsed.schedule_id) : null);
-    const roomId = parsed.r != null ? Number(parsed.r) : (parsed.room_id != null ? Number(parsed.room_id) : null);
-    const wifiSsid = parsed.w ? String(parsed.w) : (parsed.wifi_ssid ? String(parsed.wifi_ssid) : null);
+    const scheduleId =
+      parsed.s != null
+        ? Number(parsed.s)
+        : parsed.schedule_id != null
+        ? Number(parsed.schedule_id)
+        : parsed.examination_schedule_id != null
+        ? Number(parsed.examination_schedule_id)
+        : null;
+    const roomId =
+      parsed.r != null
+        ? Number(parsed.r)
+        : parsed.room_id != null
+        ? Number(parsed.room_id)
+        : parsed.examination_room_id != null
+        ? Number(parsed.examination_room_id)
+        : null;
+    const wifiSsid = parsed.w
+      ? String(parsed.w)
+      : parsed.wifi_ssid
+      ? String(parsed.wifi_ssid)
+      : parsed.wifiSsid
+      ? String(parsed.wifiSsid)
+      : null;
     return {
       host,
-      port: Number(parsed.p ?? parsed.port) || PEER_PORT,
+      port:
+        Number(
+          parsed.p ??
+            parsed.port ??
+            parsed.peer_port ??
+            parsed.local_port ??
+            parsed.proctor_local_port,
+        ) || PEER_PORT,
       code,
       scheduleId,
       roomId,
@@ -642,7 +683,7 @@ function registerRoutes(mod: HttpServerModule) {
   mod.route(p('/status'), 'GET', handleStatus);
   mod.route(p('/status'), 'POST', handleStatus);
 
-  mod.route(p('/ping'), 'GET', async () => {
+  const handlePing = async () => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     return ok({
       code: session.examCode,
@@ -650,7 +691,9 @@ function registerRoutes(mod: HttpServerModule) {
       schedule_id: session.scheduleId,
       room_id: session.roomId,
     });
-  });
+  };
+  mod.route(p('/ping'), 'GET', handlePing);
+  mod.route(p('/ping'), 'POST', handlePing);
 
   mod.route(p('/resolve'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');

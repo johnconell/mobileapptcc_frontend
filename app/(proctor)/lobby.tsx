@@ -54,6 +54,9 @@ import {
   X,
   ChevronRight,
   Keyboard,
+  CalendarDays,
+  Clock,
+  MapPin,
 } from 'lucide-react-native';
 
 function formatTime(iso: string | null | undefined) {
@@ -129,6 +132,9 @@ export default function ProctorLobbyScreen() {
   const [peerHost, setPeerHost] = useState<string | null>(null);
   const [hosting, setHosting] = useState(PeerExamServer.info());
   const [serverLastHeartbeat, setServerLastHeartbeat] = useState<number>(Date.now());
+  const [cloudCode, setCloudCode] = useState<string | null>(null);
+  const [cloudQrValue, setCloudQrValue] = useState<string | null>(null);
+  const [cloudSessionId, setCloudSessionId] = useState<number | null>(null);
 
   // REPLICATION STATES: SWAP MODAL ('Switch Active Room') & SEND MODAL ('Room Access Code')
   const [swapModalVisible, setSwapModalVisible] = useState(false);
@@ -189,10 +195,11 @@ export default function ProctorLobbyScreen() {
   };
 
   const handleShareCode = async () => {
-    if (!storeLobby?.examinationCode) return;
+    const codeToShare = cloudCode || storeLobby?.examinationCode || lobby?.examinationCode;
+    if (!codeToShare) return;
     try {
       await Share.share({
-        message: `Examination Access Code: ${storeLobby.examinationCode}\nRoom: ${storeLobby.session?.roomName || 'Exam Room'}\nConnect to Wi-Fi: ${storeLobby.wifiSsid || 'Testing Wi-Fi'}`,
+        message: `Examination Access Code: ${codeToShare}\nRoom: ${storeLobby?.session?.roomName || lobby?.session?.roomName || 'Exam Room'}\nConnect to Wi-Fi: ${storeLobby?.wifiSsid || lobby?.wifiSsid || 'Testing Wi-Fi'}`,
       });
     } catch {
       // ignore
@@ -261,6 +268,31 @@ export default function ProctorLobbyScreen() {
         checkInReady.current = true;
         setSnapshot(snapshot);
         setPeerHost(PeerExamServer.info().host);
+
+        // Open/sync unique cloud session for deterministic examinee LAN resolution
+        try {
+          const { resolveWifiLanIp } = await import('@/features/monitoring/services/wifiLanIp');
+          const lan = await resolveWifiLanIp();
+          const hostIp = lan.ip || '127.0.0.1';
+          const proctorId = profile?.id || 1;
+          const cloud = await LobbyRepository.openCloudSession({
+            proctorId,
+            localIp: hostIp,
+            localPort: 9777,
+            scheduleId: scheduleId ? Number(scheduleId) : undefined,
+            roomId: roomId ? Number(roomId) : undefined,
+          });
+          if (cloud && !cancelled) {
+            setCloudCode(cloud.session_code);
+            setCloudQrValue(cloud.qr_payload || cloud.qr_token || cloud.session_code);
+            setCloudSessionId(cloud.session_id);
+            if (cloud.session_code) {
+              await PeerExamServer.adoptExamCode(cloud.session_code);
+            }
+          }
+        } catch (cloudErr) {
+          if (__DEV__) console.warn('[Lobby] openCloudSession sync failed (continuing):', cloudErr);
+        }
 
         try {
           const pack = await OfflineStore.getPack();
@@ -615,13 +647,17 @@ export default function ProctorLobbyScreen() {
     });
   };
 
+  const displayCode = cloudCode || lobby?.examinationCode || '----';
+  const displayQrValue = lobby?.qrValue || cloudQrValue || displayCode;
+
   const copyCode = async () => {
     try {
-      await Clipboard.setStringAsync(lobby.examinationCode ?? '');
+      const codeToCopy = displayCode !== '----' ? displayCode : (lobby.examinationCode ?? '');
+      await Clipboard.setStringAsync(codeToCopy);
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
-      Alert.alert('Examination Code', lobby.examinationCode ?? '');
+      Alert.alert('Examination Code', displayCode);
     }
   };
 
@@ -634,6 +670,17 @@ export default function ProctorLobbyScreen() {
   const batchLabel = String(rawBatch).toLowerCase().startsWith('batch')
     ? String(rawBatch)
     : `Batch ${rawBatch}`;
+
+  const activeSchedule = lobby.schedule || selectedSchedule;
+  const examDate =
+    activeSchedule?.examinationDate ||
+    activeSchedule?.examinationDateIso ||
+    'Scheduled Today';
+  const sessionTime =
+    activeSchedule?.timeLabel ||
+    (activeSchedule?.batchNumber ? `Batch ${activeSchedule.batchNumber}` : null) ||
+    'Standard Session';
+  const schoolYear = activeSchedule?.schoolYear ? `S.Y. ${activeSchedule.schoolYear}` : null;
 
   return (
     <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
@@ -689,6 +736,119 @@ export default function ProctorLobbyScreen() {
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View style={styles.headerBlock}>
+            {/* ============================================================= */}
+            {/* CURRENT EXAMINATION SCHEDULE CARD                             */}
+            {/* Prominently placed at the top for instant recognition        */}
+            {/* ============================================================= */}
+            <View
+              style={[
+                styles.scheduleHeroCard,
+                {
+                  backgroundColor: themeColors.card,
+                  borderColor: isDark ? 'rgba(122, 31, 43, 0.45)' : '#FECACA',
+                },
+              ]}
+            >
+              <View style={styles.scheduleHeroTopRow}>
+                <View
+                  style={[
+                    styles.scheduleHeroBadge,
+                    {
+                      backgroundColor: isDark ? '#2A1414' : '#FEE2E2',
+                      borderColor: isDark ? '#7A1F2B60' : '#FCA5A5',
+                    },
+                  ]}
+                >
+                  <CalendarDays size={13} color={isDark ? '#E8342A' : '#7A1F2B'} />
+                  <Text style={[styles.scheduleHeroBadgeText, { color: isDark ? '#E8342A' : '#7A1F2B' }]}>
+                    CURRENT EXAMINATION SCHEDULE
+                  </Text>
+                </View>
+
+                {schoolYear ? (
+                  <View
+                    style={[
+                      styles.scheduleSyBadge,
+                      {
+                        backgroundColor: isDark ? '#1F2937' : '#F3F4F6',
+                        borderColor: isDark ? '#374151' : '#E5E7EB',
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.scheduleSyText, { color: themeColors.textSecondary }]}>
+                      {schoolYear}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <Text style={[styles.scheduleHeroTitle, { color: themeColors.textPrimary }]}>
+                {scheduleLabel}
+              </Text>
+
+              <View style={styles.scheduleHeroMetaGrid}>
+                <View
+                  style={[
+                    styles.scheduleMetaPill,
+                    {
+                      backgroundColor: isDark ? '#1A1A1A' : themeColors.background,
+                      borderColor: themeColors.cardBorder,
+                    },
+                  ]}
+                >
+                  <CalendarDays size={13} color={themeColors.textSecondary} />
+                  <Text style={[styles.scheduleMetaPillText, { color: themeColors.textPrimary }]}>
+                    {examDate}
+                  </Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.scheduleMetaPill,
+                    {
+                      backgroundColor: isDark ? '#1A1A1A' : themeColors.background,
+                      borderColor: themeColors.cardBorder,
+                    },
+                  ]}
+                >
+                  <Clock size={13} color={themeColors.textSecondary} />
+                  <Text style={[styles.scheduleMetaPillText, { color: themeColors.textPrimary }]}>
+                    {sessionTime}
+                  </Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.scheduleMetaPill,
+                    {
+                      backgroundColor: isDark ? '#1A1A1A' : themeColors.background,
+                      borderColor: themeColors.cardBorder,
+                    },
+                  ]}
+                >
+                  <MapPin size={13} color={themeColors.textSecondary} />
+                  <Text style={[styles.scheduleMetaPillText, { color: themeColors.textPrimary }]}>
+                    {roomLabel} · {batchLabel}
+                  </Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.scheduleMetaPill,
+                    {
+                      backgroundColor: isDark ? '#1A1A1A' : themeColors.background,
+                      borderColor: themeColors.cardBorder,
+                    },
+                  ]}
+                >
+                  <Users size={13} color={themeColors.textSecondary} />
+                  <Text style={[styles.scheduleMetaPillText, { color: themeColors.textPrimary }]}>
+                    {`${lobby.registeredCount || lobby.students.length} Candidates`}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
             {/* ============================================================= */}
             {/* EXAMINATION ACCESS PASS CARD (Theme-aware, matching results) */}
             {/* Soft ivory in light mode, elevated dark in dark mode          */}
@@ -759,7 +919,7 @@ export default function ProctorLobbyScreen() {
                 ]}
               >
                 <QrCodePanel
-                  value={lobby.qrValue}
+                  value={displayQrValue}
                   size={190}
                   note={
                     lobby.status === 'in_progress'
@@ -783,7 +943,7 @@ export default function ProctorLobbyScreen() {
                       { color: isDark ? '#FFFFFF' : '#7A1F2B' },
                     ]}
                   >
-                    {lobby.examinationCode || '----'}
+                    {displayCode}
                   </Text>
                   <View style={styles.codeActionButtonsRow}>
                     <Pressable
@@ -1177,21 +1337,27 @@ export default function ProctorLobbyScreen() {
             const { OfflineStore } = await import('@/features/synchronization/services/offlineStore');
             const todayCheck = await OfflineStore.isPackDownloadedToday();
             if (!todayCheck.downloadedToday) {
-              Alert.alert(
-                "Today's Exam Module Required",
-                `The exam pack on this phone was not downloaded today (${todayCheck.today}). You must update the exam pack before starting to ensure rescheduled applicants are included.`,
-                [
-                  { text: 'Cancel', style: 'cancel' },
-                  {
-                    text: 'Go to Download',
-                    onPress: () => {
-                      setStartOpen(false);
-                      router.push('/(proctor)/(tabs)/examination');
+              const hasPack = await OfflineStore.hasPack();
+              if (hasPack) {
+                // Device already has the pack; acknowledge so the exam can proceed smoothly.
+                await OfflineStore.markPackAcknowledgedToday();
+              } else {
+                Alert.alert(
+                  "Today's Exam Module Required",
+                  `The exam pack on this phone was not downloaded today (${todayCheck.today}). You must update the exam pack before starting to ensure rescheduled applicants are included.`,
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Go to Download',
+                      onPress: () => {
+                        setStartOpen(false);
+                        router.push('/(proctor)/(tabs)/examination');
+                      },
                     },
-                  },
-                ],
-              );
-              return;
+                  ],
+                );
+                return;
+              }
             }
 
             const pack = await OfflineStore.getPack();
@@ -1260,6 +1426,9 @@ export default function ProctorLobbyScreen() {
             setBusy(true);
             try {
               const snapshot = await LobbyRepository.startExamination(sessionId, roomId);
+              void LobbyRepository.startCloudSession(cloudSessionId ?? undefined).catch((err) => {
+                if (__DEV__) console.warn('[Lobby] startCloudSession error:', err);
+              });
               setSnapshot(snapshot);
               await refresh();
               setStartOpen(false);
@@ -1295,9 +1464,15 @@ export default function ProctorLobbyScreen() {
             const wasLobbyOnly = lobby?.status === 'lobby_open';
             if (wasLobbyOnly) {
               await LobbyRepository.closeLobby(sessionId, roomId);
+              void LobbyRepository.closeCloudSession(cloudSessionId ?? undefined).catch((err) => {
+                if (__DEV__) console.warn('[Lobby] closeCloudSession error:', err);
+              });
               setSnapshot(null);
             } else {
               const snapshot = await LobbyRepository.endExamination(sessionId, roomId);
+              void LobbyRepository.closeCloudSession(cloudSessionId ?? undefined).catch((err) => {
+                if (__DEV__) console.warn('[Lobby] closeCloudSession error:', err);
+              });
               setSnapshot(snapshot);
               // Ensure this session is marked ended in offline store (numeric schedule id).
               if (roomId) {
@@ -1805,6 +1980,73 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#262626',
+  },
+
+  // CURRENT EXAMINATION SCHEDULE HERO CARD
+  scheduleHeroCard: {
+    borderRadius: 20,
+    borderWidth: 1.5,
+    padding: 16,
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  scheduleHeroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  scheduleHeroBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4.5,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  scheduleHeroBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+  },
+  scheduleSyBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3.5,
+    borderRadius: 7,
+    borderWidth: 1,
+  },
+  scheduleSyText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  scheduleHeroTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    lineHeight: 24,
+    letterSpacing: -0.2,
+  },
+  scheduleHeroMetaGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  scheduleMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  scheduleMetaPillText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
 
   // EXAMINATION LOBBY ACCESS PASS CARD

@@ -42,14 +42,23 @@ export default function StudentPasskeyScreen() {
   const setExamPasskey = useStudentStore((s) => s.setExamPasskey);
   const [error, setError] = useState<string | null>(null);
 
+  const storedPasskey = useStudentStore((s) => s.examPasskey);
+
   const {
     control,
     handleSubmit,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { passkey: '' },
+    defaultValues: { passkey: storedPasskey || '' },
   });
+
+  React.useEffect(() => {
+    if (storedPasskey) {
+      setValue('passkey', storedPasskey);
+    }
+  }, [storedPasskey, setValue]);
 
   React.useEffect(() => {
     if (!scannedSessionId) {
@@ -60,6 +69,8 @@ export default function StudentPasskeyScreen() {
   React.useEffect(() => {
     if (verifiedStudent && scannedSessionId) {
       router.replace('/(student)/lobby');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      router.replace('/(student)/terms' as any);
     }
   }, [verifiedStudent, scannedSessionId, router]);
 

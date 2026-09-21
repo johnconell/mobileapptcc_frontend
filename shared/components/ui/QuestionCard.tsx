@@ -1,9 +1,9 @@
 import React from 'react';
 import { Pressable, Text, View, StyleSheet } from 'react-native';
-import { Check } from 'lucide-react-native';
 import type { ChoiceKey, Question } from '@/shared/types';
 import { choiceKeys } from '@/shared/utils';
 import { examProcess } from '@/shared/theme/examProcess';
+import { examUi, examUiPalette } from '@/shared/theme/examUi';
 
 export type ExamAppearance = {
   fontScale: number;
@@ -12,148 +12,179 @@ export type ExamAppearance = {
 
 interface QuestionCardProps {
   question: Question;
+  questionIndex?: number;
+  totalQuestions?: number;
   selectedAnswer: ChoiceKey | null;
   onSelect: (choice: ChoiceKey) => void;
   secure?: boolean;
   appearance?: ExamAppearance;
-  /** Reader / Bible-app continuous scroll layout */
+  /** Continuous scroll card layout */
   readerMode?: boolean;
 }
 
-function choiceLabel(question: Question, key: ChoiceKey): string {
-  const choiceVal = question.choices?.[key];
-  if (choiceVal && typeof choiceVal === 'object') {
-    return (
-      (choiceVal as { text?: string; value?: string; label?: string }).text ??
-      (choiceVal as { value?: string }).value ??
-      (choiceVal as { label?: string }).label ??
-      String(choiceVal)
-    );
+function cleanChoiceText(rawText: string): string {
+  const trimmed = rawText.trim();
+  if (!trimmed) return '';
+
+  // Strip patterns like "A. Foo", "A) Foo", "(A) Foo", "A - Foo", "A: Foo"
+  const delimited = trimmed.replace(/^(\(?[A-Da-d]\)?[:.\-–]\s*)/, '');
+  if (delimited !== trimmed) {
+    return delimited.trim();
   }
-  return String(choiceVal ?? '');
+  // Strip "A Foo" only if there is following text (length > 2)
+  if (/^[A-Da-d]\s+\S+/.test(trimmed)) {
+    return trimmed.replace(/^[A-Da-d]\s+/, '').trim();
+  }
+  return trimmed;
+}
+
+function choiceLabel(question: Question, key: ChoiceKey): string {
+  const choices = question.choices as unknown;
+  if (!choices) return '';
+
+  const indexMap: Record<ChoiceKey, number> = { A: 0, B: 1, C: 2, D: 3 };
+  const idx = indexMap[key];
+
+  let raw: unknown = undefined;
+  if (Array.isArray(choices)) {
+    raw = choices[idx];
+  } else if (typeof choices === 'object' && choices !== null) {
+    const obj = choices as Record<string, unknown>;
+    raw = obj[key] ?? obj[key.toLowerCase()] ?? obj[String(idx)];
+  }
+
+  if (raw && typeof raw === 'object') {
+    const o = raw as Record<string, unknown>;
+    raw = o.text ?? o.value ?? o.label ?? o.title ?? o.name ?? '';
+  }
+
+  const str = String(raw ?? '').trim();
+  return cleanChoiceText(str);
 }
 
 export function QuestionCard({
   question,
+  questionIndex,
+  totalQuestions,
   selectedAnswer,
   onSelect,
   secure = false,
   appearance,
-  readerMode = false,
 }: QuestionCardProps) {
   const fontScale = appearance?.fontScale ?? 1;
   const dark = appearance?.darkMode ?? false;
   const keys = choiceKeys();
-  const answered = Boolean(selectedAnswer);
-
-  const palette = dark
-    ? {
-        ink: '#F4F4F5',
-        muted: '#A1A1AA',
-        verse: '#A1A1AA',
-        check: '#4ADE80',
-        choiceBg: '#1C1C1E',
-        choiceInk: '#F4F4F5',
-        selectedBg: 'rgba(34, 197, 94, 0.28)',
-        selectedInk: '#ECFDF5',
-        cardBg: readerMode ? 'transparent' : '#141414',
-        cardBorder: readerMode ? 'transparent' : '#2A2A2A',
-      }
-    : {
-        ink: '#1A1A2E',
-        muted: examProcess.muted,
-        verse: examProcess.muted,
-        check: '#16A34A',
-        choiceBg: '#FFFFFF',
-        choiceInk: '#1A1A2E',
-        selectedBg: examProcess.okBg,
-        selectedInk: examProcess.okText,
-        cardBg: readerMode ? 'transparent' : examProcess.cardBg,
-        cardBorder: readerMode ? 'transparent' : examProcess.cardBorder,
-      };
+  const p = examUiPalette(dark);
+  const qNum =
+    Number(question.number) ||
+    (questionIndex !== undefined ? questionIndex + 1 : 1);
+  const category = (question.category || question.subjectId || 'General').trim();
 
   return (
     <View
       style={[
-        readerMode ? styles.readerBlock : styles.card,
-        !readerMode && {
-          backgroundColor: palette.cardBg,
-          borderColor: palette.cardBorder,
+        styles.card,
+        {
+          backgroundColor: p.card,
+          shadowColor: p.shadow,
+          borderColor: p.border,
+          borderWidth: 1,
         },
       ]}
     >
-      <View style={styles.promptRow}>
-        <View style={styles.numberCol}>
-          <Text
-            style={[
-              styles.verseNum,
-              {
-                color: answered ? palette.check : palette.verse,
-                fontSize: 13 * fontScale,
-                lineHeight: 28 * fontScale,
-              },
-            ]}
-            selectable={!secure}
-          >
-            {question.number}
-          </Text>
-          {answered ? (
-            <Check size={14} color={palette.check} strokeWidth={3} />
-          ) : null}
-        </View>
-        <Text
-          style={[
-            styles.prompt,
-            {
-              color: palette.ink,
-              fontSize: 18 * fontScale,
-              lineHeight: 28 * fontScale,
-            },
-          ]}
-          selectable={!secure}
-          {...(secure ? ({ contextMenuHidden: true } as object) : null)}
-        >
-          {String(question.question ?? '')}
+      {/* Header: Q. 1/9 on left, Category on right */}
+      <View style={styles.cardHeader}>
+        <Text style={[styles.qMeta, { color: p.muted, fontSize: 13 * fontScale }]}>
+          {`Q. ${qNum}${totalQuestions ? `/${totalQuestions}` : ''}`}
+        </Text>
+        <Text style={[styles.categoryMeta, { color: p.muted, fontSize: 13 * fontScale }]}>
+          {category}
         </Text>
       </View>
 
+      {/* Question Prompt */}
+      <Text
+        style={[
+          styles.prompt,
+          {
+            color: p.ink,
+            fontSize: 18 * fontScale,
+            lineHeight: 26 * fontScale,
+          },
+        ]}
+        selectable={!secure}
+        {...(secure ? ({ contextMenuHidden: true } as object) : null)}
+      >
+        {String(question.question ?? '')}
+      </Text>
+
+      {/* Choices: 4 stadium pill boxes with circular letter badges */}
       <View style={styles.choices}>
         {keys.map((key) => {
           const selected = selectedAnswer === key;
-          const label = choiceLabel(question, key);
+          const body = choiceLabel(question, key);
+          if (!body) return null;
+
+          const pillBg = selected
+            ? dark
+              ? examUi.accentSoftDark
+              : examUi.accentSoftLight
+            : p.pill;
+
+          const circleBg = selected
+            ? examUi.accent
+            : dark
+              ? '#1D2132'
+              : '#FFFFFF';
+
+          const circleTextColor = selected
+            ? '#FFFFFF'
+            : dark
+              ? '#CBD5E1'
+              : '#334155';
+
+          const borderColor = selected ? examUi.accent : 'transparent';
+
           return (
             <Pressable
               key={key}
               accessibilityRole="radio"
               accessibilityState={{ selected }}
-              accessibilityLabel={`Option ${key}: ${label}`}
+              accessibilityLabel={`Option ${key}: ${body}`}
               onPress={() => onSelect(key)}
               onLongPress={secure ? () => undefined : undefined}
               delayLongPress={secure ? 10_000 : undefined}
               style={({ pressed }) => [
                 styles.choice,
                 {
-                  backgroundColor: selected ? palette.selectedBg : palette.choiceBg,
-                  opacity: pressed ? 0.92 : 1,
+                  backgroundColor: pressed ? p.pillPressed : pillBg,
+                  borderColor,
                 },
               ]}
             >
+              <View style={[styles.choiceCircle, { backgroundColor: circleBg }]}>
+                <Text
+                  style={[
+                    styles.choiceCircleText,
+                    { color: circleTextColor, fontSize: 15 * fontScale },
+                  ]}
+                >
+                  {key}
+                </Text>
+              </View>
               <Text
                 style={[
                   styles.choiceText,
                   {
-                    color: selected ? palette.selectedInk : palette.choiceInk,
+                    color: p.ink,
                     fontSize: 16 * fontScale,
                     lineHeight: 22 * fontScale,
-                    fontFamily: selected
-                      ? examProcess.fontMedium
-                      : examProcess.fontRegular,
                   },
                 ]}
                 selectable={!secure}
                 {...(secure ? ({ contextMenuHidden: true } as object) : null)}
               >
-                {label}
+                {body}
               </Text>
             </Pressable>
           );
@@ -165,47 +196,60 @@ export function QuestionCard({
 
 const styles = StyleSheet.create({
   card: {
-    borderWidth: 1,
-    borderRadius: examProcess.radiusCard,
-    padding: 18,
+    borderRadius: 20,
+    padding: 20,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 1,
+    shadowRadius: 14,
+    elevation: 3,
   },
-  readerBlock: {
-    paddingVertical: 8,
-    paddingHorizontal: 2,
-    gap: 16,
-  },
-  promptRow: {
+  cardHeader: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  numberCol: {
-    width: 28,
     alignItems: 'center',
-    gap: 2,
-    marginTop: 2,
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
-  verseNum: {
+  qMeta: {
     fontFamily: examProcess.fontSemiBold,
-    textAlign: 'center',
+    letterSpacing: 0.3,
+  },
+  categoryMeta: {
+    fontFamily: examProcess.fontSemiBold,
+    letterSpacing: 0.3,
   },
   prompt: {
-    flex: 1,
     fontFamily: examProcess.fontSemiBold,
+    marginBottom: 18,
   },
   choices: {
     gap: 12,
-    paddingLeft: 38,
   },
   choice: {
     width: '100%',
-    borderRadius: 14,
-    paddingVertical: 18,
-    paddingHorizontal: 18,
-    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 9999,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    minHeight: 56,
+    borderWidth: 2,
+  },
+  choiceCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
     justifyContent: 'center',
   },
+  choiceCircleText: {
+    fontFamily: examProcess.fontSemiBold,
+    includeFontPadding: false,
+    textAlign: 'center',
+  },
   choiceText: {
-    fontFamily: examProcess.fontRegular,
+    flex: 1,
+    marginLeft: 14,
+    marginRight: 6,
+    fontFamily: examProcess.fontSemiBold,
   },
 });

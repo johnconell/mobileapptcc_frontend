@@ -27,9 +27,9 @@ export const PeerExamClient = {
       host: target.host,
       port: target.port || PEER_PORT,
       code: target.code,
-      scheduleId: target.scheduleId,
-      roomId: target.roomId,
-      wifiSsid: target.wifiSsid,
+      scheduleId: target.scheduleId ?? null,
+      roomId: target.roomId ?? null,
+      wifiSsid: target.wifiSsid ?? null,
     };
     cached = value;
     await appStorage.setItem(STORAGE_KEYS.peerTarget, JSON.stringify(value));
@@ -69,6 +69,18 @@ export const PeerExamClient = {
     if (!code) return false;
 
     try {
+      const { OfflineStore } = await import('@/features/synchronization/services/offlineStore');
+      if (await OfflineStore.isOfflineMode()) return false;
+      const Network = await import('expo-network');
+      const netState = await Network.getNetworkStateAsync().catch(() => null);
+      if (netState?.isConnected === false || netState?.isInternetReachable === false) {
+        return false;
+      }
+    } catch {
+      // continue
+    }
+
+    try {
       const { getCloudApiBaseUrl, getApiBaseUrl } = await import('@/shared/services/api');
       const base = getCloudApiBaseUrl() || getApiBaseUrl();
       const res = await withTimeout(
@@ -82,7 +94,7 @@ export const PeerExamClient = {
             body: JSON.stringify({ code }),
             signal,
           }),
-        6000,
+        3000,
       );
       if (!res.ok) return false;
       const json = await res.json().catch(() => null);

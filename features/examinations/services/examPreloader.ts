@@ -6,6 +6,7 @@ import { appStorage } from '@/shared/services/storage';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { encryptJson, decryptJson } from '@/features/synchronization/services/offlineStore';
 import { persistViolationLimit, clampViolationLimit } from '@/shared/utils/violationLimit';
+import { persistDisconnectGraceSeconds, persistTabSwitchGraceSeconds } from '@/shared/utils/gracePeriod';
 import {
   countMediaAssets,
   INITIAL_PACK_PROGRESS,
@@ -31,6 +32,8 @@ export type PreloadPackageResult = {
 type ExaminationSettings = {
   duration_minutes?: number;
   violation_limit?: number;
+  disconnect_grace_seconds?: number;
+  tab_switch_grace_seconds?: number;
   shuffle_questions?: boolean;
   shuffle_categories?: boolean;
   shuffle_both?: boolean;
@@ -229,6 +232,12 @@ export const ExamPreloader = {
         await persistViolationLimit(
           examinationSettings?.violation_limit ?? packageRes.violationLimit,
         );
+        if (examinationSettings?.disconnect_grace_seconds != null) {
+          await persistDisconnectGraceSeconds(examinationSettings.disconnect_grace_seconds);
+        }
+        if (examinationSettings?.tab_switch_grace_seconds != null) {
+          await persistTabSwitchGraceSeconds(examinationSettings.tab_switch_grace_seconds);
+        }
         packageVersion = packageRes.packageVersion || 1;
         emitProgress({
           phase: 'downloading',

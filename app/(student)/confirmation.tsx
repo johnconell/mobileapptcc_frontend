@@ -76,6 +76,8 @@ export default function StudentConfirmationScreen() {
   React.useEffect(() => {
     if (verifiedStudent && scannedSessionId) {
       router.replace('/(student)/lobby');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      router.replace('/(student)/terms' as any);
       return;
     }
     if (!selectedStudent || !scannedSessionId) {
@@ -148,6 +150,8 @@ export default function StudentConfirmationScreen() {
       setSnapshot(lobby);
       await ExamLifecycle.applyFromServer(lobby.status, { sessionId: String(scannedSessionId) });
       router.replace('/(student)/lobby');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      router.replace('/(student)/terms' as any);
     } catch (error) {
       setJoinError(userFacingError(error, 'Unable to join examination. Please try again.'));
     } finally {

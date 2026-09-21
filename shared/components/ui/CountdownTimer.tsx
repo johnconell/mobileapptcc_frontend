@@ -1,27 +1,55 @@
 import React from 'react';
-import { Text, View, StyleSheet } from 'react-native';
+import { Text, View, StyleSheet, Platform } from 'react-native';
 import { Clock } from 'lucide-react-native';
 import { formatTime } from '@/shared/utils';
-import { colors, radii } from '@/shared/theme';
+import { examUi } from '@/shared/theme/examUi';
+import { examProcess } from '@/shared/theme/examProcess';
 
 interface CountdownTimerProps {
   remainingSeconds: number;
   compact?: boolean;
+  /** Seconds remaining at which amber warning starts (default 5 minutes). */
   warningThreshold?: number;
+  /** Seconds remaining at which red danger starts (default 1 minute). */
+  dangerThreshold?: number;
+  darkMode?: boolean;
 }
 
 export function CountdownTimer({
   remainingSeconds,
   compact = false,
   warningThreshold = 300,
+  dangerThreshold = 60,
+  darkMode = false,
 }: CountdownTimerProps) {
-  const isWarning = remainingSeconds <= warningThreshold;
+  const isDanger = remainingSeconds <= dangerThreshold;
+  const isWarning = !isDanger && remainingSeconds <= warningThreshold;
+
+  const tone = isDanger
+    ? darkMode
+      ? examUi.timerDanger.dark
+      : examUi.timerDanger.light
+    : isWarning
+      ? darkMode
+        ? examUi.timerWarn.dark
+        : examUi.timerWarn.light
+      : darkMode
+        ? examUi.dark.ink
+        : examUi.light.ink;
+
+  const bg = isDanger
+    ? 'rgba(231, 76, 60, 0.18)'
+    : isWarning
+      ? 'rgba(245, 166, 35, 0.18)'
+      : darkMode
+        ? examUi.dark.pill
+        : examUi.light.pill;
 
   return (
-    <View style={[styles.wrap, compact && styles.compact, isWarning && styles.warning]}>
-      <Clock size={compact ? 14 : 16} color={isWarning ? colors.danger : colors.primary} />
-      <Text style={[styles.text, isWarning && styles.warningText]}>
-        {formatTime(remainingSeconds) || '0:00'}
+    <View style={[styles.wrap, compact && styles.compact, { backgroundColor: bg }]}>
+      <Clock size={compact ? 13 : 15} color={tone} />
+      <Text style={[styles.text, compact && styles.textCompact, { color: tone }]}>
+        {formatTime(remainingSeconds) || '00:00'}
       </Text>
     </View>
   );
@@ -32,25 +60,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#F0D9DC',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: radii.full,
-  },
-  compact: {
     paddingHorizontal: 10,
     paddingVertical: 6,
+    borderRadius: 999,
   },
-  warning: {
-    backgroundColor: '#FEE2E2',
+  compact: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
   },
   text: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.primary,
+    fontSize: 15,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     fontVariant: ['tabular-nums'],
+    letterSpacing: 0.6,
   },
-  warningText: {
-    color: colors.danger,
+  textCompact: {
+    fontSize: 13,
   },
 });

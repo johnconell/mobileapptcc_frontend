@@ -15,6 +15,10 @@ function createId() {
 
 /**
  * SecurityRepository — local violation log + Laravel POST /exam/violation.
+ *
+ * The in-memory `violations` array is the authoritative LOCAL source of truth.
+ * Its count is always passed to LobbyRepository as `localCount` so that violations
+ * are never silently lost when the server (proctor phone or cloud) is unreachable.
  */
 export const SecurityRepository = {
   async getMaxViolations(): Promise<number> {
@@ -45,17 +49,29 @@ export const SecurityRepository = {
       resolved: false,
     };
 
+    // Increment local list BEFORE calling the server so the local count is always
+    // at least as high as what we report to LobbyRepository.
     violations = [violation, ...violations];
 
+    // Local count is the number of violations for THIS student in this session.
+    const localCount = violations.filter(
+      (v) => v.studentId === input.studentId && v.sessionId === input.sessionId,
+    ).length;
+
+    const maxViolations = await resolveViolationLimit();
+
+    // Pass localCount to LobbyRepository so it can be used as a floor when the
+    // proctor phone or cloud server is unreachable (offline mode, network error).
     const result = await LobbyRepository.recordStudentViolation(
       input.studentId,
       input.type,
       input.message,
+      localCount,
     );
 
-    const maxViolations = await resolveViolationLimit();
-    const localCount = violations.filter((v) => v.studentId === input.studentId).length;
-    const violationCount = Math.max(result.violationCount || 0, localCount);
+    // The final count is already Math.max(serverCount, localCount) inside
+    // LobbyRepository, so result.violationCount is always at least localCount.
+    const violationCount = result.violationCount;
     const terminated = result.terminated || violationCount >= maxViolations;
 
     return {

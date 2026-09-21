@@ -27,3 +27,4 @@ export {
   ExamCategoryNav,
   buildCategoryProgress,
 } from '@/features/examinations/components/ExamCategoryNav';
+export { default as ExamScreen, type ExamScreenProps, type QuestionItem, type OptionItem } from '@/features/examinations/screens/ExamScreen';

@@ -46,12 +46,20 @@ function useLobbyController() {
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const selectedStudent = useStudentStore((s) => s.selectedStudent);
   const examPasskey = useStudentStore((s) => s.examPasskey);
+  const agreedAt = useStudentStore((s) => s.agreedAt);
   const setVerifiedStudent = useStudentStore((s) => s.setVerifiedStudent);
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
   const storedSnapshot = useLobbyStore((s) => s.snapshot);
   const setQuestions = useExamStore((s) => s.setQuestions);
   const setSessionId = useExamStore((s) => s.setSessionId);
   const startExam = useExamStore((s) => s.startExam);
+
+  // Security gate: students must agree to terms before entering lobby
+  useEffect(() => {
+    if (verifiedStudent && !agreedAt) {
+      router.replace('/(student)/terms' as any);
+    }
+  }, [verifiedStudent, agreedAt, router]);
 
   const [state, setState] = useState<LobbyState>('DASHBOARD');
   const [error, setError] = useState<string | null>(null);

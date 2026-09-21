@@ -483,6 +483,12 @@ export const OfflineExamRepository = {
       // Non-fatal: devices fall back to default limit.
     }
     try {
+      const { persistDisconnectGraceSeconds } = await import('@/shared/utils/gracePeriod');
+      await persistDisconnectGraceSeconds(safePack.examination_settings?.disconnect_grace_seconds);
+    } catch {
+      // Non-fatal: devices fall back to default limit.
+    }
+    try {
       const { useProctorStore } = await import('@/features/proctors/stores/proctorStore');
       const live = useProctorStore.getState().profile;
       if (live?.token) {

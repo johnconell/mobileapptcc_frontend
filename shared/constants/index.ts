@@ -5,6 +5,8 @@ export const SCHOOL_SHORT = 'TCC';
 export const EXAM_DURATION_MINUTES = 60;
 export const TOTAL_QUESTIONS = 80;
 export const MAX_EXAM_VIOLATIONS = 3;
+export const DEFAULT_DISCONNECT_GRACE_SECONDS = 120;
+export const DEFAULT_TAB_SWITCH_GRACE_SECONDS = 5;
 
 export const QUERY_KEYS = {
   schedules: ['schedules'] as const,
@@ -45,6 +47,10 @@ export const STORAGE_KEYS = {
   proctorAuthCacheAt: 'tcc.proctor.auth.cache.at',
   /** Session copied into the exam pack so this proctor can stay signed in offline */
   bundledProctorSession: 'tcc.proctor.bundled.session',
+  /** Cloud-resolved unique session tracking */
+  activeCloudSessionId: 'tcc.cloud.session.id',
+  activeCloudSessionCode: 'tcc.cloud.session.code',
+  activeCloudQrToken: 'tcc.cloud.qr.token',
 } as const;
 
 export const STATUS_LABELS = {
@@ -64,7 +70,7 @@ export const STATUS_LABELS = {
 export const VIOLATION_MESSAGES: Record<string, string> = {
   app_background: 'Leaving the examination is prohibited.',
   app_inactive: 'Leaving the examination is prohibited.',
-  app_blur: 'Leaving the examination is prohibited.',
+  app_blur: 'Interacting with overlay windows or leaving the examination is prohibited.',
   screen_lock: 'Leaving the examination is prohibited.',
   screenshot: 'Screenshot attempt detected.',
   screen_recording: 'Screen recording activity detected.',

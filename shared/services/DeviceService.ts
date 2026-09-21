@@ -3,8 +3,11 @@
  * Repositories remain the source of domain data.
  */
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import * as Crypto from 'expo-crypto';
+import { appStorage } from '@/shared/services/storage';
 
 const EXAM_KEEP_AWAKE_TAG = 'tcc-exam-session';
+const DEVICE_ID_KEY = 'tcc.device.id';
 
 export const DeviceService = {
   async enableExamKeepAwake() {
@@ -20,6 +23,19 @@ export const DeviceService = {
       deactivateKeepAwake(EXAM_KEEP_AWAKE_TAG);
     } catch {
       // no-op
+    }
+  },
+
+  async getDeviceId(): Promise<string> {
+    try {
+      let id = await appStorage.getItem(DEVICE_ID_KEY);
+      if (!id) {
+        id = Crypto.randomUUID();
+        await appStorage.setItem(DEVICE_ID_KEY, id);
+      }
+      return id;
+    } catch {
+      return 'dev-' + Math.random().toString(36).substring(2, 10);
     }
   },
 };

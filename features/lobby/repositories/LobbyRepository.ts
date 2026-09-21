@@ -24,6 +24,32 @@ type LobbyResponse = {
   };
 };
 
+export type CloudExamSession = {
+  success: boolean;
+  session_id: number;
+  session_code: string;
+  qr_token: string;
+  proctor_local_ip: string;
+  proctor_local_port: number;
+  status: string;
+  expires_at: string;
+  qr_payload: string;
+};
+
+export type CloudResolveResult = {
+  success: boolean;
+  session_id: number;
+  session_code: string;
+  proctor_local_ip: string;
+  proctor_local_port: number;
+  passkey: string;
+  status: string;
+  schedule_id?: number | null;
+  room_id?: number | null;
+  qr_token?: string;
+  exam_title?: string | null;
+};
+
 async function getStoredCode(): Promise<string | null> {
   return appStorage.getItem(STORAGE_KEYS.examinationCode);
 }
@@ -532,21 +558,19 @@ export const LobbyRepository = {
   async verifyExaminationCode(rawCode: string): Promise<ExamCodeValidation> {
     // Peer QR: the proctor phone is the exam server. Its LAN address travels in
     // the QR, so no Laravel and no pack on this phone are needed.
-    const isPeerPayload = rawCode.trim().startsWith('{') && rawCode.includes('"metcc_peer"');
+    const isPeerPayload = rawCode.trim().startsWith('{') && (rawCode.includes('"metcc_peer"') || rawCode.includes('"exam_session"'));
     const peer = parsePeerQr(rawCode);
     if (peer) {
       await PeerExamClient.setTarget(peer);
-      // Prefer the latest host IP from the cloud (proctor may have changed Wi‑Fi).
-      await PeerExamClient.refreshHostFromCloud(peer.code);
       try {
         const resolved = await PeerExamClient.request<{
           schedule: ExamCodeValidation['schedule'];
           session: ExamCodeValidation['session'];
           examinationCode: string;
-        }>('/resolve', { method: 'POST', body: { code: peer.code } });
+        }>('/resolve', { method: 'POST', body: { code: peer.code }, timeoutMs: 3500 });
 
         await setStoredCode(resolved.examinationCode || peer.code);
-        await OfflineStore.setOfflineMode(false);
+        await OfflineStore.setOfflineMode(true);
         return {
           valid: true,
           message: 'Connected to the proctor phone.',
@@ -555,7 +579,7 @@ export const LobbyRepository = {
           examinationCode: resolved.examinationCode || peer.code,
         };
       } catch (firstErr) {
-        // Stale QR IP — refresh from cloud once more, then LAN discovery.
+        // Direct LAN failed: try cloud refresh only if online
         const refreshed = await PeerExamClient.refreshHostFromCloud(peer.code);
         if (refreshed) {
           try {
@@ -563,9 +587,9 @@ export const LobbyRepository = {
               schedule: ExamCodeValidation['schedule'];
               session: ExamCodeValidation['session'];
               examinationCode: string;
-            }>('/resolve', { method: 'POST', body: { code: peer.code } });
+            }>('/resolve', { method: 'POST', body: { code: peer.code }, timeoutMs: 3500 });
             await setStoredCode(resolved.examinationCode || peer.code);
-            await OfflineStore.setOfflineMode(false);
+            await OfflineStore.setOfflineMode(true);
             return {
               valid: true,
               message: 'Connected to the proctor phone.',
@@ -1323,15 +1347,34 @@ export const LobbyRepository = {
     };
   },
 
+  /**
+   * Record a security violation and return the authoritative violation count.
+   *
+   * @param studentId   The student's ID (informational).
+   * @param type        Violation type key.
+   * @param message     Human-readable description.
+   * @param localCount  The caller's in-memory violation count AFTER incrementing.
+   *                    Used as an authoritative floor whenever the server/proctor
+   *                    is unreachable (offline mode, peer network error, etc.) so
+   *                    violations are never silently lost.
+   */
   async recordStudentViolation(
     studentId: string,
     type: string,
     message?: string,
+    localCount = 0,
   ): Promise<{ violationCount: number; terminated: boolean }> {
     void studentId;
+
+    const maxViolations = await resolveViolationLimit();
+
     const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
     if (!token) {
-      return { violationCount: 0, terminated: false };
+      // No token — trust the local count so offline exams still enforce limits.
+      return {
+        violationCount: localCount,
+        terminated: localCount >= maxViolations,
+      };
     }
 
     // Peer mode: the proctor phone shows the violation live in its lobby.
@@ -1345,11 +1388,12 @@ export const LobbyRepository = {
           method: 'POST',
           body: { participation_token: token, type, message: message || undefined },
         });
-        const count = Number(json.violation_count ?? 0);
+        const serverCount = Number(json.violation_count ?? 0);
+        const count = Math.max(serverCount, localCount);
         const limit =
           json.violation_limit != null
             ? Number(json.violation_limit)
-            : await resolveViolationLimit();
+            : maxViolations;
         if (json.violation_limit != null) {
           await persistViolationLimit(json.violation_limit);
         }
@@ -1358,13 +1402,23 @@ export const LobbyRepository = {
           terminated: count >= limit || json.lobby_status === 'terminated',
         };
       } catch {
-        return { violationCount: 0, terminated: false };
+        // Proctor phone momentarily unreachable — fall back to local count.
+        return {
+          violationCount: localCount,
+          terminated: localCount >= maxViolations,
+        };
       }
     }
 
+    // Pure offline mode (no peer server): trust the local count entirely.
     if (await OfflineStore.isOfflineMode()) {
-      return { violationCount: 0, terminated: false };
+      return {
+        violationCount: localCount,
+        terminated: localCount >= maxViolations,
+      };
     }
+
+    // Online cloud mode.
     try {
       const json = await apiRequest<{
         success: boolean;
@@ -1382,11 +1436,12 @@ export const LobbyRepository = {
           message: message || undefined,
         },
       });
-      const count = Number(json.data?.violation_count ?? 0);
+      const serverCount = Number(json.data?.violation_count ?? 0);
+      const count = Math.max(serverCount, localCount);
       const limit =
         json.data?.violation_limit != null
           ? Number(json.data.violation_limit)
-          : await resolveViolationLimit();
+          : maxViolations;
       if (json.data?.violation_limit != null) {
         await persistViolationLimit(json.data.violation_limit);
       }
@@ -1395,7 +1450,11 @@ export const LobbyRepository = {
         terminated: count >= limit || json.data?.lobby_status === 'terminated',
       };
     } catch {
-      return { violationCount: 0, terminated: false };
+      // Cloud unreachable — fall back to local count.
+      return {
+        violationCount: localCount,
+        terminated: localCount >= maxViolations,
+      };
     }
   },
 
@@ -1565,6 +1624,174 @@ export const LobbyRepository = {
       expiresAt: json.data.expires_at,
       studentName: json.data.student_name,
     };
+  },
+
+  /**
+   * Record the student's acceptance of the Terms & Agreement screen server-side.
+   * Fire-and-forget — the local agreedAt in studentStore is the source of truth.
+   * Network failure is silently swallowed.
+   */
+  async recordAgreement(): Promise<void> {
+    try {
+      const { appStorage } = await import('@/shared/services/storage');
+      const token = await appStorage.getItem('tcc.exam.participation_token');
+      if (!token) return;
+
+      const isPeer = await PeerExamClient.isActive();
+      if (isPeer) {
+        // On LAN session: the local proctor server does not handle /agree — skip.
+        return;
+      }
+
+      await apiRequest('/exam/agree', {
+        method: 'POST',
+        body: { participation_token: token },
+      });
+    } catch {
+      // Non-critical — local record is sufficient.
+    }
+  },
+
+  /**
+   * Open a per-proctor unique session on the cloud backend.
+   */
+  async openCloudSession(params: {
+    proctorId: number | string;
+    localIp: string;
+    localPort?: number;
+    scheduleId?: number | string;
+    roomId?: number | string;
+  }): Promise<CloudExamSession> {
+    const { getCloudApiBaseUrl, getApiBaseUrl } = await import('@/shared/services/api');
+    const base = getCloudApiBaseUrl() || getApiBaseUrl();
+    const url = `${base}/sessions/open`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        proctor_id: Number(params.proctorId),
+        local_ip: params.localIp,
+        local_port: params.localPort || 9777,
+        schedule_id: params.scheduleId ? Number(params.scheduleId) : undefined,
+        room_id: params.roomId ? Number(params.roomId) : undefined,
+      }),
+    });
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      throw new Error(json?.message || `Failed to open cloud session (${res.status})`);
+    }
+
+    // Store cloud session details locally
+    await appStorage.setItem(STORAGE_KEYS.activeCloudSessionId, String(json.session_id));
+    await appStorage.setItem(STORAGE_KEYS.activeCloudSessionCode, json.session_code);
+    await appStorage.setItem(STORAGE_KEYS.activeCloudQrToken, json.qr_token);
+
+    return json as CloudExamSession;
+  },
+
+  /**
+   * Start a cloud exam session when proctor launches the exam.
+   */
+  async startCloudSession(sessionId?: number | string): Promise<boolean> {
+    try {
+      const id = sessionId || (await appStorage.getItem(STORAGE_KEYS.activeCloudSessionId));
+      if (!id) return false;
+      const { getCloudApiBaseUrl, getApiBaseUrl } = await import('@/shared/services/api');
+      const base = getCloudApiBaseUrl() || getApiBaseUrl();
+      const res = await fetch(`${base}/sessions/${id}/start`, {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Close a cloud exam session when room is closed or exam ends.
+   */
+  async closeCloudSession(sessionId?: number | string): Promise<boolean> {
+    try {
+      const id = sessionId || (await appStorage.getItem(STORAGE_KEYS.activeCloudSessionId));
+      if (!id) return false;
+      const { getCloudApiBaseUrl, getApiBaseUrl } = await import('@/shared/services/api');
+      const base = getCloudApiBaseUrl() || getApiBaseUrl();
+      const res = await fetch(`${base}/sessions/${id}/close`, {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+      });
+      await appStorage.deleteItem(STORAGE_KEYS.activeCloudSessionId);
+      await appStorage.deleteItem(STORAGE_KEYS.activeCloudSessionCode);
+      await appStorage.deleteItem(STORAGE_KEYS.activeCloudQrToken);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Resolve a session code or QR token via the cloud backend before connecting over LAN.
+   * Throws ApiError with 404 for expired/invalid codes and 409 for duplicate device joins.
+   */
+  async resolveSession(params: {
+    code?: string;
+    token?: string;
+    studentId?: string;
+    deviceId?: string;
+  }): Promise<CloudResolveResult> {
+    const { getCloudApiBaseUrl, getApiBaseUrl } = await import('@/shared/services/api');
+    const base = getCloudApiBaseUrl() || getApiBaseUrl();
+    const qs = new URLSearchParams();
+    if (params.code) qs.append('code', params.code.trim().toUpperCase());
+    if (params.token) qs.append('token', params.token.trim());
+    if (params.studentId) qs.append('student_id', params.studentId.trim());
+    if (params.deviceId) qs.append('device_id', params.deviceId.trim());
+
+    const url = `${base}/sessions/resolve?${qs.toString()}`;
+    let res: Response;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    try {
+      res = await fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+    } catch (netErr) {
+      throw new ApiError(
+        'Unable to reach cloud examination server. Please verify your internet connection and try again.',
+        0,
+        netErr,
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const json = await res.json().catch(() => null);
+
+    if (res.status === 409) {
+      throw new ApiError(
+        json?.message || 'This student account has already joined this examination session on another device.',
+        409,
+        json,
+      );
+    }
+
+    if (!res.ok || !json?.success) {
+      throw new ApiError(
+        json?.message || 'This code is no longer valid, ask your proctor for a new one.',
+        res.status,
+        json,
+      );
+    }
+
+    return json as CloudResolveResult;
   },
 
   lobbyKey: lobbyQueryKey,

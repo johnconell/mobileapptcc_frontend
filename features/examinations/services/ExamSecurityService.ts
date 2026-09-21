@@ -2,7 +2,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import Constants from 'expo-constants';
 import * as ScreenCapture from 'expo-screen-capture';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import { BackHandler, Dimensions, Platform } from 'react-native';
+import { BackHandler, Dimensions, NativeModules, Platform } from 'react-native';
 import type { ExamSecurityCapabilities } from '@/shared/types';
 
 const EXAM_MODE_KEY = 'tcc-exam-kiosk';
@@ -17,15 +17,58 @@ type NativeKioskBridge = {
   stopLockTask?: () => Promise<void>;
   setImmersiveMode?: (enabled: boolean) => Promise<void>;
   blockMultiWindow?: (enabled: boolean) => Promise<void>;
+  isLocked?: () => Promise<boolean>;
 };
 
 /**
  * Optional native module bridge for Android Device Owner / Lock Task Mode.
  * Split-screen is already blocked by plugins/withExamSecurity.js
  * (resizeableActivity=false) in development/production builds.
+ *
+ * ExamKioskModule is active in dev/production builds (not Expo Go).
+ * On BYOD devices this enables standard Android Screen Pinning via startLockTask().
  */
 function getNativeBridge(): NativeKioskBridge | null {
-  return null;
+  const mod = NativeModules.ExamKioskModule as NativeKioskBridge | undefined;
+  return mod ?? null;
+}
+
+// ─── Standalone helpers used by useExamLock ──────────────────────────────────
+
+/**
+ * Starts Android Screen Pinning (Lock Task Mode) for the current activity.
+ * On a BYOD device the system may show a one-time confirmation dialog on the
+ * very first call if Screen Pinning has not been used before.
+ * On iOS this is a no-op — AppState monitoring handles violation detection.
+ */
+export async function startExamLock(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  const bridge = getNativeBridge();
+  await bridge?.startLockTask?.();
+}
+
+/**
+ * Stops Android Screen Pinning. Call when the exam ends, is submitted,
+ * or a proctor force-ends the session.
+ */
+export async function stopExamLock(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  const bridge = getNativeBridge();
+  await bridge?.stopLockTask?.();
+}
+
+/**
+ * Queries whether the app is currently in Lock Task Mode (screen-pinned).
+ * Returns false on iOS or when the native module is unavailable.
+ */
+export async function isExamLocked(): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+  try {
+    const bridge = getNativeBridge();
+    return (await bridge?.isLocked?.()) ?? false;
+  } catch {
+    return false;
+  }
 }
 
 /**

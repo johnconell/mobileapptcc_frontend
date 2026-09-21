@@ -14,8 +14,7 @@
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#7A1F2B",
-        "foregroundImage": "./assets/tcc-logo.png",
-        "backgroundImage": "./assets/android-icon-background.png"
+        "foregroundImage": "./assets/tcc-logo.png"
       },
       "package": "edu.tcc.entranceexam",
       "predictiveBackGestureEnabled": false,

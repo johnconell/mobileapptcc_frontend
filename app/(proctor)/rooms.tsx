@@ -25,6 +25,7 @@ import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { colors, shadows } from '@/shared/theme';
 import { safeBack } from '@/shared/utils';
 import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
+import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import type { ExamRoom } from '@/shared/types';
 
 function roomTone(status: string): 'success' | 'warning' | 'danger' | 'default' {
@@ -93,7 +94,7 @@ export default function RoomsScreen() {
   /**
    * STEP 6 & 7: Comprehensive Validation and Direct Navigation to Existing Lobby
    */
-  const handleOpenRoom = async () => {
+  const handleOpenRoom = async (skipTodayCheck?: boolean) => {
     if (!selectedRoom || !sessionId) {
       Alert.alert('Unable to Open Room', 'Missing room or session identification.');
       return;
@@ -131,24 +132,53 @@ export default function RoomsScreen() {
       }
 
       // 2. Verify Examination Pack was downloaded TODAY (required for rescheduled applicants)
-      const { OfflineStore } = await import('@/features/synchronization/services/offlineStore');
-      const todayCheck = await OfflineStore.isPackDownloadedToday();
-      if (!todayCheck.downloadedToday) {
-        Alert.alert(
-          "Download Today's Exam Module",
-          `You must download today's latest examination module and passkeys before opening an examination room.\n\nThis ensures that any applicants who were rescheduled to today (${todayCheck.today}) are included in the roster.`,
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Go to Download',
-              onPress: () => {
-                setModalVisible(false);
-                router.push('/(proctor)/(tabs)/examination');
+      if (!skipTodayCheck) {
+        const todayCheck = await OfflineStore.isPackDownloadedToday();
+        const hasPack = await OfflineStore.hasPack();
+
+        if (!todayCheck.downloadedToday) {
+          setBusy(false);
+          if (hasPack) {
+            Alert.alert(
+              "Today's Exam Module",
+              `The examination module on this device was saved on ${todayCheck.packDate ?? 'a previous session'}.\n\nWould you like to open the room with this cached pack, or update from the cloud?`,
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Use Cached Pack',
+                  onPress: async () => {
+                    await OfflineStore.markPackAcknowledgedToday();
+                    void handleOpenRoom(true);
+                  },
+                },
+                {
+                  text: 'Go to Download',
+                  onPress: () => {
+                    setModalVisible(false);
+                    router.push('/(proctor)/(tabs)/examination');
+                  },
+                },
+              ],
+            );
+            return;
+          }
+
+          Alert.alert(
+            "Download Today's Exam Module",
+            `You must download today's latest examination module and passkeys before opening an examination room.\n\nThis ensures that any applicants who were rescheduled to today (${todayCheck.today}) are included in the roster.`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Go to Download',
+                onPress: () => {
+                  setModalVisible(false);
+                  router.push('/(proctor)/(tabs)/examination');
+                },
               },
-            },
-          ],
-        );
-        return;
+            ],
+          );
+          return;
+        }
       }
 
       const pack = await OfflineStore.getPack();

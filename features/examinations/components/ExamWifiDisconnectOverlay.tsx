@@ -13,8 +13,15 @@ interface ExamWifiDisconnectOverlayProps {
   error?: string | null;
   /** Proctor ended/closed the exam while this student was disconnected. */
   examinationEnded?: boolean;
+  /**
+   * Student is connected to a different Wi-Fi network (not the exam SSID).
+   * This is a student-controlled action and counts as a violation.
+   */
+  wrongNetwork?: boolean;
   /** Proctor changed Wi‑Fi / LAN IP — not an examinee fault. */
   proctorNetworkChanged?: boolean;
+  /** Seconds remaining in the 2-minute grace period before auto-submit. */
+  graceSecondsRemaining?: number;
   onSubmitCode: (code: string) => void | Promise<void>;
   onRetry?: () => void | Promise<void>;
   onExitEnded?: () => void | Promise<void>;
@@ -26,7 +33,9 @@ export function ExamWifiDisconnectOverlay({
   loading = false,
   error = null,
   examinationEnded = false,
+  wrongNetwork = false,
   proctorNetworkChanged = false,
+  graceSecondsRemaining,
   onSubmitCode,
   onRetry,
   onExitEnded,
@@ -40,6 +49,7 @@ export function ExamWifiDisconnectOverlay({
           <View style={styles.iconWrap}>
             <WifiOff size={36} color={colors.danger} />
           </View>
+
           {examinationEnded ? (
             <>
               <Text style={styles.title}>Examination ended</Text>
@@ -58,7 +68,30 @@ export function ExamWifiDisconnectOverlay({
                 onPress={() => void onExitEnded?.()}
               />
             </>
+          ) : wrongNetwork && !requiresPin ? (
+            // Student deliberately connected to a different Wi-Fi network.
+            <>
+              <Text style={styles.title}>Wrong Wi‑Fi Network</Text>
+              <Text style={styles.message}>
+                You are connected to a different Wi‑Fi network — not the official examination
+                network. This is a security violation.
+              </Text>
+              <View style={styles.violationBadge}>
+                <Text style={styles.violationBadgeText}>⚠ Security Violation Recorded</Text>
+              </View>
+              <Text style={styles.message}>
+                Please switch back to the official examination Wi‑Fi network. Your exam remains
+                locked until you reconnect to the correct network.
+              </Text>
+              {error ? (
+                <Text style={styles.error}>
+                  {userFacingError(error, 'Unable to verify network. Please try again.')}
+                </Text>
+              ) : null}
+              <Text style={styles.disclaimer}>Your answers remain saved locally on this phone.</Text>
+            </>
           ) : proctorNetworkChanged && !requiresPin ? (
+            // Proctor's LAN IP changed — not the student's fault.
             <>
               <Text style={styles.title}>Proctor&apos;s connection changed</Text>
               <Text style={styles.message}>
@@ -80,13 +113,21 @@ export function ExamWifiDisconnectOverlay({
               <Text style={styles.disclaimer}>Your answers remain saved locally on this phone.</Text>
             </>
           ) : (
+            // wifi_lost — or wrong_network/proctor_change after grace expiry (PIN required).
             <>
               <Text style={styles.title}>{requiresPin ? 'Examination locked' : 'Reconnecting...'}</Text>
               <Text style={styles.message}>
                 {requiresPin
-                  ? 'Disconnection exceeded 30 seconds. Campus Wi‑Fi must be restored and a proctor must issue a 6-digit PIN to unlock your exam.'
+                  ? 'Disconnection exceeded 2 minutes. Campus Wi‑Fi must be restored and a proctor must issue a 6-digit PIN to unlock your exam.'
                   : 'Wi‑Fi connection lost. Attempting to reconnect automatically...'}
               </Text>
+
+              {/* Grace period countdown — shown while not yet PIN-locked */}
+              {!requiresPin && typeof graceSecondsRemaining === 'number' && graceSecondsRemaining > 0 && (
+                <Text style={styles.graceCountdown}>
+                  {`Auto-submitting in ${graceSecondsRemaining}s if not reconnected…`}
+                </Text>
+              )}
 
               {requiresPin ? (
                 <>
@@ -184,5 +225,24 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 8,
     fontWeight: '500',
+  },
+  graceCountdown: {
+    fontSize: 13,
+    color: colors.danger,
+    textAlign: 'center',
+    fontWeight: '700',
+  },
+  violationBadge: {
+    backgroundColor: '#FEE2E2',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    alignSelf: 'center',
+  },
+  violationBadgeText: {
+    color: colors.danger,
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
   },
 });

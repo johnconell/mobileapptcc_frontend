@@ -205,12 +205,30 @@ export default function ProctorExaminationTabScreen() {
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.schedules });
       await refreshPackData();
       const summary = await OfflineStore.getPackSummary();
-      Alert.alert(
-        result.ok ? "Today's Exam Pack Ready" : 'Download Failed',
-        result.ok
-          ? `${summary.students} student(s) and ${summary.questions} questionnaire items cached for today. Your proctor session is included so this phone can stay offline afterward.`
-          : result.message,
-      );
+
+      if (!result.ok) {
+        Alert.alert('Download Failed', result.message);
+      } else if (result.fromCache) {
+        Alert.alert(
+          'Using Cached Exam Pack',
+          `Could not connect to the cloud server (${result.message}).\n\nExisting offline exam pack is loaded: ${summary.students} student(s) and ${summary.questions} questions.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Use for Today',
+              onPress: async () => {
+                await OfflineStore.markPackAcknowledgedToday();
+                await refreshPackData();
+              },
+            },
+          ],
+        );
+      } else {
+        Alert.alert(
+          "Today's Exam Pack Ready",
+          `${summary.students} student(s) and ${summary.questions} questionnaire items cached for today. Your proctor session is included so this phone can stay offline afterward.`,
+        );
+      }
     } finally {
       setRefreshing(false);
     }
@@ -313,13 +331,109 @@ export default function ProctorExaminationTabScreen() {
     }
 
     // Otherwise, validate and open room
+    const executeOpenRoom = async () => {
+      setBusy(true);
+      try {
+        // 2. Wi-Fi check
+        const { PeerExamClient } = await import('@/features/examinations/services/peerExamClient');
+        await PeerExamClient.clear();
+        const hasPack = await OfflineStore.hasPack();
+        const wifiCheck = await assertCampusWifiForJoin({ requireServer: !hasPack, isProctor: true });
+
+        if (!wifiCheck.ok) {
+          Alert.alert(
+            'Unable to Open Room',
+            wifiCheck.message ?? 'Please connect to the examination Wi-Fi network and try again.',
+          );
+          return;
+        }
+
+        // 3. Ensure lobby / open room
+        const snapshot = await LobbyRepository.ensureLobby(
+          selectedSlot.session.id,
+          undefined,
+          String(selectedSlot.roomId),
+        );
+
+        // Register / open cloud session for deterministic student resolution
+        try {
+          const { resolveWifiLanIp } = await import('@/features/monitoring/services/wifiLanIp');
+          const lan = await resolveWifiLanIp();
+          const hostIp = lan.ip || '127.0.0.1';
+          const proctorId = profile?.id || 1;
+          const cloudSession = await LobbyRepository.openCloudSession({
+            proctorId,
+            localIp: hostIp,
+            localPort: 9777,
+            scheduleId: selectedSlot.sidNum,
+            roomId: selectedSlot.roomId,
+          });
+          if (cloudSession?.session_code) {
+            queryParams.roomCode = cloudSession.session_code;
+          }
+        } catch (cloudErr) {
+          if (__DEV__) console.warn('[examination] Failed to open cloud session:', cloudErr);
+        }
+
+        // 4. Update opened rooms
+        const updatedOpened = await OfflineStore.getOpenedRooms();
+        setOpenedRooms(updatedOpened);
+
+        const openedKey = `${selectedSlot.sidNum}:${selectedSlot.roomId}`;
+        const newOpened = updatedOpened[openedKey];
+        queryParams.roomCode = queryParams.roomCode || newOpened?.code || snapshot?.examinationCode || '';
+        queryParams.roomStatus = newOpened?.status || 'lobby_open';
+
+        setOpenModalVisible(false);
+        router.push(`/(proctor)/lobby?${new URLSearchParams(queryParams).toString()}` as any);
+        router.replace(`/(proctor)/lobby?${new URLSearchParams(queryParams).toString()}` as any);
+      } catch (err) {
+        console.error('Failed to open examination room:', err);
+        Alert.alert(
+          'Unable to Open Room',
+          err instanceof Error ? err.message : 'Please check your connection and try again.',
+        );
+      } finally {
+        setBusy(false);
+      }
+    };
+
     setBusy(true);
     try {
       // 1. Pack download check
       const todayCheck = await OfflineStore.isPackDownloadedToday();
+      const hasPack = await OfflineStore.hasPack();
+
       if (!todayCheck.downloadedToday) {
+        setBusy(false);
+        if (hasPack) {
+          Alert.alert(
+            "Today's Exam Module",
+            `The examination module on this device was cached on ${todayCheck.packDate ?? 'a previous session'}.\n\nWould you like to open the room with this cached module, or download the latest update?`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Use Cached Pack',
+                onPress: async () => {
+                  await OfflineStore.markPackAcknowledgedToday();
+                  await refreshPackData();
+                  void executeOpenRoom();
+                },
+              },
+              {
+                text: 'Download Latest',
+                onPress: () => {
+                  setOpenModalVisible(false);
+                  void downloadPack();
+                },
+              },
+            ],
+          );
+          return;
+        }
+
         Alert.alert(
-          "Download Today's Exam Module",
+          "Download Exam Module Required",
           `You must download today's latest examination module and passkeys before opening an examination room.`,
           [
             { text: 'Cancel', style: 'cancel' },
@@ -335,47 +449,11 @@ export default function ProctorExaminationTabScreen() {
         return;
       }
 
-      // 2. Wi-Fi check
-      const { PeerExamClient } = await import('@/features/examinations/services/peerExamClient');
-      await PeerExamClient.clear();
-      const hasPack = await OfflineStore.hasPack();
-      const wifiCheck = await assertCampusWifiForJoin({ requireServer: !hasPack, isProctor: true });
-
-      if (!wifiCheck.ok) {
-        Alert.alert(
-          'Unable to Open Room',
-          wifiCheck.message ?? 'Please connect to the examination Wi-Fi network and try again.',
-        );
-        return;
-      }
-
-      // 3. Ensure lobby / open room
-      const snapshot = await LobbyRepository.ensureLobby(
-        selectedSlot.session.id,
-        undefined,
-        String(selectedSlot.roomId),
-      );
-
-      // 4. Update opened rooms
-      const updatedOpened = await OfflineStore.getOpenedRooms();
-      setOpenedRooms(updatedOpened);
-
-      const openedKey = `${selectedSlot.sidNum}:${selectedSlot.roomId}`;
-      const newOpened = updatedOpened[openedKey];
-      queryParams.roomCode = newOpened?.code || snapshot?.examinationCode || '';
-      queryParams.roomStatus = newOpened?.status || 'lobby_open';
-
-      setOpenModalVisible(false);
-      router.push(`/(proctor)/lobby?${new URLSearchParams(queryParams).toString()}` as any);
-      router.replace(`/(proctor)/lobby?${new URLSearchParams(queryParams).toString()}` as any);
+      void executeOpenRoom();
     } catch (err) {
-      console.error('Failed to open examination room:', err);
-      Alert.alert(
-        'Unable to Open Room',
-        err instanceof Error ? err.message : 'Please check your connection and try again.',
-      );
-    } finally {
       setBusy(false);
+      console.error('Validation error before opening room:', err);
+      Alert.alert('Validation Error', err instanceof Error ? err.message : 'Unable to validate room setup.');
     }
   };
 
@@ -593,14 +671,18 @@ export default function ProctorExaminationTabScreen() {
                       ? packNotice.updateRequired
                         ? 'Update Examination Pack'
                         : "Today's Exam Pack Ready"
-                      : 'Download Exam Pack'}
+                      : (pack?.questions ?? 0) > 0
+                        ? 'Cached Exam Pack Ready'
+                        : 'Download Exam Pack'}
                   </Text>
                   <Text style={[styles.packSub, { color: colors.textSecondary }]} numberOfLines={2}>
                     {todayStatus.downloadedToday
                       ? packNotice.updateRequired
                         ? 'Refresh now so rescheduled applicants and updated questions appear in your rooms.'
                         : `Updated Today (${todayStatus.today}) · ${pack?.students ?? 0} students · ${pack?.questions ?? 0} questions`
-                      : "Download today's passkeys and latest module to include rescheduled applicants and new questions."}
+                      : (pack?.questions ?? 0) > 0
+                        ? `Cached (${todayStatus.packDate ?? 'Saved'}) · ${pack?.students ?? 0} students · ${pack?.questions ?? 0} questions`
+                        : "Download today's passkeys and latest module to include rescheduled applicants and new questions."}
                   </Text>
                 </View>
               </View>
@@ -609,7 +691,7 @@ export default function ProctorExaminationTabScreen() {
                 title={
                   refreshing
                     ? 'Updating…'
-                    : todayStatus.downloadedToday
+                    : todayStatus.downloadedToday || (pack?.questions ?? 0) > 0
                       ? 'Update Examination'
                       : 'Download Examination'
                 }

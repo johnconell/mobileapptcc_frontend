@@ -26,7 +26,10 @@ export type SecurityViolationType =
   | 'screen_lock'
   | 'screenshot'
   | 'screen_recording'
-  | 'leave_attempt';
+  | 'leave_attempt'
+  | 'kiosk_lock_failed'
+  | 'lock_task_state_lost'
+  | 'app_exit_during_lock';
 
 export type ExamTerminationReason =
   | 'submitted'
