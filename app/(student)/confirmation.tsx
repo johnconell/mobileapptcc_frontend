@@ -130,6 +130,7 @@ export default function StudentConfirmationScreen() {
       }
 
       setStatusMessage('Registering ready status with proctor...');
+      setStatusMessage('Preparing examination profile...');
       const verified = {
         ...selectedStudent,
         email: email.trim().toLowerCase(),

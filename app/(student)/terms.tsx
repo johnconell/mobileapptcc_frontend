@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  Alert,
   BackHandler,
   Platform,
   Pressable,
@@ -9,7 +10,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { useRouter, useNavigation } from 'expo-router';
-import { ShieldCheck, CheckSquare, Square } from 'lucide-react-native';
+import { ShieldCheck, CheckSquare, Square, AlertTriangle } from 'lucide-react-native';
 import {
   ExamProcessActions,
   ExamProcessButton,
@@ -28,20 +29,26 @@ import { examProcess } from '@/shared/theme/examProcess';
  * before proceeding to the waiting lobby.
  *
  * agreedAt is stored locally in studentStore. A fire-and-forget API call also
- * records the agreement server-side via LobbyRepository.recordAgreement().
+ * records it on the server (if online). If offline, the local timestamp is
+ * used as the source of truth and synced with the final submission pack.
  */
-export default function StudentTermsScreen() {
+export default function TermsScreen() {
   const router = useRouter();
   const navigation = useNavigation();
-  const [agreed, setAgreed] = useState(false);
-  const [proceeding, setProceeding] = useState(false);
-
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
+  const examPasskey = useStudentStore((s) => s.examPasskey);
+  const setVerifiedStudent = useStudentStore((s) => s.setVerifiedStudent);
   const setAgreedAt = useStudentStore((s) => s.setAgreedAt);
   const lobbySnapshot = useLobbyStore((s) => s.snapshot);
+  const setSnapshot = useLobbyStore((s) => s.setSnapshot);
 
-  // Block hardware back — students must read and agree.
+  const [agreed, setAgreed] = useState(false);
+  const [proceeding, setProceeding] = useState(false);
+  const [pinStatusText, setPinStatusText] = useState<string | null>(null);
+  const [pinDeclined, setPinDeclined] = useState(false);
+
+  // Block hardware back — student must proceed forward or stay here.
   React.useEffect(() => {
     navigation.setOptions({ gestureEnabled: false, headerShown: false });
     const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
@@ -65,22 +72,105 @@ export default function StudentTermsScreen() {
   const handleProceed = async () => {
     if (!agreed || proceeding) return;
     setProceeding(true);
+    setPinStatusText(null);
+    setPinDeclined(false); // clear any previous decline notice
 
-    // Record agreement locally immediately.
-    const ts = new Date().toISOString();
-    setAgreedAt(ts);
+    // On Android: Gate entering the lobby behind mandatory App Pinning
+    if (Platform.OS === 'android') {
+      try {
+        const { startExamLock, isExamLocked } = await import(
+          '@/features/examinations/services/ExamSecurityService'
+        );
 
-    // Fire-and-forget server-side recording (non-blocking).
-    try {
-      const { LobbyRepository } = await import(
-        '@/features/lobby/repositories/LobbyRepository'
-      );
-      void LobbyRepository.recordAgreement();
-    } catch {
-      // Server recording failure is non-blocking — local record is sufficient.
+        let locked = await isExamLocked();
+        if (!locked) {
+          setPinStatusText('Waiting for App Pinning confirmation...');
+          await startExamLock();
+
+          // Wait for student to tap "GOT IT" on the system dialog
+          const start = Date.now();
+          while (Date.now() - start < 7000) {
+            await new Promise((resolve) => setTimeout(resolve, 350));
+            locked = await isExamLocked();
+            if (locked) break;
+          }
+
+          if (!locked) {
+            // Student tapped "No Thanks" — show inline blocking notice
+            setProceeding(false);
+            setPinStatusText('App Pinning is required to proceed.');
+            Alert.alert(
+              'App Pinning Required',
+              'Screen Pinning is required to proceed to the examination lobby. Please tap "GOT IT" on the system dialog to lock the application into kiosk mode.',
+              [
+                {
+                  text: 'Try Again',
+                  onPress: () => void handleProceed(),
+                },
+                {
+                  text: 'Cancel',
+                  style: 'cancel',
+                },
+              ],
+            );
+            setPinStatusText(null);
+            setPinDeclined(true);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('[TERMS] Pinning gate check error:', err);
+      }
     }
 
-    router.replace('/(student)/lobby');
+    setPinStatusText('Registering with examination lobby...');
+    try {
+      const { LobbyRepository } = await import('@/features/lobby/repositories/LobbyRepository');
+      const { appStorage } = await import('@/shared/services/storage');
+      const { ExamLifecycle } = await import('@/features/examinations/services/examLifecycle');
+      const { userFacingError } = await import('@/shared/utils/userFacingError');
+
+      const effectivePasskey =
+        examPasskey || (await appStorage.getItem('tcc.student.exam.passkey')) || '';
+
+      const lobby = effectivePasskey
+        ? await LobbyRepository.joinWithPasskey(verifiedStudent!, scannedSessionId!, effectivePasskey)
+        : await LobbyRepository.joinStudent(verifiedStudent!, scannedSessionId!);
+
+      const regId = lobby.registration_id;
+      const updatedVerified = { ...verifiedStudent! };
+      if (regId) {
+        updatedVerified.registration_id = Number(regId);
+      } else {
+        const match = lobby.students?.find((s) => s.studentId === updatedVerified.studentId);
+        if (match) updatedVerified.registration_id = Number(match.id);
+      }
+      setVerifiedStudent(updatedVerified);
+      setSnapshot(lobby);
+      await ExamLifecycle.applyFromServer(lobby.status, { sessionId: String(scannedSessionId) });
+
+      const ts = new Date().toISOString();
+      setAgreedAt(ts);
+
+      // Record agreement on server
+      try {
+        void LobbyRepository.recordAgreement();
+      } catch {
+        /* ignore */
+      }
+
+      setProceeding(false);
+      setPinStatusText(null);
+      router.replace('/(student)/lobby');
+    } catch (err) {
+      setProceeding(false);
+      setPinStatusText(null);
+      const { userFacingError } = await import('@/shared/utils/userFacingError');
+      Alert.alert(
+        'Unable to Enter Lobby',
+        userFacingError(err, 'Could not connect to the examination lobby. Please verify your connection and try again.'),
+      );
+    }
   };
 
   return (
@@ -119,14 +209,15 @@ export default function StudentTermsScreen() {
 
           <View style={styles.rulesList}>
             <RuleRow bold="Verification: " body="Examinees must join with the proctor QR code or room code on the same Join screen." />
-            <RuleRow bold="Strict No-Device Policy: " body="Smartphones, smartwatches, and unauthorized electronics are prohibited." />
+            {Platform.OS === 'android' ? (
+              <RuleRow bold="Mandatory App Pinning: " body="Screen Pinning (App Pinning) is strictly required before entering the lobby. You must tap 'GOT IT' on the system prompt to lock into kiosk mode." />
+            ) : (
+              <RuleRow bold="Mandatory Guided Access: " body="Guided Access is strictly required on iPhone/iPad. Triple-click the Side button, select Guided Access, and start it before entering the examination." />
+            )}
+            <RuleRow bold="Unauthorized Electronics: " body="Secondary phones, smartwatches, and external electronic aids are strictly prohibited." />
             <RuleRow bold="Duration & Timer: " body="Session is strictly timed; auto-submits when countdown reaches 00:00." />
             <RuleRow bold="No Skipping: " body="Unanswered questions are scored as 0. You may submit with unanswered items." />
-            <RuleRow bold="Background / App Switch: " body="Leaving the exam app is detected and counted as a violation. Two violations trigger auto-submission." />
             <RuleRow bold="Screen Lockdown: " body="The exam runs in full-screen locked mode. Do not pull down notifications, swipe away, or switch apps." />
-            {Platform.OS === 'ios' ? (
-              <RuleRow bold="iOS Guided Access: " body="Triple-click the Side button to turn on Guided Access or enable Do Not Disturb so alerts and incoming calls do not trigger violations." />
-            ) : null}
             <RuleRow bold="Disconnection: " body="A 2-minute grace period is provided to reconnect. Beyond that, the exam is auto-submitted." />
             <RuleRow bold="Passing Standard: " body="Minimum qualifying score is 75.0%." />
             <RuleRow bold="Results: " body="Official results will be sent to your registered Gmail after the session." />
@@ -146,13 +237,40 @@ export default function StudentTermsScreen() {
             <Square size={22} color={examProcess.muted} />
           )}
           <Text style={styles.checkboxLabel}>
-            I have read and agree to the examination rules and consequences above.
+            {Platform.OS === 'ios'
+              ? 'I have read, understand, and agree to the mandatory Guided Access requirement and examination rules above.'
+              : 'I have read, understand, and agree to the mandatory App Pinning requirement and examination rules above.'}
           </Text>
         </Pressable>
 
+        {/* Pin Declined — inline blocking notice */}
+        {pinDeclined ? (
+          <View style={styles.pinDeclinedBanner}>
+            <AlertTriangle size={18} color="#b45309" style={{ marginTop: 1 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.pinDeclinedTitle}>App Pinning Required</Text>
+              <Text style={styles.pinDeclinedBody}>
+                You tapped "No Thanks" on the App Pinning prompt. Screen Pinning
+                is mandatory to enter the examination lobby. Tap the button
+                below and then tap{' '}
+                <Text style={styles.pinDeclinedEmphasis}>"Got It"</Text> on the
+                system dialog to continue.
+              </Text>
+            </View>
+          </View>
+        ) : pinStatusText ? (
+          <Text style={styles.pinStatusHint}>{pinStatusText}</Text>
+        ) : null}
+
         <ExamProcessActions>
           <ExamProcessButton
-            title="Proceed to Lobby"
+            title={
+              proceeding
+                ? (pinStatusText || 'Entering Lobby...')
+                : pinDeclined
+                ? 'Try Again — Enable App Pinning'
+                : 'Got It'
+            }
             variant="submit"
             loading={proceeding}
             disabled={!agreed || proceeding}
@@ -291,6 +409,39 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: examProcess.ink,
     fontFamily: examProcess.fontMedium,
+  },
+  pinStatusHint: {
+    fontSize: 13,
+    fontFamily: examProcess.fontMedium,
+    color: examProcess.accent,
+    textAlign: 'center',
+    marginVertical: 6,
+  },
+  pinDeclinedBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: examProcess.radiusCard,
+    padding: 14,
+  },
+  pinDeclinedTitle: {
+    fontSize: 13,
+    fontFamily: examProcess.fontSemiBold,
+    color: '#92400e',
+    marginBottom: 4,
+  },
+  pinDeclinedBody: {
+    fontSize: 13,
+    fontFamily: examProcess.fontRegular,
+    color: '#92400e',
+    lineHeight: 20,
+  },
+  pinDeclinedEmphasis: {
+    fontFamily: examProcess.fontSemiBold,
+    color: '#78350f',
   },
 });
 

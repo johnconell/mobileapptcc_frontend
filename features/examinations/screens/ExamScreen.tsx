@@ -33,7 +33,6 @@ export interface ExamScreenProps {
   categoryName?: string;
   questions?: QuestionItem[];
   initialRemainingSeconds?: number;
-  initialViolations?: number;
   initialAnswers?: Record<number, string>;
   onSubmit?: (answers: Record<number, string>) => void;
 }
@@ -57,8 +56,6 @@ interface ThemeColors {
   divider: string;
   topBarChipBg: string;
   topBarChipText: string;
-  violationsChipBg: string;
-  violationsChipText: string;
   progressTrack: string;
   progressFill: string;
   submitButtonBg: string;
@@ -87,8 +84,6 @@ const darkTheme: ThemeColors = {
   divider: '#2B2B3E',
   topBarChipBg: '#261E48',
   topBarChipText: '#A492F7',
-  violationsChipBg: '#202133',
-  violationsChipText: '#8A8A9E',
   progressTrack: '#262638',
   progressFill: '#7C6AF5',
   submitButtonBg: '#7C6AF5',
@@ -117,8 +112,6 @@ const lightTheme: ThemeColors = {
   divider: '#E2E1EE',
   topBarChipBg: '#EDE9FE',
   topBarChipText: '#6D5AE6',
-  violationsChipBg: '#E6E5F2',
-  violationsChipText: '#5A5A72',
   progressTrack: '#E0DFEC',
   progressFill: '#7C6AF5',
   submitButtonBg: '#7C6AF5',
@@ -326,19 +319,12 @@ function TopBar({
 /** 2. Status Row Component */
 interface StatusRowProps {
   theme: ThemeColors;
-  violations: number;
   remainingSeconds: number;
 }
 
-function StatusRow({ theme, violations, remainingSeconds }: StatusRowProps) {
+function StatusRow({ theme, remainingSeconds }: StatusRowProps) {
   return (
     <View style={styles.statusRow}>
-      <View style={[styles.violationsChip, { backgroundColor: theme.violationsChipBg }]}>
-        <Text style={[styles.violationsText, { color: theme.violationsChipText }]}>
-          Violations: {violations}
-        </Text>
-      </View>
-
       <View style={styles.timerAbsoluteCenter} pointerEvents="none">
         <Text style={[styles.timerText, { color: theme.textPrimary }]}>
           {formatMMSS(remainingSeconds)}
@@ -583,7 +569,6 @@ export default function ExamScreen({
   categoryName = 'Algebra',
   questions = SAMPLE_QUESTIONS,
   initialRemainingSeconds = 3569, // 59:29 matching screenshot
-  initialViolations = 0,
   initialAnswers = { 1: 'A' }, // 1/9 answered initially matching screenshot
   onSubmit,
 }: ExamScreenProps) {
@@ -593,7 +578,6 @@ export default function ExamScreen({
   const [answers, setAnswers] = useState<Record<number, string>>(initialAnswers);
   const [remainingSeconds, setRemainingSeconds] = useState<number>(initialRemainingSeconds);
   const [fontScale, setFontScale] = useState<number>(FONT_DEFAULT);
-  const [violations] = useState<number>(initialViolations);
 
   const isDark = themeMode === 'dark';
   const theme = isDark ? darkTheme : lightTheme;
@@ -678,7 +662,6 @@ export default function ExamScreen({
 
       <StatusRow
         theme={theme}
-        violations={violations}
         remainingSeconds={remainingSeconds}
       />
 
@@ -784,16 +767,6 @@ const styles = StyleSheet.create({
     marginTop: 14,
     marginBottom: 20,
     minHeight: 38,
-  },
-  violationsChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 9999,
-    alignSelf: 'flex-start',
-  },
-  violationsText: {
-    fontSize: 12,
-    fontWeight: '700',
   },
   timerAbsoluteCenter: {
     position: 'absolute',

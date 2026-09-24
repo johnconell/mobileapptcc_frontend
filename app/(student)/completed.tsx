@@ -80,9 +80,7 @@ export default function CompletedScreen() {
           <View style={styles.noticeCard}>
             <Text style={styles.noticeTitle}>Important notice</Text>
             <Text style={styles.noticeBody}>
-              {terminationReason === 'proctor_terminated'
-                ? 'The proctor ended your examination session. Your answers on this phone were saved for review.'
-                : 'Your examination was ended because the maximum number of security warnings was reached. The proctor has been notified.'}
+              The proctor ended your examination session. Your answers on this phone were saved for review.
             </Text>
             <Text style={styles.noticeBody}>
               Pakibasa nang mabuti: tapos na ang inyong pagsusulit sa device na ito. Hindi na kayo

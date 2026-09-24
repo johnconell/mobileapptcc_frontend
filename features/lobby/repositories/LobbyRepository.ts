@@ -736,7 +736,7 @@ export const LobbyRepository = {
   },
 
   async validatePasskey(passkey: string): Promise<{
-    classification: 'valid' | 'wrong_schedule' | 'already_completed';
+    classification: 'valid' | 'wrong_schedule' | 'already_completed' | 'already_in_lobby';
     message?: string;
     student?: StudentRecord;
     schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
@@ -746,7 +746,7 @@ export const LobbyRepository = {
 
     if (await PeerExamClient.isActive()) {
       const response = await PeerExamClient.request<{
-        classification?: 'valid' | 'wrong_schedule' | 'already_completed';
+        classification?: 'valid' | 'wrong_schedule' | 'already_completed' | 'already_in_lobby';
         message?: string;
         student?: StudentRecord;
         schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
@@ -770,6 +770,16 @@ export const LobbyRepository = {
           message:
             response.message ||
             'Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.',
+          student: response.student,
+          schedule: response.schedule,
+        };
+      }
+      if (response.classification === 'already_in_lobby') {
+        return {
+          classification: 'already_in_lobby',
+          message:
+            response.message ||
+            'Someone is already inside the lobby with this examination key. Please verify your examination key or contact the proctor.',
           student: response.student,
           schedule: response.schedule,
         };
@@ -1348,114 +1358,16 @@ export const LobbyRepository = {
   },
 
   /**
-   * Record a security violation and return the authoritative violation count.
-   *
-   * @param studentId   The student's ID (informational).
-   * @param type        Violation type key.
-   * @param message     Human-readable description.
-   * @param localCount  The caller's in-memory violation count AFTER incrementing.
-   *                    Used as an authoritative floor whenever the server/proctor
-   *                    is unreachable (offline mode, peer network error, etc.) so
-   *                    violations are never silently lost.
+   * Violation tracking is disabled: mandatory screen pinning physically enforces security.
+   * Kept as a no-op for backward compatibility.
    */
   async recordStudentViolation(
-    studentId: string,
-    type: string,
-    message?: string,
-    localCount = 0,
+    _studentId: string,
+    _type: string,
+    _message?: string,
+    _localCount = 0,
   ): Promise<{ violationCount: number; terminated: boolean }> {
-    void studentId;
-
-    const maxViolations = await resolveViolationLimit();
-
-    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
-    if (!token) {
-      // No token — trust the local count so offline exams still enforce limits.
-      return {
-        violationCount: localCount,
-        terminated: localCount >= maxViolations,
-      };
-    }
-
-    // Peer mode: the proctor phone shows the violation live in its lobby.
-    if (await PeerExamClient.isActive()) {
-      try {
-        const json = await PeerExamClient.request<{
-          violation_count: number;
-          violation_limit?: number;
-          lobby_status?: string;
-        }>('/violation', {
-          method: 'POST',
-          body: { participation_token: token, type, message: message || undefined },
-        });
-        const serverCount = Number(json.violation_count ?? 0);
-        const count = Math.max(serverCount, localCount);
-        const limit =
-          json.violation_limit != null
-            ? Number(json.violation_limit)
-            : maxViolations;
-        if (json.violation_limit != null) {
-          await persistViolationLimit(json.violation_limit);
-        }
-        return {
-          violationCount: count,
-          terminated: count >= limit || json.lobby_status === 'terminated',
-        };
-      } catch {
-        // Proctor phone momentarily unreachable — fall back to local count.
-        return {
-          violationCount: localCount,
-          terminated: localCount >= maxViolations,
-        };
-      }
-    }
-
-    // Pure offline mode (no peer server): trust the local count entirely.
-    if (await OfflineStore.isOfflineMode()) {
-      return {
-        violationCount: localCount,
-        terminated: localCount >= maxViolations,
-      };
-    }
-
-    // Online cloud mode.
-    try {
-      const json = await apiRequest<{
-        success: boolean;
-        data?: {
-          violation_count: number;
-          violation_limit?: number;
-          lobby_status?: string;
-        };
-      }>('/exam/violation', {
-        method: 'POST',
-        auth: false,
-        body: {
-          participation_token: token,
-          type,
-          message: message || undefined,
-        },
-      });
-      const serverCount = Number(json.data?.violation_count ?? 0);
-      const count = Math.max(serverCount, localCount);
-      const limit =
-        json.data?.violation_limit != null
-          ? Number(json.data.violation_limit)
-          : maxViolations;
-      if (json.data?.violation_limit != null) {
-        await persistViolationLimit(json.data.violation_limit);
-      }
-      return {
-        violationCount: count,
-        terminated: count >= limit || json.data?.lobby_status === 'terminated',
-      };
-    } catch {
-      // Cloud unreachable — fall back to local count.
-      return {
-        violationCount: localCount,
-        terminated: localCount >= maxViolations,
-      };
-    }
+    return { violationCount: 0, terminated: false };
   },
 
   async touchActivity(studentId: string): Promise<void> {

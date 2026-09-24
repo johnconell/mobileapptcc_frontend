@@ -144,7 +144,7 @@ export interface LobbyStudent {
   joinedAt: string;
   startedAt: string | null;
   lastActivityAt: string;
-  violationCount: number;
+  violationCount?: number;
   terminationReason: ExamTerminationReason | null;
   reconnectAllowed?: boolean;
   /** Proctor-only: 6-digit PIN shown after disconnect. */

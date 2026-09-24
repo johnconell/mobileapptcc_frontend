@@ -1,4 +1,3 @@
-import { useColorScheme } from 'react-native';
 import { useSettingsStore, type ThemeMode, type AppFontSize } from '@/features/settings/stores/settingsStore';
 
 export type AppThemeColors = {
@@ -26,7 +25,6 @@ export type AppThemeColors = {
   searchBg: string;
 };
 
-// Light theme — cream canvas + maroon accents (not bright red)
 const lightColors: AppThemeColors = {
   background: '#FAF7F2',
   card: '#FFFDF8',
@@ -52,7 +50,6 @@ const lightColors: AppThemeColors = {
   searchBg: '#FFFDF8',
 };
 
-// Dark theme — deep charcoal with maroon accents
 const darkColors: AppThemeColors = {
   background: '#14110F',
   card: '#1E1A17',
@@ -79,7 +76,6 @@ const darkColors: AppThemeColors = {
 };
 
 export function useAppTheme() {
-  const systemColorScheme = useColorScheme();
   const themeMode = useSettingsStore((s) => s.themeMode);
   const fontSize = useSettingsStore((s) => s.fontSize);
   const setThemeMode = useSettingsStore((s) => s.setThemeMode);
@@ -89,7 +85,6 @@ export function useAppTheme() {
 
   const colors = isDark ? darkColors : lightColors;
 
-  // Font scale multipliers for user friendly reading across the entire frontend
   const fontMultiplier = fontSize === 'small' ? 0.88 : fontSize === 'large' ? 1.20 : 1.0;
 
   const scaleFont = (basePx: number) => Math.round(basePx * fontMultiplier);

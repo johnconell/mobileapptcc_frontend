@@ -1,74 +1,78 @@
 import React, { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Check } from 'lucide-react-native';
 import type { ExamAnswer, Question } from '@/shared/types';
 import { examProcess } from '@/shared/theme/examProcess';
 
-export type CategoryProgress = {
-  key: string;
-  label: string;
-  total: number;
-  answered: number;
-  firstIndex: number;
-};
+import {
+  buildCategoryProgress,
+  type CategoryProgress,
+} from '@/features/examinations/utils/categoryProgress';
 
-export function buildCategoryProgress(
-  questions: Question[],
-  answers: Record<string, ExamAnswer>,
-): CategoryProgress[] {
-  const order: string[] = [];
-  const map = new Map<string, CategoryProgress>();
-
-  questions.forEach((question, index) => {
-    const key = (question.category || question.subjectId || 'General').trim() || 'General';
-    let entry = map.get(key);
-    if (!entry) {
-      entry = {
-        key,
-        label: key,
-        total: 0,
-        answered: 0,
-        firstIndex: index,
-      };
-      map.set(key, entry);
-      order.push(key);
-    }
-    entry.total += 1;
-    if (answers[question.id]?.selectedAnswer) {
-      entry.answered += 1;
-    }
-  });
-
-  return order.map((key) => map.get(key)!);
-}
+export { buildCategoryProgress, type CategoryProgress };
 
 type ExamCategoryNavProps = {
   categories: CategoryProgress[];
   activeKey?: string | null;
-  onSelect: (category: CategoryProgress) => void;
+  onSelect: (category: CategoryProgress | null) => void;
+  darkMode?: boolean;
+  showAllOption?: boolean;
+  totalQuestions?: number;
+  totalAnswered?: number;
 };
 
-export function ExamCategoryNav({ categories, activeKey, onSelect }: ExamCategoryNavProps) {
+export function ExamCategoryNav({
+  categories,
+  activeKey,
+  onSelect,
+  darkMode = false,
+  showAllOption = true,
+  totalQuestions,
+  totalAnswered,
+}: ExamCategoryNavProps) {
   const summary = useMemo(() => {
-    const total = categories.reduce((sum, c) => sum + c.total, 0);
-    const answered = categories.reduce((sum, c) => sum + c.answered, 0);
+    const total = totalQuestions ?? categories.reduce((sum, c) => sum + c.total, 0);
+    const answered = totalAnswered ?? categories.reduce((sum, c) => sum + c.answered, 0);
     return { total, answered };
-  }, [categories]);
+  }, [categories, totalQuestions, totalAnswered]);
 
   if (categories.length === 0) return null;
 
+  const isAllActive = !activeKey;
+
   return (
     <View style={styles.wrap}>
-      <View style={styles.captionRow}>
-        <Text style={styles.caption}>Categories</Text>
-        <Text style={styles.captionAccent}>
-          {summary.answered}/{summary.total} answered
-        </Text>
-      </View>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.row}
       >
+        {showAllOption ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`All categories, ${summary.answered} of ${summary.total} answered`}
+            onPress={() => onSelect(null)}
+            style={[
+              styles.categoryBtn,
+              darkMode ? styles.categoryBtnDark : styles.categoryBtnLight,
+              isAllActive && (darkMode ? styles.categoryBtnActiveDark : styles.categoryBtnActiveLight),
+            ]}
+          >
+            <View style={styles.btnContent}>
+              <Text
+                style={[
+                  styles.categoryBtnText,
+                  darkMode ? styles.categoryBtnTextDark : styles.categoryBtnTextLight,
+                  isAllActive && (darkMode ? styles.categoryBtnTextActiveDark : styles.categoryBtnTextActiveLight),
+                ]}
+                numberOfLines={1}
+              >
+                {`All (${summary.answered}/${summary.total})`}
+              </Text>
+            </View>
+          </Pressable>
+        ) : null}
+
         {categories.map((category) => {
           const active = category.key === activeKey;
           const complete = category.answered >= category.total && category.total > 0;
@@ -79,21 +83,28 @@ export function ExamCategoryNav({ categories, activeKey, onSelect }: ExamCategor
               accessibilityLabel={`${category.label}, ${category.answered} of ${category.total} answered`}
               onPress={() => onSelect(category)}
               style={[
-                styles.chip,
-                active && styles.chipActive,
-                complete && !active && styles.chipComplete,
+                styles.categoryBtn,
+                darkMode ? styles.categoryBtnDark : styles.categoryBtnLight,
+                active && (darkMode ? styles.categoryBtnActiveDark : styles.categoryBtnActiveLight),
               ]}
             >
-              <View style={[styles.dot, (active || complete) && styles.dotOn]} />
-              <Text
-                style={[styles.chipLabel, active && styles.chipLabelActive]}
-                numberOfLines={1}
-              >
-                {category.label}
-              </Text>
-              <Text style={[styles.chipCount, active && styles.chipLabelActive]}>
-                {category.answered}/{category.total}
-              </Text>
+              <View style={styles.btnContent}>
+                {complete ? (
+                  <View style={[styles.completeBadge, darkMode ? styles.completeBadgeDark : styles.completeBadgeLight]}>
+                    <Check size={11} color={darkMode ? '#4ADE80' : '#16A34A'} strokeWidth={3} />
+                  </View>
+                ) : null}
+                <Text
+                  style={[
+                    styles.categoryBtnText,
+                    darkMode ? styles.categoryBtnTextDark : styles.categoryBtnTextLight,
+                    active && (darkMode ? styles.categoryBtnTextActiveDark : styles.categoryBtnTextActiveLight),
+                  ]}
+                  numberOfLines={1}
+                >
+                  {`${category.label} (${category.answered}/${category.total})`}
+                </Text>
+              </View>
             </Pressable>
           );
         })}
@@ -104,69 +115,86 @@ export function ExamCategoryNav({ categories, activeKey, onSelect }: ExamCategor
 
 const styles = StyleSheet.create({
   wrap: {
-    gap: 10,
-    paddingHorizontal: examProcess.padPage,
-    paddingBottom: 8,
-  },
-  captionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  caption: {
-    fontSize: 13,
-    color: examProcess.ink,
-    fontWeight: '700',
-  },
-  captionAccent: {
-    fontSize: 12,
-    color: examProcess.accent,
-    fontWeight: '700',
+    paddingVertical: 4,
   },
   row: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
-    paddingRight: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
   },
-  chip: {
-    minWidth: 120,
-    maxWidth: 168,
-    borderRadius: examProcess.radiusCard,
-    borderWidth: 1,
-    borderColor: examProcess.cardBorder,
-    backgroundColor: examProcess.cardBg,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 4,
+  categoryBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    minHeight: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    // Realistic shadow / elevation
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  chipActive: {
-    borderColor: examProcess.accent,
-    backgroundColor: examProcess.accentSoft,
+  btnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  chipComplete: {
-    borderColor: examProcess.accentMuted,
-    backgroundColor: examProcess.okBg,
+  categoryBtnLight: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#CBD5E1',
+    shadowColor: '#0F172A',
   },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: examProcess.progressTrack,
-    marginBottom: 2,
+  categoryBtnDark: {
+    backgroundColor: '#1E2235',
+    borderColor: '#33384F',
+    shadowColor: '#000000',
   },
-  dotOn: {
-    backgroundColor: examProcess.accent,
+  categoryBtnActiveLight: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#6366F1',
+    elevation: 3,
   },
-  chipLabel: {
+  categoryBtnActiveDark: {
+    backgroundColor: '#2E2856',
+    borderColor: '#818CF8',
+    elevation: 3,
+  },
+  categoryBtnText: {
     fontSize: 13,
+    fontFamily: examProcess.fontSemiBold,
+    letterSpacing: 0.2,
+  },
+  categoryBtnTextLight: {
+    color: '#334155',
+  },
+  categoryBtnTextDark: {
+    color: '#CBD5E1',
+  },
+  categoryBtnTextActiveLight: {
+    color: '#4338CA',
+    fontFamily: examProcess.fontSemiBold,
     fontWeight: '700',
-    color: examProcess.ink,
   },
-  chipLabelActive: {
-    color: examProcess.accent,
+  categoryBtnTextActiveDark: {
+    color: '#E0E7FF',
+    fontFamily: examProcess.fontSemiBold,
+    fontWeight: '700',
   },
-  chipCount: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: examProcess.muted,
+  completeBadge: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  completeBadgeLight: {
+    backgroundColor: '#DCFCE7',
+  },
+  completeBadgeDark: {
+    backgroundColor: '#14532D',
   },
 });

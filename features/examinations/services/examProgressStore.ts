@@ -8,6 +8,8 @@ export type ExamCheckpoint = {
   sessionId: string;
   studentId: string;
   answers: Record<string, ExamAnswer>;
+  flags?: Record<string, boolean>;
+  navMode?: 'scroll' | 'one_at_a_time';
   remainingSeconds: number;
   startedAt: string | null;
   savedAt: string;

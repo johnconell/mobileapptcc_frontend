@@ -477,12 +477,6 @@ export const OfflineExamRepository = {
     report(80, 'Saving securely on this phone…');
     await OfflineStore.savePack(safePack);
     try {
-      const { persistViolationLimit } = await import('@/shared/utils/violationLimit');
-      await persistViolationLimit(safePack.examination_settings?.violation_limit);
-    } catch {
-      // Non-fatal: devices fall back to default limit.
-    }
-    try {
       const { persistDisconnectGraceSeconds } = await import('@/shared/utils/gracePeriod');
       await persistDisconnectGraceSeconds(safePack.examination_settings?.disconnect_grace_seconds);
     } catch {

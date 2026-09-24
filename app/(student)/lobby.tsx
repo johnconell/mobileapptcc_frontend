@@ -603,8 +603,16 @@ export default function StudentLobbyScreen() {
             <View style={styles.ruleRow}>
               <Text style={styles.ruleBullet}>•</Text>
               <Text style={styles.ruleText}>
-                <Text style={styles.ruleBold}>Strict No-Device Policy: </Text>
-                Smartphones, smartwatches, and unauthorized electronics are prohibited.
+                <Text style={styles.ruleBold}>Screen Pinning (BYOD): </Text>
+                When prompted by Android to &quot;Pin this screen?&quot;, tap &quot;GOT IT&quot;. Do not unpin, minimize, or switch apps during the examination.
+              </Text>
+            </View>
+
+            <View style={styles.ruleRow}>
+              <Text style={styles.ruleBullet}>•</Text>
+              <Text style={styles.ruleText}>
+                <Text style={styles.ruleBold}>Unauthorized Devices: </Text>
+                Secondary phones, smartwatches, and external electronic aids are strictly prohibited.
               </Text>
             </View>
 

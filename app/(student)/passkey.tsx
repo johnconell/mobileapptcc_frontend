@@ -93,6 +93,13 @@ export default function StudentPasskeyScreen() {
         );
         return;
       }
+      if (result.classification === 'already_in_lobby') {
+        setError(
+          result.message ||
+            'Someone is already inside the lobby with this examination key. Please check your key or contact your proctor.',
+        );
+        return;
+      }
       if (result.classification === 'wrong_schedule') {
         const sched = result.schedule;
         if (sched && (sched.exam_date || sched.time_slot || sched.title)) {

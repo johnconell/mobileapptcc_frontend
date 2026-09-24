@@ -6,8 +6,8 @@ import { colors, shadows } from '@/shared/theme';
 
 interface ExamSecurityOverlayProps {
   visible: boolean;
-  violationCount: number;
-  maxViolations: number;
+  violationCount?: number;
+  maxViolations?: number;
   message?: string;
   onContinue: () => void;
   onSubmit: () => void;
@@ -15,9 +15,7 @@ interface ExamSecurityOverlayProps {
 
 export function ExamSecurityOverlay({
   visible,
-  violationCount,
-  maxViolations,
-  message = 'Leaving the examination is prohibited.',
+  message = 'Screen Pinning is active. Leaving the examination is prohibited.',
   onContinue,
   onSubmit,
 }: ExamSecurityOverlayProps) {
@@ -30,13 +28,8 @@ export function ExamSecurityOverlay({
           </View>
           <Text style={styles.title}>Secure Examination Mode</Text>
           <Text style={styles.message}>{message}</Text>
-          <View style={styles.counter}>
-            <Text style={styles.counterText}>Warnings: {violationCount}</Text>
-            <Text style={styles.counterText}>Maximum Allowed: {maxViolations}</Text>
-          </View>
           <Text style={styles.hint}>
-            You cannot leave this examination until it is submitted. Further violations may
-            automatically terminate your attempt.
+            Your device is locked in kiosk mode via Screen Pinning. You cannot switch apps or leave this examination until your answers are submitted.
           </Text>
           <Button title="Continue Examination" size="lg" fullWidth onPress={onContinue} />
           <Button title="Submit Examination" variant="outline" size="lg" fullWidth onPress={onSubmit} />
@@ -84,18 +77,6 @@ const styles = StyleSheet.create({
     color: colors.inkSecondary,
     textAlign: 'center',
     fontWeight: '600',
-  },
-  counter: {
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: 14,
-    padding: 14,
-    gap: 6,
-  },
-  counterText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.primary,
-    textAlign: 'center',
   },
   hint: {
     fontSize: 12,

@@ -42,9 +42,6 @@ export function LobbyStudentCard({ student, delay = 0, onPress }: LobbyStudentCa
                     ? 'Waiting'
                     : student.status.replace(/_/g, ' ')}
             </Text>
-            {student.violationCount > 0 ? (
-              <Text style={styles.violations}>Warnings: {student.violationCount}</Text>
-            ) : null}
             {showReconnect ? (
               <View style={[styles.reconnectRow, { backgroundColor: themeColors.accentMuted }]}>
                 <Text style={[styles.reconnectLabel, { color: themeColors.textMuted }]}>Reconnect code</Text>
@@ -69,7 +66,6 @@ const styles = StyleSheet.create({
   program: { fontSize: 12, color: colors.inkSecondary, fontWeight: '600' },
   downloadLine: { fontSize: 11, fontWeight: '700', color: colors.primary, marginTop: 4 },
   startPhase: { fontSize: 11, fontWeight: '700', color: colors.inkSecondary, marginTop: 2 },
-  violations: { fontSize: 11, fontWeight: '700', color: colors.danger, marginTop: 2 },
   reconnectRow: {
     marginTop: 8,
     paddingVertical: 10,

@@ -73,7 +73,7 @@ export function useWifiExamGate({
     return ok;
   }, []);
 
-  const unlockAfterReconnect = useCallback(async () => {
+  const unlockAfterReconnect = useCallback(async (isPinVerified = false) => {
     const ok = await checkWifi();
     if (!ok) {
       setWifiLocked(true);
@@ -90,7 +90,10 @@ export function useWifiExamGate({
       }
     }
 
-    if (!requiresPin) {
+    if (!requiresPin || isPinVerified) {
+      if (isPinVerified) {
+        setRequiresPin(false);
+      }
       setWifiLocked(false);
       setDisconnectReason(null);
       setGraceSecondsRemaining(null);

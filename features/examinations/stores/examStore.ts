@@ -2,11 +2,15 @@ import { create } from 'zustand';
 import type { ChoiceKey, ExamAnswer, ExamTerminationReason, Question } from '@/shared/types';
 import { EXAM_DURATION_MINUTES } from '@/shared/constants';
 
+export type ExamNavMode = 'scroll' | 'one_at_a_time';
+
 interface ExamState {
   sessionId: string | null;
   questions: Question[];
   currentIndex: number;
   answers: Record<string, ExamAnswer>;
+  flags: Record<string, boolean>;
+  navMode: ExamNavMode;
   remainingSeconds: number;
   autoSavedAt: string | null;
   startedAt: string | null;
@@ -18,6 +22,8 @@ interface ExamState {
   setQuestions: (questions: Question[]) => void;
   setCurrentIndex: (index: number) => void;
   selectAnswer: (questionId: string, answer: ChoiceKey) => void;
+  toggleFlag: (questionId: string) => void;
+  setNavMode: (mode: ExamNavMode) => void;
   tick: () => void;
   startExam: (durationMinutes?: number) => void;
   setPaused: (value: boolean) => void;
@@ -26,6 +32,8 @@ interface ExamState {
   markAutoSaved: (at?: string) => void;
   restoreProgress: (payload: {
     answers: Record<string, ExamAnswer>;
+    flags?: Record<string, boolean>;
+    navMode?: ExamNavMode;
     remainingSeconds: number;
     startedAt: string | null;
   }) => void;
@@ -40,6 +48,8 @@ const initialState = {
   questions: [] as Question[],
   currentIndex: 0,
   answers: {} as Record<string, ExamAnswer>,
+  flags: {} as Record<string, boolean>,
+  navMode: 'scroll' as ExamNavMode,
   remainingSeconds: EXAM_DURATION_MINUTES * 60,
   autoSavedAt: null as string | null,
   startedAt: null as string | null,
@@ -56,10 +66,12 @@ export const useExamStore = create<ExamState>((set, get) => ({
 
   setQuestions: (questions) => {
     const answers: Record<string, ExamAnswer> = {};
+    const flags: Record<string, boolean> = {};
     questions.forEach((q) => {
       answers[q.id] = { questionId: q.id, selectedAnswer: null, answeredAt: null };
+      flags[q.id] = false;
     });
-    set({ questions, answers, currentIndex: 0 });
+    set({ questions, answers, flags, currentIndex: 0 });
   },
 
   setCurrentIndex: (currentIndex) => set({ currentIndex }),
@@ -74,19 +86,32 @@ export const useExamStore = create<ExamState>((set, get) => ({
     }));
   },
 
+  toggleFlag: (questionId) => {
+    set((state) => ({
+      flags: {
+        ...state.flags,
+        [questionId]: !state.flags[questionId],
+      },
+    }));
+  },
+
+  setNavMode: (navMode) => set({ navMode }),
+
   markAutoSaved: (at?: string) =>
     set({ autoSavedAt: at ?? new Date().toISOString() }),
 
-  restoreProgress: ({ answers, remainingSeconds, startedAt }) =>
-    set({
+  restoreProgress: ({ answers, flags, navMode, remainingSeconds, startedAt }) =>
+    set((state) => ({
       answers,
+      flags: flags ?? state.flags,
+      navMode: navMode ?? state.navMode,
       remainingSeconds,
       startedAt: startedAt ?? new Date().toISOString(),
       submittedAt: null,
       isSubmitting: false,
       isPaused: false,
       terminationReason: null,
-    }),
+    })),
 
   tick: () => {
     if (get().isPaused) return;
@@ -135,5 +160,5 @@ export const useExamStore = create<ExamState>((set, get) => ({
       .map((q) => q.number);
   },
 
-  reset: () => set({ ...initialState, answers: {} }),
+  reset: () => set({ ...initialState, answers: {}, flags: {} }),
 }));

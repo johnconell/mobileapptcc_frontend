@@ -54,7 +54,6 @@ import {
 } from '@/features/synchronization/services/offlineStore';
 import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
-import { VIOLATION_MESSAGES } from '@/shared/constants';
 
 // =============================================================================
 // TYPES
@@ -232,9 +231,6 @@ export default function ProctorResultsScreen() {
   const [openedRooms, setOpenedRooms] = useState<
     Record<string, { code: string; openedAt: string; status: 'lobby_open' | 'in_progress' | 'ended' }>
   >({});
-  const [recordedViolations, setRecordedViolations] = useState<
-    Array<{ type: string; message?: string | null }>
-  >([]);
 
   // Navigation & Drill-Down
   const [selectedLobbyId, setSelectedLobbyId] = useState<string | null>(null);
@@ -262,26 +258,15 @@ export default function ProctorResultsScreen() {
   const loadData = useCallback(async () => {
     try {
       setRefreshing(true);
-      const [cachedPack, queued, opened, peer] = await Promise.all([
+      const [cachedPack, queued, opened] = await Promise.all([
         OfflineStore.getPack(),
         OfflineStore.getResults(),
         OfflineStore.getOpenedRooms(),
-        OfflineStore.getPeerSession<{
-          violations?: Array<{ type?: string; message?: string | null }>;
-        }>(),
       ]);
 
       setPack(cachedPack);
       setRawResults(queued);
       setOpenedRooms(opened);
-      setRecordedViolations(
-        (peer?.violations ?? [])
-          .map((v) => ({
-            type: String(v.type ?? 'unknown'),
-            message: v.message ?? null,
-          }))
-          .filter((v) => v.type.length > 0),
-      );
     } finally {
       setRefreshing(false);
     }
@@ -480,28 +465,6 @@ export default function ProctorResultsScreen() {
   const overallPassRate =
     totalSubmissions > 0 ? (passedSubmissions / totalSubmissions) * 100 : 0;
   const pendingSyncCount = rawResults.filter((r) => !r.synced).length;
-
-  const violationBreakdown = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const v of recordedViolations) {
-      const key = v.type.trim() || 'unknown';
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    const total = recordedViolations.length;
-    const rows = [...counts.entries()]
-      .map(([type, count]) => ({
-        type,
-        count,
-        pct: total > 0 ? Math.round((count / total) * 100) : 0,
-        label:
-          VIOLATION_MESSAGES[type] ??
-          type
-            .replace(/_/g, ' ')
-            .replace(/\b\w/g, (c) => c.toUpperCase()),
-      }))
-      .sort((a, b) => b.count - a.count);
-    return { total, rows, top: rows[0] ?? null };
-  }, [recordedViolations]);
 
   // Selected Lobby for Level 2 drill-down
   const selectedLobby = useMemo(() => {
@@ -1066,162 +1029,18 @@ export default function ProctorResultsScreen() {
           </View>
         </View>
 
-        {/* ================================================================= */}
-        {/* 3. VIOLATIONS — most common type from recorded exam activity       */}
-        {/* ================================================================= */}
+        {/* Room & Submissions Telemetry */}
         <View
           style={[
             styles.riskCard,
             {
               backgroundColor: isDark ? '#141414' : colors.card,
               borderColor: isDark ? '#262626' : colors.cardBorder,
+              paddingVertical: 12,
             },
           ]}
         >
-          <View style={styles.riskCardHeader}>
-            <Text
-              style={[
-                styles.riskCardTitle,
-                { color: isDark ? '#FFFFFF' : colors.textPrimary },
-              ]}
-            >
-              Violations
-            </Text>
-            <View
-              style={[
-                styles.riskThresholdPill,
-                {
-                  backgroundColor: isDark ? '#1F1F1F' : colors.cardMuted,
-                  borderColor: isDark ? '#2A2A2A' : colors.cardBorder,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.riskThresholdText,
-                  { color: isDark ? '#A1A1AA' : colors.textSecondary },
-                ]}
-              >
-                {violationBreakdown.total} recorded
-              </Text>
-            </View>
-          </View>
-
-          {/* Most common violation highlight */}
-          <View
-            style={[
-              styles.topViolationBanner,
-              {
-                backgroundColor: isDark ? '#2A1414' : '#FEF2F2',
-                borderColor: isDark ? '#7A1F2B55' : '#FECACA',
-              },
-            ]}
-          >
-            <AlertTriangle size={18} color="#7A1F2B" />
-            <View style={{ flex: 1 }}>
-              <Text
-                style={[
-                  styles.topViolationEyebrow,
-                  { color: isDark ? '#F87171' : '#9B1C1C' },
-                ]}
-              >
-                Most common violation
-              </Text>
-              <Text
-                style={[
-                  styles.topViolationTitle,
-                  { color: isDark ? '#FFFFFF' : colors.textPrimary },
-                ]}
-                numberOfLines={2}
-              >
-                {violationBreakdown.top
-                  ? violationBreakdown.top.label
-                  : 'No violations recorded yet'}
-              </Text>
-              {violationBreakdown.top ? (
-                <Text
-                  style={[
-                    styles.topViolationMeta,
-                    { color: isDark ? '#A1A1AA' : colors.textSecondary },
-                  ]}
-                >
-                  {violationBreakdown.top.count} times · {violationBreakdown.top.pct}% of all
-                  violations
-                </Text>
-              ) : null}
-            </View>
-          </View>
-
-          {violationBreakdown.rows.length > 0 ? (
-            <>
-              <View
-                style={[
-                  styles.segmentedBar,
-                  { backgroundColor: isDark ? '#1F1F1F' : colors.cardMuted },
-                ]}
-              >
-                {violationBreakdown.rows.slice(0, 3).map((row, i) => (
-                  <View
-                    key={row.type}
-                    style={[
-                      styles.segmentedSegment,
-                      {
-                        flex: Math.max(1, row.pct),
-                        backgroundColor:
-                          i === 0 ? '#7A1F2B' : i === 1 ? (isDark ? '#3B82F6' : '#2563EB') : '#F59E0B',
-                      },
-                    ]}
-                  />
-                ))}
-              </View>
-
-              <View style={styles.riskChipsRow}>
-                {violationBreakdown.rows.slice(0, 3).map((row, i) => (
-                  <View style={styles.riskChip} key={row.type}>
-                    <View
-                      style={[
-                        styles.riskChipDot,
-                        {
-                          backgroundColor:
-                            i === 0
-                              ? '#7A1F2B'
-                              : i === 1
-                                ? isDark
-                                  ? '#3B82F6'
-                                  : '#2563EB'
-                                : '#F59E0B',
-                        },
-                      ]}
-                    />
-                    <Text
-                      style={[
-                        styles.riskChipText,
-                        { color: isDark ? '#D4D4D8' : colors.textSecondary },
-                      ]}
-                      numberOfLines={2}
-                    >
-                      {row.type.replace(/_/g, ' ')}:{' '}
-                      <Text
-                        style={{
-                          fontWeight: '800',
-                          color: isDark ? '#FFFFFF' : colors.textPrimary,
-                        }}
-                      >
-                        {row.count} ({row.pct}%)
-                      </Text>
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            </>
-          ) : null}
-
-          <View
-            style={[
-              styles.telemetryFooterRow,
-              { borderTopColor: isDark ? '#262626' : colors.cardBorder },
-            ]}
-          >
+          <View style={styles.telemetryFooterRow}>
             <View style={styles.telemetryFooterItem}>
               <CheckCircle2 size={13} color="#22C55E" />
               <Text
@@ -1713,7 +1532,7 @@ const styles = StyleSheet.create({
   },
 
   // ===========================================================================
-  // 3. COMPACT VIOLATION & TELEMETRY BREAKDOWN ("SAKTO LANG")
+  // 3. ROOM & TELEMETRY BREAKDOWN ("SAKTO LANG")
   // ===========================================================================
   riskCard: {
     borderRadius: 20,
@@ -1725,32 +1544,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-  },
-  topViolationBanner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    marginBottom: 12,
-  },
-  topViolationEyebrow: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-    marginBottom: 2,
-  },
-  topViolationTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    lineHeight: 20,
-  },
-  topViolationMeta: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 4,
   },
   riskCardTitle: {
     fontSize: 14,

@@ -45,40 +45,16 @@ export async function resolveDisconnectGraceSeconds(): Promise<number> {
   return DEFAULT_DISCONNECT_GRACE_SECONDS;
 }
 
-export function clampTabSwitchGraceSeconds(value: unknown): number {
-  if (value === '' || value == null) return DEFAULT_TAB_SWITCH_GRACE_SECONDS;
-  const n = Number(value);
-  if (Number.isFinite(n) && n >= 0 && n <= 300) return Math.floor(n);
-  return DEFAULT_TAB_SWITCH_GRACE_SECONDS;
+export function clampTabSwitchGraceSeconds(_value?: unknown): number {
+  return 0;
 }
 
-/** Persist tab switch grace period received from pack download or proctor handshake. */
-export async function persistTabSwitchGraceSeconds(value: unknown): Promise<void> {
-  await appStorage.setItem(TAB_SWITCH_KEY, String(clampTabSwitchGraceSeconds(value)));
+/** Tab switch grace period disabled: mandatory screen pinning is active */
+export async function persistTabSwitchGraceSeconds(_value?: unknown): Promise<void> {
+  // No-op
 }
 
-/**
- * Resolve the active tab switching grace period (seconds).
- * Prefers the offline pack (configured by admin in examination settings),
- * then cached runtime value, then default (5s).
- */
 export async function resolveTabSwitchGraceSeconds(): Promise<number> {
-  try {
-    const pack = await OfflineStore.getPack();
-    if (pack?.examination_settings?.tab_switch_grace_seconds != null) {
-      const fromPack = clampTabSwitchGraceSeconds(pack.examination_settings.tab_switch_grace_seconds);
-      await appStorage.setItem(TAB_SWITCH_KEY, String(fromPack));
-      return fromPack;
-    }
-  } catch {
-    // fall through
-  }
-
-  const cached = await appStorage.getItem(TAB_SWITCH_KEY);
-  if (cached != null && cached !== '') {
-    return clampTabSwitchGraceSeconds(cached);
-  }
-
-  return DEFAULT_TAB_SWITCH_GRACE_SECONDS;
+  return 0;
 }
 

@@ -22,7 +22,7 @@ function createId() {
  */
 export const SecurityRepository = {
   async getMaxViolations(): Promise<number> {
-    return resolveViolationLimit();
+    return 0;
   },
 
   async recordViolation(input: {
@@ -36,8 +36,6 @@ export const SecurityRepository = {
     violationCount: number;
     terminated: boolean;
   }> {
-    await delay(150);
-
     const violation: SecurityViolation = {
       id: createId(),
       sessionId: input.sessionId,
@@ -49,59 +47,27 @@ export const SecurityRepository = {
       resolved: false,
     };
 
-    // Increment local list BEFORE calling the server so the local count is always
-    // at least as high as what we report to LobbyRepository.
-    violations = [violation, ...violations];
-
-    // Local count is the number of violations for THIS student in this session.
-    const localCount = violations.filter(
-      (v) => v.studentId === input.studentId && v.sessionId === input.sessionId,
-    ).length;
-
-    const maxViolations = await resolveViolationLimit();
-
-    // Pass localCount to LobbyRepository so it can be used as a floor when the
-    // proctor phone or cloud server is unreachable (offline mode, network error).
-    const result = await LobbyRepository.recordStudentViolation(
-      input.studentId,
-      input.type,
-      input.message,
-      localCount,
-    );
-
-    // The final count is already Math.max(serverCount, localCount) inside
-    // LobbyRepository, so result.violationCount is always at least localCount.
-    const violationCount = result.violationCount;
-    const terminated = result.terminated || violationCount >= maxViolations;
-
     return {
       violation,
-      violationCount,
-      terminated,
+      violationCount: 0,
+      terminated: false,
     };
   },
 
-  async getViolations(sessionId?: string): Promise<SecurityViolation[]> {
-    await delay(200);
-    if (!sessionId) return [...violations];
-    return violations.filter((v) => v.sessionId === sessionId);
+  async getViolations(_sessionId?: string): Promise<SecurityViolation[]> {
+    return [];
   },
 
-  async getStudentViolations(studentId: string): Promise<SecurityViolation[]> {
-    await delay(150);
-    return violations.filter((v) => v.studentId === studentId);
+  async getStudentViolations(_studentId: string): Promise<SecurityViolation[]> {
+    return [];
   },
 
-  async resolveViolation(violationId: string): Promise<void> {
-    await delay(100);
-    violations = violations.map((v) =>
-      v.id === violationId ? { ...v, resolved: true } : v,
-    );
+  async resolveViolation(_violationId: string): Promise<void> {
+    // No-op
   },
 
-  async clearSession(sessionId: string): Promise<void> {
-    await delay(100);
-    violations = violations.filter((v) => v.sessionId !== sessionId);
+  async clearSession(_sessionId: string): Promise<void> {
+    // No-op
   },
 };
 

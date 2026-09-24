@@ -72,9 +72,7 @@ export type OfflinePack = {
   }>;
   examination_settings?: {
     duration_minutes?: number;
-    violation_limit?: number;
     disconnect_grace_seconds?: number;
-    tab_switch_grace_seconds?: number;
     room_student_limit?: number;
     shuffle_questions?: boolean;
     shuffle_categories?: boolean;
@@ -336,7 +334,7 @@ export function normalizePackForHashing(pack: OfflinePack | null): string {
 
   const settings = pack.examination_settings;
   const settingsSig = settings
-    ? `${settings.duration_minutes ?? 60}:${settings.violation_limit ?? 3}:${settings.room_student_limit ?? 60}:${Boolean(settings.shuffle_questions)}:${Boolean(settings.shuffle_categories)}:${Boolean(settings.shuffle_both)}`
+    ? `${settings.duration_minutes ?? 60}:${settings.room_student_limit ?? 60}:${Boolean(settings.shuffle_questions)}:${Boolean(settings.shuffle_categories)}:${Boolean(settings.shuffle_both)}`
     : 'default-settings';
 
   const raw = `${pack.pack_version || 1}-${settingsSig}-${sigs.sort().join('|')}`;
@@ -425,15 +423,8 @@ export const OfflineStore = {
       // ignore
     }
     try {
-      const { persistViolationLimit } = await import('@/shared/utils/violationLimit');
-      await persistViolationLimit(safe.examination_settings?.violation_limit);
-    } catch {
-      // Non-fatal: devices fall back to default limit.
-    }
-    try {
-      const { persistDisconnectGraceSeconds, persistTabSwitchGraceSeconds } = await import('@/shared/utils/gracePeriod');
+      const { persistDisconnectGraceSeconds } = await import('@/shared/utils/gracePeriod');
       await persistDisconnectGraceSeconds(safe.examination_settings?.disconnect_grace_seconds);
-      await persistTabSwitchGraceSeconds(safe.examination_settings?.tab_switch_grace_seconds);
     } catch {
       // Non-fatal: devices fall back to default limit.
     }

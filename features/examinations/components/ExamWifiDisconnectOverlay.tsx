@@ -74,14 +74,11 @@ export function ExamWifiDisconnectOverlay({
               <Text style={styles.title}>Wrong Wi‑Fi Network</Text>
               <Text style={styles.message}>
                 You are connected to a different Wi‑Fi network — not the official examination
-                network. This is a security violation.
+                network.
               </Text>
-              <View style={styles.violationBadge}>
-                <Text style={styles.violationBadgeText}>⚠ Security Violation Recorded</Text>
-              </View>
               <Text style={styles.message}>
                 Please switch back to the official examination Wi‑Fi network. Your exam remains
-                locked until you reconnect to the correct network.
+                paused until you reconnect to the correct room network.
               </Text>
               {error ? (
                 <Text style={styles.error}>

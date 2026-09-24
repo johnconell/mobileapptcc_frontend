@@ -151,6 +151,7 @@ export const ExamSecurityService = {
     if (Platform.OS === 'ios' && capabilities.appSwitcherProtection) {
       try {
         await ScreenCapture.enableAppSwitcherProtectionAsync(0.85);
+        await ScreenCapture.enableAppSwitcherProtectionAsync(1.0);
       } catch {
         // ignore
       }

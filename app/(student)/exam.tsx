@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
   Modal,
   Platform,
   Pressable,
   ScrollView,
   Text,
+  TextInput,
   View,
   StyleSheet,
   NativeSyntheticEvent,
@@ -17,30 +19,36 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ArrowLeft,
+  Bookmark,
+  BookmarkCheck,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   CloudUpload,
+  Layers,
+  ListFilter,
   Minus,
   Moon,
   Plus,
   Send,
-  Shield,
+  ShieldAlert,
   Sun,
   Type,
   X,
 } from 'lucide-react-native';
 import { formatTime } from '@/shared/utils';
 import { appStorage } from '@/shared/services/storage';
-import { ConfirmationModal, CountdownTimer, QuestionCard } from '@/shared/components/ui';
-import { ExamSecurityOverlay } from '@/features/examinations/components/ExamSecurityOverlay';
+import { CountdownTimer, QuestionCard } from '@/shared/components/ui';
 import { ExamWifiDisconnectOverlay } from '@/features/examinations/components/ExamWifiDisconnectOverlay';
 import {
   buildCategoryProgress,
+  ExamCategoryNav,
   type CategoryProgress,
 } from '@/features/examinations/components/ExamCategoryNav';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
-import { useExamStore } from '@/features/examinations/stores/examStore';
+import { useExamStore, type ExamNavMode } from '@/features/examinations/stores/examStore';
 import { useExamTimer } from '@/features/examinations/hooks/useExamTimer';
 import { useExamSecurity } from '@/features/examinations/hooks/useExamSecurity';
 import { useExamLock } from '@/features/examinations/hooks/useExamLock';
@@ -53,6 +61,7 @@ import { ExamLifecycle } from '@/features/examinations/services/examLifecycle';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { parseStartPulse } from '@/features/examinations/services/examStartCoordinator';
 import { playExamTimeWarning } from '@/features/examinations/services/examTimeWarning';
+import { startExamLock, isExamLocked } from '@/features/examinations/services/ExamSecurityService';
 import { examProcess } from '@/shared/theme/examProcess';
 import { examUi, examUiPalette } from '@/shared/theme/examUi';
 import type { ChoiceKey, Question } from '@/shared/types';
@@ -78,24 +87,44 @@ export default function ExamScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [reconnectLoading, setReconnectLoading] = useState(false);
   const [reconnectError, setReconnectError] = useState<string | null>(null);
+  const [reconnectPinRequired, setReconnectPinRequired] = useState(false);
   const [roomEnded, setRoomEnded] = useState(false);
+  const [proctorEndedModalOpen, setProctorEndedModalOpen] = useState(false);
+  const [timeExpiredModalOpen, setTimeExpiredModalOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [fontScale, setFontScale] = useState(1);
-  const [darkMode, setDarkMode] = useState(true);
+  const [darkMode, setDarkMode] = useState(false);
   const [fontModalOpen, setFontModalOpen] = useState(false);
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string | null>(null);
   const [kioskBannerDismissed, setKioskBannerDismissed] = useState(false);
-  const [violationToast, setViolationToast] = useState<string | null>(null);
-  const prevViolationCountRef = useRef(0);
+  const [submitConfirmText, setSubmitConfirmText] = useState('');
 
-  // Load persisted theme and font scale
+  const questions = useExamStore((s) => s.questions);
+  const answers = useExamStore((s) => s.answers);
+  const flags = useExamStore((s) => s.flags);
+  const toggleFlag = useExamStore((s) => s.toggleFlag);
+  const navMode = useExamStore((s) => s.navMode);
+  const setNavMode = useExamStore((s) => s.setNavMode);
+  const autoSavedAt = useExamStore((s) => s.autoSavedAt);
+  const sessionId = useExamStore((s) => s.sessionId);
+  const startedAt = useExamStore((s) => s.startedAt);
+  const selectAnswer = useExamStore((s) => s.selectAnswer);
+  const markAutoSaved = useExamStore((s) => s.markAutoSaved);
+  const unansweredCount = useExamStore((s) => s.unansweredCount);
+  const unansweredNumbers = useExamStore((s) => s.unansweredNumbers);
+  const answeredCount = useExamStore((s) => s.answeredCount);
+  const setPaused = useExamStore((s) => s.setPaused);
+  const markSubmitted = useExamStore((s) => s.markSubmitted);
+  const restoreProgress = useExamStore((s) => s.restoreProgress);
+
+  // Load persisted theme, font scale, and navigation mode
   useEffect(() => {
     let active = true;
     void (async () => {
       try {
         const storedTheme = await appStorage.getItem('tcc.settings.exam.dark_mode');
-        if (active && storedTheme !== null) {
-          setDarkMode(storedTheme === 'true');
+        if (active && storedTheme === 'true') {
+          setDarkMode(true);
         }
         const storedScale = await appStorage.getItem('tcc.settings.exam.font_scale');
         if (active && storedScale !== null) {
@@ -104,6 +133,10 @@ export default function ExamScreen() {
             setFontScale(parsed);
           }
         }
+        const storedNavMode = await appStorage.getItem('tcc.settings.exam.nav_mode');
+        if (active && (storedNavMode === 'one_at_a_time' || storedNavMode === 'scroll')) {
+          setNavMode(storedNavMode as ExamNavMode);
+        }
       } catch {
         /* ignore fallback */
       }
@@ -111,7 +144,7 @@ export default function ExamScreen() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [setNavMode]);
 
   const toggleDarkMode = useCallback(() => {
     setDarkMode((prev) => {
@@ -120,6 +153,12 @@ export default function ExamScreen() {
       return next;
     });
   }, []);
+
+  const toggleNavMode = useCallback(() => {
+    const next: ExamNavMode = navMode === 'scroll' ? 'one_at_a_time' : 'scroll';
+    setNavMode(next);
+    void appStorage.setItem('tcc.settings.exam.nav_mode', next);
+  }, [navMode, setNavMode]);
 
   const selectFontScale = useCallback((scale: number) => {
     const clamped = Math.min(FONT_MAX, Math.max(FONT_MIN, Number(scale.toFixed(2))));
@@ -130,21 +169,6 @@ export default function ExamScreen() {
   const restoredRef = useRef(false);
   const lowTimeWarnedRef = useRef(false);
   const autoSubmittedRef = useRef(false);
-
-  const questions = useExamStore((s) => s.questions);
-  const answers = useExamStore((s) => s.answers);
-  const autoSavedAt = useExamStore((s) => s.autoSavedAt);
-  const sessionId = useExamStore((s) => s.sessionId);
-  const remainingSecondsStore = useExamStore((s) => s.remainingSeconds);
-  const startedAt = useExamStore((s) => s.startedAt);
-  const selectAnswer = useExamStore((s) => s.selectAnswer);
-  const markAutoSaved = useExamStore((s) => s.markAutoSaved);
-  const unansweredCount = useExamStore((s) => s.unansweredCount);
-  const unansweredNumbers = useExamStore((s) => s.unansweredNumbers);
-  const answeredCount = useExamStore((s) => s.answeredCount);
-  const setPaused = useExamStore((s) => s.setPaused);
-  const markSubmitted = useExamStore((s) => s.markSubmitted);
-  const restoreProgress = useExamStore((s) => s.restoreProgress);
 
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
 
@@ -205,22 +229,12 @@ export default function ExamScreen() {
   }, []);
 
 
-  // A ref so onWifiDisconnect can call recordViolation which is available only after
-  // useExamSecurity is called below. It is assigned once that hook runs.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const recordViolationRef = useRef<((type: import('@/shared/types').SecurityViolationType) => Promise<any>) | null>(null);
-
   const onWifiDisconnect = useCallback(
     (reason: 'wifi_lost' | 'wrong_network' | 'proctor_network_change') => {
       // Proctor-side change is not the student's fault — do not penalise.
       if (reason === 'proctor_network_change') return;
 
       void LobbyRepository.reportWifiDisconnect();
-
-      // Deliberately connecting to the wrong Wi-Fi network is a security violation.
-      if (reason === 'wrong_network') {
-        void recordViolationRef.current?.('app_background');
-      }
     },
     [],
   );
@@ -245,6 +259,22 @@ export default function ExamScreen() {
     gracePeriodSeconds,
   });
 
+  // iOS Privacy Blackout Shield: triggers immediately when examinee tries to pull down
+  // Notification Center, Control Center, or initiate App Switcher on iPhone/iPad.
+  const [isInactiveOrBackground, setIsInactiveOrBackground] = useState(
+    Platform.OS === 'ios' && AppState.currentState !== 'active',
+  );
+
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    const sub = AppState.addEventListener('change', (state) => {
+      setIsInactiveOrBackground(state !== 'active');
+    });
+    return () => sub.remove();
+  }, []);
+
+
+
   // Auto-save answers
   useEffect(() => {
     if (questions.length === 0 || wifiLocked) return;
@@ -268,12 +298,14 @@ export default function ExamScreen() {
         sessionId,
         studentId: verifiedStudent.id,
         answers,
-        remainingSeconds: remainingSecondsStore,
+        flags,
+        navMode,
+        remainingSeconds: useExamStore.getState().remainingSeconds,
         startedAt,
       });
     }, 2000);
     return () => clearTimeout(timer);
-  }, [answers, remainingSecondsStore, sessionId, verifiedStudent?.id, startedAt, questions.length]);
+  }, [answers, flags, navMode, sessionId, verifiedStudent?.id, startedAt, questions.length]);
 
   useEffect(() => {
     if (restoredRef.current || !questions.length || !sessionId || !verifiedStudent?.id) return;
@@ -284,6 +316,8 @@ export default function ExamScreen() {
       if (checkpoint.studentId !== verifiedStudent.id) return;
       restoreProgress({
         answers: checkpoint.answers,
+        flags: checkpoint.flags,
+        navMode: checkpoint.navMode,
         remainingSeconds: checkpoint.remainingSeconds,
         startedAt: checkpoint.startedAt,
       });
@@ -356,18 +390,27 @@ export default function ExamScreen() {
     if (!autoSubmittedRef.current) {
       autoSubmittedRef.current = true;
       goSubmit('time_expired');
+      setTimeExpiredModalOpen(true);
+      setTimeout(() => {
+        goSubmit('time_expired');
+      }, 2500);
     }
   };
 
-  const onMaxViolations = useCallback(() => {
-    if (verifiedStudent?.id) {
-      void LobbyRepository.finishStudent(verifiedStudent.id, 'policy_violation');
-    }
-    goSubmit('policy_violation');
-  }, [verifiedStudent?.id, goSubmit]);
+  // Auto-pin into Android Screen Pinning (Lock Task Mode) when the exam session is active.
+  const { isKioskActive, requestLock } = useExamLock({
+    enabled: securityEnabled && !wifiLocked,
+  });
+
+  const isAndroidUnpinned = Platform.OS === 'android' && !isKioskActive;
+  const paused = wifiLocked || isAndroidUnpinned;
+
+  useEffect(() => {
+    setPaused(paused);
+  }, [paused, setPaused]);
 
   const requestSubmit = useCallback(() => {
-    if (wifiLocked) return;
+    if (paused) return;
     const missing = unansweredNumbers();
     if (missing.length > 0) {
       // Show the incomplete modal — but it now offers "Submit Anyway" too.
@@ -375,59 +418,46 @@ export default function ExamScreen() {
       return;
     }
     setConfirmOpen(true);
-  }, [unansweredNumbers, wifiLocked]);
+  }, [unansweredNumbers, paused]);
 
-  const {
-    paused: securityPaused,
-    warningVisible,
-    warningMessage,
-    violationCount,
-    maxViolations,
-    acknowledgeWarning,
-    requestSubmitFromWarning,
-    capabilities,
-    recordViolation,
-  } = useExamSecurity({
+  useExamSecurity({
     enabled: securityEnabled && !wifiLocked,
     sessionId,
     studentId: verifiedStudent?.id ?? null,
     studentName: verifiedStudent?.fullName ?? null,
-    onMaxViolations,
     onRequestSubmit: requestSubmit,
   });
 
-  // Wire recordViolation into the ref so onWifiDisconnect (declared earlier) can use it.
-  recordViolationRef.current = recordViolation;
-
-  // Auto-pin into Android Screen Pinning (Lock Task Mode) when the exam session is active.
-  // On iOS: only AppState transitions are monitored for violations (no Guided Access).
-  useExamLock({
-    enabled: securityEnabled && !wifiLocked,
-    onViolation: (type) => {
-      void recordViolation(type);
-    },
-  });
-
-  const paused = securityPaused || wifiLocked;
-
-  useEffect(() => {
-    setPaused(paused);
-  }, [paused, setPaused]);
-
-  useEffect(() => {
-    if (violationCount > prevViolationCountRef.current) {
-      const msg =
-        warningMessage ||
-        `Warning: Tab switch or window blur detected (${violationCount}/${maxViolations})`;
-      setViolationToast(msg);
-      const timer = setTimeout(() => {
-        setViolationToast(null);
-      }, 4000);
-      prevViolationCountRef.current = violationCount;
-      return () => clearTimeout(timer);
+  /**
+   * Re-pins the exam after a wifi reconnect.
+   * Returns true if the device is confirmed pinned within 7 seconds.
+   * Returns false (and sets reconnectPinRequired=true) if the student tapped "No thanks".
+   */
+  const enforceRepinAfterReconnect = useCallback(async (): Promise<boolean> => {
+    if (Platform.OS !== 'android') {
+      // iOS uses Guided Access — no repinning needed here
+      return true;
     }
-    prevViolationCountRef.current = violationCount;
-  }, [violationCount, warningMessage, maxViolations]);
+    setReconnectPinRequired(true);
+    try {
+      await startExamLock();
+    } catch {
+      // startExamLock fires the system dialog; errors here are non-fatal
+    }
+    // Poll for up to 7 seconds to detect if student approved
+    const deadline = Date.now() + 7000;
+    while (Date.now() < deadline) {
+      await new Promise<void>((r) => setTimeout(r, 500));
+      const locked = await isExamLocked().catch(() => false);
+      if (locked) {
+        setReconnectPinRequired(false);
+        return true;
+      }
+    }
+    // Student chose "No thanks" — stay locked
+    setReconnectPinRequired(false);
+    return false;
+  }, []);
 
   const handleReconnect = useCallback(
     async (code: string) => {
@@ -439,16 +469,25 @@ export default function ExamScreen() {
         setReconnectLoading(false);
         return;
       }
-      const unlocked = await unlockAfterReconnect();
+      const unlocked = await unlockAfterReconnect(true);
       if (!unlocked) {
         setReconnectError('Turn Wi‑Fi back on, then enter the reconnect code.');
+        setReconnectLoading(false);
+        return;
+      }
+      // ── App-pin gate: student MUST approve pinning to continue ──
+      const pinned = await enforceRepinAfterReconnect();
+      if (!pinned) {
+        setReconnectError(
+          'App pinning is required to continue the examination. Tap "Reconnect" and approve the App Pinning prompt.',
+        );
         setReconnectLoading(false);
         return;
       }
       void LobbyRepository.sendHeartbeat();
       setReconnectLoading(false);
     },
-    [unlockAfterReconnect],
+    [unlockAfterReconnect, enforceRepinAfterReconnect],
   );
 
   const handleProctorNetworkRetry = useCallback(async () => {
@@ -463,13 +502,25 @@ export default function ExamScreen() {
         );
       } else {
         void LobbyRepository.sendHeartbeat();
+        setReconnectLoading(false);
+        return;
       }
+      // ── App-pin gate: student MUST approve pinning to continue ──
+      const pinned = await enforceRepinAfterReconnect();
+      if (!pinned) {
+        setReconnectError(
+          'App pinning is required to continue the examination. Tap "Retry" and approve the App Pinning prompt.',
+        );
+        setReconnectLoading(false);
+        return;
+      }
+      void LobbyRepository.sendHeartbeat();
     } catch (err) {
       setReconnectError(err instanceof Error ? err.message : 'Reconnect failed.');
     } finally {
       setReconnectLoading(false);
     }
-  }, [unlockAfterReconnect]);
+  }, [unlockAfterReconnect, enforceRepinAfterReconnect]);
 
   useEffect(() => {
     navigation.setOptions({
@@ -487,7 +538,7 @@ export default function ExamScreen() {
     return unsubscribe;
   }, [navigation]);
 
-  const remainingSeconds = useExamTimer(questions.length > 0 && !paused);
+  const remainingSeconds = useExamTimer(questions.length > 0);
 
   useEffect(() => {
     if (remainingSeconds > 10) {
@@ -506,16 +557,20 @@ export default function ExamScreen() {
 
   useEffect(() => {
     if (autoSubmittedRef.current) return;
-    const ended = roomEnded;
-    if (questions.length > 0 && (remainingSeconds <= 0 || ended)) {
+    if (roomEnded) {
       autoSubmittedRef.current = true;
-      if (ended) {
-        void leaveEndedExam();
-      } else {
-        goSubmit('time_expired');
-      }
+      setProctorEndedModalOpen(true);
+      return;
     }
-  }, [remainingSeconds, questions.length, roomEnded, goSubmit, leaveEndedExam]);
+    if (questions.length > 0 && remainingSeconds <= 0) {
+      autoSubmittedRef.current = true;
+      setTimeExpiredModalOpen(true);
+      const timer = setTimeout(() => {
+        goSubmit('time_expired');
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [remainingSeconds, questions.length, roomEnded, goSubmit]);
 
   const missingLabel = useMemo(() => {
     const nums = unansweredNumbers();
@@ -557,18 +612,36 @@ export default function ExamScreen() {
   );
 
   const jumpToFirstUnanswered = useCallback(() => {
+    setIncompleteOpen(false);
+    setSelectedCategoryFilter(null);
     const idx = questions.findIndex((q) => !answers[q.id]?.selectedAnswer);
     if (idx >= 0) {
-      setIncompleteOpen(false);
-      setPickerOpen(false);
-      scrollToIndex(idx);
+      setTimeout(() => {
+        scrollToIndex(idx);
+      }, 150);
+    } else {
+      setTimeout(() => {
+        setPickerOpen(true);
+      }, 150);
     }
   }, [questions, answers, scrollToIndex]);
 
+  const handleSelectChoice = useCallback(
+    (questionId: string, choice: ChoiceKey, index: number) => {
+      if (paused) return;
+      selectAnswer(questionId, choice);
+      setActiveIndex(index);
+      if (verifiedStudent?.id) {
+        void LobbyRepository.touchActivity(verifiedStudent.id);
+      }
+    },
+    [paused, selectAnswer, verifiedStudent?.id],
+  );
+
   if (!questions.length) return null;
 
-  const p = examUiPalette(darkMode);
-  const appearance = { fontScale, darkMode };
+  const p = useMemo(() => examUiPalette(darkMode), [darkMode]);
+  const appearance = useMemo(() => ({ fontScale, darkMode }), [fontScale, darkMode]);
   const accentColor = examUi.accent;
 
   const visibleQuestions = selectedCategoryFilter
@@ -578,10 +651,51 @@ export default function ExamScreen() {
   return (
     <View style={[styles.screen, { paddingTop: Math.max(insets.top, 8), backgroundColor: p.page }]}>
       <StatusBar hidden={true} />
+
+      {/* iOS Privacy Blackout Shield (Prevents question viewing during app switcher / notification pulls) */}
+      {Platform.OS === 'ios' && isInactiveOrBackground ? (
+        <View style={styles.iosPrivacyBlackoutShield} pointerEvents="auto">
+          <ShieldAlert size={64} color="#EF4444" strokeWidth={2.2} />
+          <Text style={styles.iosPrivacyShieldTitle}>EXAMINATION PRIVACY SHIELD</Text>
+          <Text style={styles.iosPrivacyShieldSubtitle}>
+            Leaving the examination screen or accessing system drawers is strictly prohibited.
+          </Text>
+          <Text style={styles.iosPrivacyShieldInstruction}>
+            Return to the app immediately and maintain Guided Access.
+          </Text>
+        </View>
+      ) : null}
+
+      {/* Android Mandatory App Pinning Shield: Blocks exam interaction and view if unpinned */}
+      {Platform.OS === 'android' && !isKioskActive && !wifiLocked && !roomEnded ? (
+        <View style={styles.pinRequiredBlockingShield} pointerEvents="auto">
+          <View style={styles.pinRequiredCard}>
+            <View style={styles.pinRequiredIconWrap}>
+              <ShieldAlert size={48} color="#7C6CF6" strokeWidth={2.2} />
+            </View>
+            <Text style={styles.pinRequiredTitle}>App Pinning Required</Text>
+            <Text style={styles.pinRequiredSubtitle}>
+              You must approve App Pinning to continue answering the examination.
+            </Text>
+            <Text style={styles.pinRequiredInstruction}>
+              If you tap &quot;No thanks&quot;, you cannot continue the examination. Please tap &quot;Got it&quot; on the system prompt to proceed.
+            </Text>
+            <Pressable
+              style={styles.pinRequiredBtn}
+              onPress={() => void requestLock()}
+              accessibilityRole="button"
+              accessibilityLabel="Pin Screen & Continue"
+            >
+              <Text style={styles.pinRequiredBtnText}>Pin Screen &amp; Continue</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
       {/* Top Bar (Fixed, matching exact 2-row layout from screenshots) */}
       <View style={[styles.topBarFixed, { backgroundColor: p.page }]}>
         <View style={styles.topNavContainer}>
-          {/* Row 1: Category pill (left) + Font controls & Theme toggle (right) */}
+          {/* Row 1: Category pill (left) + Font controls & Theme toggle & Nav Mode (right) */}
           <View style={styles.topRowOne}>
             <Pressable
               style={[
@@ -601,11 +715,46 @@ export default function ExamScreen() {
                 ]}
               >
                 <Text style={styles.categoryBadgePrefix}>Category: </Text>
-                {selectedCategoryFilter || activeCategory?.label || 'Algebra'}
+                {selectedCategoryFilter || activeCategory?.label || 'All'}
               </Text>
             </Pressable>
 
             <View style={styles.topRightControls}>
+              {/* Question Navigation Mode Toggle: Scroll vs 1-by-1 */}
+              <Pressable
+                style={[
+                  styles.navModeToggleBtn,
+                  {
+                    backgroundColor: navMode === 'one_at_a_time'
+                      ? (darkMode ? '#312E81' : '#EEF2FF')
+                      : (darkMode ? '#1E2235' : '#F1F5F9'),
+                    borderColor: navMode === 'one_at_a_time'
+                      ? (darkMode ? '#818CF8' : '#6366F1')
+                      : (darkMode ? '#33384F' : '#CBD5E1'),
+                  },
+                ]}
+                onPress={toggleNavMode}
+                accessibilityRole="button"
+                accessibilityLabel={`Question mode: ${navMode === 'scroll' ? 'Scroll mode' : 'One-at-a-time mode'}. Tap to switch.`}
+                hitSlop={6}
+              >
+                {navMode === 'scroll' ? (
+                  <>
+                    <ListFilter size={13} color={darkMode ? '#CBD5E1' : '#475569'} />
+                    <Text style={[styles.navModeToggleText, { color: darkMode ? '#CBD5E1' : '#475569' }]}>
+                      Scroll
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <Layers size={13} color={darkMode ? '#A5B4FC' : '#4338CA'} />
+                    <Text style={[styles.navModeToggleText, { color: darkMode ? '#A5B4FC' : '#4338CA', fontFamily: examProcess.fontSemiBold }]}>
+                      1-by-1
+                    </Text>
+                  </>
+                )}
+              </Pressable>
+
               <Pressable
                 style={styles.fontStepperBtn}
                 onPress={() => selectFontScale(fontScale - FONT_STEP)}
@@ -641,38 +790,9 @@ export default function ExamScreen() {
             </View>
           </View>
 
-          {/* Row 2: Violations pill (left) + Large Monospace Timer (right) */}
+          {/* Row 2: Large Centered Timer */}
           <View style={styles.topRowTwo}>
-            <View
-              style={[
-                styles.violationsPill,
-                {
-                  backgroundColor:
-                    violationCount === 0
-                      ? darkMode
-                        ? '#22263A'
-                        : '#E2E8F0'
-                      : '#DC2626',
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.violationsText,
-                  {
-                    color:
-                      violationCount === 0
-                        ? darkMode
-                          ? '#94A3B8'
-                          : '#64748B'
-                        : '#FFFFFF',
-                  },
-                ]}
-              >
-                {`Violations: ${violationCount}`}
-              </Text>
-            </View>
-
+            <View style={{ flex: 1 }} />
             <Text
               style={[
                 styles.timerMonospaceText,
@@ -693,129 +813,300 @@ export default function ExamScreen() {
               {formatTime(remainingSeconds) || '00:00'}
             </Text>
           </View>
-
-          {/* Optional Warning Toast Notification for Violations */}
-          {violationToast ? (
-            <View
-              style={[
-                styles.violationToast,
-                {
-                  backgroundColor:
-                    violationCount <= 1 ? 'rgba(245, 197, 24, 0.95)' : 'rgba(231, 76, 60, 0.95)',
-                },
-              ]}
-            >
-              <Shield size={14} color="#FFFFFF" />
-              <Text style={styles.violationToastText} numberOfLines={2}>
-                {violationToast}
-              </Text>
-              <Pressable onPress={() => setViolationToast(null)} accessibilityLabel="Dismiss">
-                <X size={14} color="#FFFFFF" />
-              </Pressable>
-            </View>
-          ) : null}
         </View>
       </View>
 
-      {/* BYOD Screen Pinning Reminder Banner (Android only, shown once, dismissible) */}
-      {Platform.OS === 'android' && !capabilities?.kioskNativeLockTask && !kioskBannerDismissed && (
-        <View style={[styles.kioskBanner, { backgroundColor: p.topBar }]}>
-          <Shield size={14} color="#F59E0B" />
-          <Text style={[styles.kioskBannerText, { color: darkMode ? '#FCD34D' : '#92400E' }]}>
-            {'Screen Pinning recommended: Recent Apps → Pin this app to block navigation.'}
-          </Text>
-          <Pressable onPress={() => setKioskBannerDismissed(true)} accessibilityLabel="Dismiss">
-            <X size={14} color={p.muted} />
-          </Pressable>
-        </View>
-      )}
+      {/* Thin divider line between top bar and category selector */}
+      <View style={[styles.topBarDivider, { backgroundColor: darkMode ? '#22263A' : '#E2E8F0' }]} />
 
-      {/* Main Vertically Scrollable Page */}
+      {/* Category selector buttons with border/background/elevation and live Math (7/15) counts */}
+      <ExamCategoryNav
+        categories={categories}
+        activeKey={selectedCategoryFilter}
+        onSelect={(cat) => {
+          const nextKey = cat ? cat.key : null;
+          setSelectedCategoryFilter(nextKey);
+          if (cat) {
+            const items = questionsByCategory.get(cat.key);
+            if (items && items[0]) {
+              setActiveIndex(items[0].index);
+              if (navMode === 'scroll') {
+                scrollToIndex(items[0].index);
+              }
+            }
+          }
+        }}
+        darkMode={darkMode}
+        showAllOption={true}
+        totalQuestions={total}
+        totalAnswered={answered}
+      />
+
+      {/* Main Content Page: Scroll Mode vs One-at-a-Time Mode */}
       <View style={[styles.mainCardSheet, { backgroundColor: p.page }]}>
-        <ScrollView
-          ref={scrollRef}
-          style={styles.scroll}
-          contentContainerStyle={[
-            styles.scrollContent,
-            { paddingBottom: Math.max(insets.bottom, 20) + 90 },
-          ]}
-          showsVerticalScrollIndicator={false}
-          scrollEnabled={!paused}
-          keyboardShouldPersistTaps="handled"
-          onScroll={onScroll}
-          scrollEventThrottle={48}
-        >
-          <View style={styles.responsiveContentWrapper}>
-            {/* Subject + Title + Answered Count Header */}
-            <View style={styles.examHeaderSection}>
-              <Text style={[styles.subjectSubtitle, { color: accentColor }]}>
-                {activeCategory?.label || 'Mathematics'}
-              </Text>
-              <View style={styles.titleRow}>
-                <Text style={[styles.examMainTitle, { color: p.ink }]}>
-                  Final Examination
-                </Text>
-                <Text style={[styles.answeredRatioText, { color: p.muted }]}>
-                  {`${answered}/${total} answered`}
-                </Text>
+        {navMode === 'scroll' ? (
+          <ScrollView
+            ref={scrollRef}
+            style={styles.scroll}
+            contentContainerStyle={[
+              styles.scrollContent,
+              { paddingBottom: Math.max(insets.bottom, 20) + 90 },
+            ]}
+            showsVerticalScrollIndicator={false}
+            scrollEnabled={!paused}
+            keyboardShouldPersistTaps="handled"
+            onScroll={onScroll}
+            scrollEventThrottle={48}
+          >
+            <View style={styles.responsiveContentWrapper}>
+              {/* Subject + Title + Answered Count Header */}
+              <View style={styles.examHeaderSection}>
+                <View style={styles.titleRow}>
+                  <View style={{ flex: 1, marginRight: 12 }}>
+                    <Text style={[styles.examMainTitle, { color: p.ink }]} numberOfLines={2}>
+                      {selectedCategoryFilter || activeCategory?.label || 'Examination'}
+                    </Text>
+                    <Text style={[styles.examSubtitle, { color: p.muted }]}>
+                      College Entrance Test · Scroll Mode
+                    </Text>
+                  </View>
+                  <Text style={[styles.answeredRatioText, { color: p.muted }]}>
+                    {`${answered}/${total} answered`}
+                  </Text>
+                </View>
               </View>
+
+              {visibleQuestions.map((question, index) => {
+                const key = categoryKeyOf(question);
+                const prevKey = index > 0 ? categoryKeyOf(visibleQuestions[index - 1]!) : null;
+                const showHeading = (key !== prevKey || index === 0) && !selectedCategoryFilter;
+
+                return (
+                  <View
+                    key={question.id}
+                    onLayout={(event: LayoutChangeEvent) => {
+                      questionY.current[question.id] = event.nativeEvent.layout.y;
+                    }}
+                    style={styles.questionBlock}
+                  >
+                    {showHeading ? (
+                      <View style={styles.categoryDividerRow}>
+                        <View
+                          style={[
+                            styles.categoryDividerLine,
+                            { backgroundColor: darkMode ? '#2C3044' : '#E2E8F0' },
+                          ]}
+                        />
+                        <Text style={[styles.categoryDividerTitle, { color: p.muted }]}>
+                          {key.toUpperCase()}
+                        </Text>
+                        <View
+                          style={[
+                            styles.categoryDividerLine,
+                            { backgroundColor: darkMode ? '#2C3044' : '#E2E8F0' },
+                          ]}
+                        />
+                      </View>
+                    ) : null}
+
+                    <QuestionCard
+                      question={question}
+                      questionIndex={index}
+                      totalQuestions={total}
+                      selectedAnswer={answers[question.id]?.selectedAnswer ?? null}
+                      isFlagged={Boolean(flags[question.id])}
+                      onToggleFlag={() => toggleFlag(question.id)}
+                      secure
+                      appearance={appearance}
+                      readerMode
+                      onSelect={(choice: ChoiceKey) => handleSelectChoice(question.id, choice, index)}
+                    />
+                  </View>
+                );
+              })}
             </View>
+          </ScrollView>
+        ) : (
+          /* One-at-a-Time Mode: Single question with Next/Prev and question strip */
+          (() => {
+            const currentCatQuestions = visibleQuestions;
+            const currentCatIdx = Math.max(
+              0,
+              currentCatQuestions.findIndex((q) => q.id === (questions[safeIndex]?.id || '')) >= 0
+                ? currentCatQuestions.findIndex((q) => q.id === (questions[safeIndex]?.id || ''))
+                : 0,
+            );
+            const currentQuestion = currentCatQuestions[currentCatIdx] || questions[safeIndex];
+            const currentGlobalIdx = questions.findIndex((q) => q.id === currentQuestion?.id);
 
-            {visibleQuestions.map((question, index) => {
-              const key = categoryKeyOf(question);
-              const prevKey = index > 0 ? categoryKeyOf(visibleQuestions[index - 1]!) : null;
-              const showHeading = (key !== prevKey || index === 0) && !selectedCategoryFilter;
-
-              return (
-                <View
-                  key={question.id}
-                  onLayout={(event: LayoutChangeEvent) => {
-                    questionY.current[question.id] = event.nativeEvent.layout.y;
-                  }}
-                  style={styles.questionBlock}
-                >
-                  {showHeading ? (
-                    <View style={styles.categoryDividerRow}>
-                      <View
-                        style={[
-                          styles.categoryDividerLine,
-                          { backgroundColor: darkMode ? '#2C3044' : '#E2E8F0' },
-                        ]}
-                      />
-                      <Text style={[styles.categoryDividerTitle, { color: p.muted }]}>
-                        {key.toUpperCase()}
+            return (
+              <ScrollView
+                style={styles.scroll}
+                contentContainerStyle={[
+                  styles.scrollContent,
+                  { paddingBottom: Math.max(insets.bottom, 20) + 90 },
+                ]}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                <View style={styles.responsiveContentWrapper}>
+                  {/* Header in One-at-a-Time Mode */}
+                  <View style={styles.examHeaderSection}>
+                    <View style={styles.titleRow}>
+                      <View style={{ flex: 1, marginRight: 12 }}>
+                        <Text style={[styles.examMainTitle, { color: p.ink }]} numberOfLines={1}>
+                          {selectedCategoryFilter || categoryKeyOf(currentQuestion) || 'Examination'}
+                        </Text>
+                        <Text style={[styles.examSubtitle, { color: p.muted }]}>
+                          {`Question ${currentCatIdx + 1} of ${currentCatQuestions.length} · One-at-a-Time Mode`}
+                        </Text>
+                      </View>
+                      <Text style={[styles.answeredRatioText, { color: p.muted }]}>
+                        {`${answered}/${total} answered`}
                       </Text>
-                      <View
-                        style={[
-                          styles.categoryDividerLine,
-                          { backgroundColor: darkMode ? '#2C3044' : '#E2E8F0' },
-                        ]}
-                      />
                     </View>
-                  ) : null}
+                  </View>
 
+                  {/* Quick Question Jump Strip */}
+                  <View style={styles.oneAtATimeStripWrap}>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      {currentCatQuestions.map((q, idx) => {
+                        const done = Boolean(answers[q.id]?.selectedAnswer);
+                        const isCurrent = idx === currentCatIdx;
+                        const isFlagged = Boolean(flags[q.id]);
+                        return (
+                          <Pressable
+                            key={q.id}
+                            style={[
+                              styles.oneAtATimeStripItem,
+                              {
+                                backgroundColor: isCurrent
+                                  ? accentColor
+                                  : isFlagged
+                                  ? (darkMode ? '#451A03' : '#FEF3C7')
+                                  : done
+                                  ? (darkMode ? '#282746' : '#EEF2FF')
+                                  : (darkMode ? '#1E2235' : '#FFFFFF'),
+                                borderColor: isFlagged
+                                  ? (darkMode ? '#F59E0B' : '#D97706')
+                                  : isCurrent
+                                  ? accentColor
+                                  : done
+                                  ? (darkMode ? '#6366F1' : '#818CF8')
+                                  : p.border,
+                              },
+                            ]}
+                            onPress={() => {
+                              const targetGlobalIdx = questions.findIndex((item) => item.id === q.id);
+                              if (targetGlobalIdx >= 0) setActiveIndex(targetGlobalIdx);
+                            }}
+                          >
+                            <Text
+                              style={[
+                                styles.oneAtATimeStripText,
+                                {
+                                  color: isCurrent
+                                    ? '#FFFFFF'
+                                    : isFlagged
+                                    ? (darkMode ? '#FBBF24' : '#B45309')
+                                    : done
+                                    ? (darkMode ? '#A5B4FC' : '#4338CA')
+                                    : p.ink,
+                                },
+                              ]}
+                            >
+                              {idx + 1}
+                            </Text>
+                            {isFlagged ? <View style={styles.cellFlagDot} /> : null}
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+
+                  {/* The Single QuestionCard */}
                   <QuestionCard
-                    question={question}
-                    questionIndex={index}
+                    question={currentQuestion}
+                    questionIndex={currentGlobalIdx >= 0 ? currentGlobalIdx : safeIndex}
                     totalQuestions={total}
-                    selectedAnswer={answers[question.id]?.selectedAnswer ?? null}
+                    selectedAnswer={answers[currentQuestion.id]?.selectedAnswer ?? null}
+                    isFlagged={Boolean(flags[currentQuestion.id])}
+                    onToggleFlag={() => toggleFlag(currentQuestion.id)}
                     secure
                     appearance={appearance}
-                    readerMode
-                    onSelect={(choice: ChoiceKey) => {
-                      if (paused) return;
-                      selectAnswer(question.id, choice);
-                      setActiveIndex(index);
-                      if (verifiedStudent?.id) {
-                        void LobbyRepository.touchActivity(verifiedStudent.id);
-                      }
-                    }}
+                    onSelect={(choice: ChoiceKey) =>
+                      handleSelectChoice(currentQuestion.id, choice, currentGlobalIdx >= 0 ? currentGlobalIdx : safeIndex)
+                    }
                   />
+
+                  {/* Previous / Next Navigation Row */}
+                  <View style={styles.oneAtATimeNavRow}>
+                    <Pressable
+                      style={[
+                        styles.oneAtATimeNavBtn,
+                        styles.oneAtATimePrevBtn,
+                        currentCatIdx === 0 && styles.disabled,
+                        {
+                          borderColor: darkMode ? '#33384F' : '#CBD5E1',
+                          backgroundColor: darkMode ? '#1E2235' : '#FFFFFF',
+                        },
+                      ]}
+                      disabled={currentCatIdx === 0}
+                      onPress={() => {
+                        if (currentCatIdx > 0) {
+                          const prevQ = currentCatQuestions[currentCatIdx - 1];
+                          const prevGlobal = questions.findIndex((q) => q.id === prevQ?.id);
+                          if (prevGlobal >= 0) setActiveIndex(prevGlobal);
+                        }
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Previous Question"
+                    >
+                      <ChevronLeft size={18} color={currentCatIdx === 0 ? p.muted : p.ink} />
+                      <Text style={[styles.oneAtATimeBtnText, { color: currentCatIdx === 0 ? p.muted : p.ink }]}>
+                        Previous
+                      </Text>
+                    </Pressable>
+
+                    <View style={styles.oneAtATimeCounterWrap}>
+                      <Text style={[styles.oneAtATimeCounterText, { color: p.muted }]}>
+                        {`${currentCatIdx + 1} / ${currentCatQuestions.length}`}
+                      </Text>
+                    </View>
+
+                    <Pressable
+                      style={[
+                        styles.oneAtATimeNavBtn,
+                        styles.oneAtATimeNextBtn,
+                        { backgroundColor: accentColor },
+                      ]}
+                      onPress={() => {
+                        if (currentCatIdx < currentCatQuestions.length - 1) {
+                          const nextQ = currentCatQuestions[currentCatIdx + 1];
+                          const nextGlobal = questions.findIndex((q) => q.id === nextQ?.id);
+                          if (nextGlobal >= 0) setActiveIndex(nextGlobal);
+                        } else {
+                          requestSubmit();
+                        }
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={currentCatIdx < currentCatQuestions.length - 1 ? 'Next Question' : 'Finish & Submit'}
+                    >
+                      <Text style={styles.oneAtATimeNextBtnText}>
+                        {currentCatIdx < currentCatQuestions.length - 1 ? 'Next' : 'Submit'}
+                      </Text>
+                      {currentCatIdx < currentCatQuestions.length - 1 ? (
+                        <ChevronRight size={18} color="#FFFFFF" />
+                      ) : (
+                        <Send size={15} color="#FFFFFF" />
+                      )}
+                    </Pressable>
+                  </View>
                 </View>
-              );
-            })}
-          </View>
-        </ScrollView>
+              </ScrollView>
+            );
+          })()
+        )}
       </View>
 
       {/* Fixed Bottom Bar: Left Progress track, Right Submit Exam Pill */}
@@ -829,50 +1120,45 @@ export default function ExamScreen() {
           },
         ]}
       >
-        <View style={styles.bottomBarInner}>
-          {/* Left side: Progress */}
-          <View style={styles.bottomProgressCol}>
-            <Text style={[styles.progressLabel, { color: p.muted }]}>Progress</Text>
-            <View
-              style={[
-                styles.progressBarTrack,
-                { backgroundColor: darkMode ? '#282C40' : '#E2E8F0' },
-              ]}
-            >
+          <View style={styles.bottomBarInner}>
+            {/* Left side: Progress */}
+            <View style={styles.bottomProgressCol}>
+              <Text style={[styles.progressLabel, { color: p.muted }]}>Progress</Text>
               <View
                 style={[
-                  styles.progressBarFill,
-                  { width: `${progressPct}%`, backgroundColor: accentColor },
+                  styles.progressBarTrack,
+                  { backgroundColor: darkMode ? '#282C40' : '#E2E8F0' },
                 ]}
-              />
+              >
+                <View
+                  style={[
+                    styles.progressBarFill,
+                    { width: `${progressPct}%`, backgroundColor: accentColor },
+                  ]}
+                />
+              </View>
             </View>
+
+            {/* Right side: Submit Exam */}
+            <Pressable
+              style={[
+                styles.submitExamBottomBtn,
+                { backgroundColor: accentColor },
+                paused && styles.disabled,
+              ]}
+              onPress={requestSubmit}
+              disabled={paused}
+              accessibilityLabel="Submit Examination"
+            >
+              <Send size={16} color="#FFFFFF" />
+              <Text style={styles.submitExamBottomBtnText}>Submit Exam</Text>
+            </Pressable>
           </View>
-
-          {/* Right side: Submit Exam */}
-          <Pressable
-            style={[
-              styles.submitExamBottomBtn,
-              { backgroundColor: accentColor },
-              paused && styles.disabled,
-            ]}
-            onPress={requestSubmit}
-            disabled={paused}
-            accessibilityLabel="Submit Examination"
-          >
-            <Send size={16} color="#FFFFFF" />
-            <Text style={styles.submitExamBottomBtnText}>Submit Exam</Text>
-          </Pressable>
         </View>
-      </View>
 
-      {/* Category Selection Modal */}
-      <Modal
-        visible={pickerOpen}
-        animationType="slide"
-        presentationStyle="fullScreen"
-        onRequestClose={() => setPickerOpen(false)}
-      >
-        <View style={[styles.pickerScreen, { paddingTop: Math.max(insets.top, 10), backgroundColor: p.card }]}>
+      {/* Category Selection In-Page View (Instant, 0ms lag) */}
+      {pickerOpen ? (
+        <View style={[StyleSheet.absoluteFillObject, { zIndex: 99998, paddingTop: Math.max(insets.top, 10), backgroundColor: p.card }]}>
           <View style={styles.pickerHeader}>
             <Pressable style={styles.squareBackBtn} onPress={() => setPickerOpen(false)}>
               <ArrowLeft size={20} color={p.ink} />
@@ -889,6 +1175,22 @@ export default function ExamScreen() {
           </View>
 
           <ScrollView contentContainerStyle={styles.pickerList} showsVerticalScrollIndicator={false}>
+            {/* Legend for question statuses */}
+            <View style={styles.gridLegendRow}>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: accentColor }]} />
+                <Text style={[styles.legendText, { color: p.muted }]}>Answered</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: p.border }]} />
+                <Text style={[styles.legendText, { color: p.muted }]}>Unanswered</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: '#F59E0B' }]} />
+                <Text style={[styles.legendText, { color: p.muted }]}>Not Sure</Text>
+              </View>
+            </View>
+
             {categories.map((category: CategoryProgress) => {
               const items = questionsByCategory.get(category.key) ?? [];
               const isSelected = selectedCategoryFilter === category.key;
@@ -905,7 +1207,12 @@ export default function ExamScreen() {
                       setSelectedCategoryFilter(category.key);
                       setPickerOpen(false);
                       const firstItem = items[0];
-                      if (firstItem) scrollToIndex(firstItem.index);
+                      if (firstItem) {
+                        setActiveIndex(firstItem.index);
+                        if (navMode === 'scroll') {
+                          scrollToIndex(firstItem.index);
+                        }
+                      }
                     }}
                   >
                     <Text style={[styles.categoryRowTitle, { color: p.ink }]}>{category.label}</Text>
@@ -918,33 +1225,52 @@ export default function ExamScreen() {
                     {items.map(({ question, index }, localIdx) => {
                       const done = Boolean(answers[question.id]?.selectedAnswer);
                       const isCurrent = index === safeIndex;
+                      const isFlagged = Boolean(flags[question.id]);
                       return (
                         <Pressable
                           key={question.id}
                           onPress={() => {
                             setPickerOpen(false);
-                            requestAnimationFrame(() => scrollToIndex(index));
+                            setActiveIndex(index);
+                            if (navMode === 'scroll') {
+                              requestAnimationFrame(() => scrollToIndex(index));
+                            }
                           }}
                           style={[
                             styles.chapterCell,
                             {
                               backgroundColor: isCurrent
                                 ? accentColor
+                                : isFlagged
+                                ? (darkMode ? '#451A03' : '#FEF3C7')
                                 : done
                                 ? p.pill
                                 : p.card,
-                              borderColor: done ? accentColor : p.border,
+                              borderColor: isFlagged
+                                ? (darkMode ? '#F59E0B' : '#D97706')
+                                : done
+                                ? accentColor
+                                : p.border,
                             },
                           ]}
                         >
                           <Text
                             style={[
                               styles.chapterText,
-                              { color: isCurrent ? '#FFFFFF' : done ? accentColor : p.ink },
+                              {
+                                color: isCurrent
+                                  ? '#FFFFFF'
+                                  : isFlagged
+                                  ? (darkMode ? '#FBBF24' : '#B45309')
+                                  : done
+                                  ? accentColor
+                                  : p.ink,
+                              },
                             ]}
                           >
                             {localIdx + 1}
                           </Text>
+                          {isFlagged ? <View style={styles.cellFlagDot} /> : null}
                         </Pressable>
                       );
                     })}
@@ -954,19 +1280,14 @@ export default function ExamScreen() {
             })}
           </ScrollView>
         </View>
-      </Modal>
+      ) : null}
 
-      {/* Font Size Display Settings Modal */}
-      <Modal
-        visible={fontModalOpen}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setFontModalOpen(false)}
-      >
+      {/* Font Size & Display Settings Modal */}
+      {fontModalOpen ? (
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: p.card, borderColor: p.border, borderWidth: 1 }]}>
             <View style={styles.modalSheetHeader}>
-              <Text style={[styles.modalTitleText, { color: p.ink }]}>Font Adjustment</Text>
+              <Text style={[styles.modalTitleText, { color: p.ink }]}>Display &amp; Navigation</Text>
               <Pressable
                 style={styles.modalCloseBtn}
                 onPress={() => setFontModalOpen(false)}
@@ -975,8 +1296,73 @@ export default function ExamScreen() {
                 <X size={18} color={p.muted} />
               </Pressable>
             </View>
+
+            {/* Navigation Mode Choice */}
             <Text style={[styles.modalBodyText, { color: p.muted }]}>
-              Adjust the question and answer choices text size app-wide:
+              Question display style:
+            </Text>
+            <View style={styles.navModeModalRow}>
+              <Pressable
+                style={[
+                  styles.navModeOptionCard,
+                  {
+                    backgroundColor: navMode === 'scroll'
+                      ? (darkMode ? examUi.accentSoftDark : examUi.accentSoftLight)
+                      : p.pill,
+                    borderColor: navMode === 'scroll' ? accentColor : p.border,
+                  },
+                ]}
+                onPress={() => {
+                  setNavMode('scroll');
+                  void appStorage.setItem('tcc.settings.exam.nav_mode', 'scroll');
+                }}
+              >
+                <ListFilter size={18} color={navMode === 'scroll' ? accentColor : p.muted} />
+                <Text
+                  style={[
+                    styles.navModeOptionTitle,
+                    { color: navMode === 'scroll' ? accentColor : p.ink },
+                  ]}
+                >
+                  Scroll Mode
+                </Text>
+                <Text style={[styles.navModeOptionDesc, { color: p.muted }]}>
+                  All questions in current category
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.navModeOptionCard,
+                  {
+                    backgroundColor: navMode === 'one_at_a_time'
+                      ? (darkMode ? examUi.accentSoftDark : examUi.accentSoftLight)
+                      : p.pill,
+                    borderColor: navMode === 'one_at_a_time' ? accentColor : p.border,
+                  },
+                ]}
+                onPress={() => {
+                  setNavMode('one_at_a_time');
+                  void appStorage.setItem('tcc.settings.exam.nav_mode', 'one_at_a_time');
+                }}
+              >
+                <Layers size={18} color={navMode === 'one_at_a_time' ? accentColor : p.muted} />
+                <Text
+                  style={[
+                    styles.navModeOptionTitle,
+                    { color: navMode === 'one_at_a_time' ? accentColor : p.ink },
+                  ]}
+                >
+                  One-at-a-Time
+                </Text>
+                <Text style={[styles.navModeOptionDesc, { color: p.muted }]}>
+                  Next / Previous buttons
+                </Text>
+              </Pressable>
+            </View>
+
+            <Text style={[styles.modalBodyText, { color: p.muted, marginTop: 8 }]}>
+              Adjust text size app-wide:
             </Text>
 
             <View style={styles.fontOptionGrid}>
@@ -1027,15 +1413,10 @@ export default function ExamScreen() {
             </Pressable>
           </View>
         </View>
-      </Modal>
+      ) : null}
 
       {/* Unanswered Warning Modal — allows "Submit Anyway" OR "Review Questions" */}
-      <Modal
-        visible={incompleteOpen}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setIncompleteOpen(false)}
-      >
+      {incompleteOpen ? (
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { backgroundColor: p.card, borderColor: p.border, borderWidth: 1 }]}>
             <Text style={[styles.modalTitleText, { color: p.ink }]}>
@@ -1044,12 +1425,13 @@ export default function ExamScreen() {
             <Text style={[styles.modalBodyText, { color: p.muted }]}>
               {`Questions: ${missingLabel || unansweredCount()}\n\nUnanswered items will be scored as 0. You can submit now or go back to answer them.`}
             </Text>
-            {/* Primary: submit anyway */}
+            {/* Primary: submit anyway -> opens type-to-confirm modal */}
             <Pressable
               style={[styles.primaryModalBtn, { backgroundColor: examUi.timerDanger.dark }]}
               onPress={() => {
                 setIncompleteOpen(false);
-                goSubmit('submitted');
+                setSubmitConfirmText('');
+                setConfirmOpen(true);
               }}
             >
               <Text style={styles.primaryModalBtnText}>Submit Anyway</Text>
@@ -1063,39 +1445,161 @@ export default function ExamScreen() {
             </Pressable>
           </View>
         </View>
-      </Modal>
+      ) : null}
 
-      {/* Final Submit Confirmation Modal */}
-      <ConfirmationModal
-        visible={confirmOpen}
-        title="Submit Examination?"
-        description="Are you sure you want to submit your examination? Once submitted, you cannot change your answers."
-        confirmLabel="Submit Exam"
-        cancelLabel="Keep answering"
-        onCancel={() => setConfirmOpen(false)}
-        onConfirm={() => {
-          setConfirmOpen(false);
-          goSubmit('submitted');
-        }}
-      />
+      {/* Final Submit Confirmation Modal with Type-to-Confirm ("exam submit") */}
+      {confirmOpen ? (
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { backgroundColor: p.card, borderColor: p.border, borderWidth: 1 }]}>
+            <Text style={[styles.modalTitleText, { color: p.ink }]}>Confirm Exam Submission</Text>
+            <Text style={[styles.modalBodyText, { color: p.muted }]}>
+              {unansweredCount() > 0
+                ? `You have ${unansweredCount()} unanswered question(s). Unanswered questions will receive 0 points.\n\n`
+                : ''}
+              To confirm submission and lock in your answers, please type the phrase below:
+            </Text>
 
-      {/* Security Overlay */}
-      <ExamSecurityOverlay
-        visible={warningVisible && !wifiLocked}
-        violationCount={violationCount}
-        maxViolations={maxViolations}
-        message={warningMessage}
-        onContinue={acknowledgeWarning}
-        onSubmit={requestSubmitFromWarning}
-      />
+            <View
+              style={[
+                styles.phraseBadge,
+                {
+                  backgroundColor: darkMode ? '#2E2856' : '#EEF2FF',
+                  borderColor: darkMode ? '#818CF8' : '#6366F1',
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.phraseBadgeText,
+                  { color: darkMode ? '#C7D2FE' : '#4338CA' },
+                ]}
+              >
+                exam submit
+              </Text>
+            </View>
+
+            <TextInput
+              style={[
+                styles.confirmTextInput,
+                {
+                  backgroundColor: p.pill,
+                  borderColor: submitConfirmText.trim().toLowerCase() === 'exam submit'
+                    ? (darkMode ? '#4ADE80' : '#16A34A')
+                    : p.border,
+                  color: p.ink,
+                },
+              ]}
+              placeholder='Type "exam submit" here'
+              placeholderTextColor={p.muted}
+              value={submitConfirmText}
+              onChangeText={setSubmitConfirmText}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus={true}
+            />
+
+            <Pressable
+              style={[
+                styles.primaryModalBtn,
+                {
+                  backgroundColor:
+                    submitConfirmText.trim().toLowerCase() === 'exam submit'
+                      ? accentColor
+                      : darkMode
+                      ? '#282D42'
+                      : '#CBD5E1',
+                  opacity: submitConfirmText.trim().toLowerCase() === 'exam submit' ? 1 : 0.65,
+                },
+              ]}
+              disabled={submitConfirmText.trim().toLowerCase() !== 'exam submit'}
+              onPress={() => {
+                if (submitConfirmText.trim().toLowerCase() !== 'exam submit') return;
+                setConfirmOpen(false);
+                setSubmitConfirmText('');
+                goSubmit('submitted');
+              }}
+            >
+              <Text
+                style={[
+                  styles.primaryModalBtnText,
+                  {
+                    color:
+                      submitConfirmText.trim().toLowerCase() === 'exam submit'
+                        ? '#FFFFFF'
+                        : p.muted,
+                  },
+                ]}
+              >
+                Submit Exam
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.secondaryModalBtn, { borderColor: p.border }]}
+              onPress={() => {
+                setConfirmOpen(false);
+                setSubmitConfirmText('');
+              }}
+            >
+              <Text style={[styles.secondaryModalBtnText, { color: p.ink }]}>Keep answering</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {/* Time Expired Modal */}
+      {timeExpiredModalOpen ? (
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { backgroundColor: p.card, borderColor: p.border, borderWidth: 1, alignItems: 'center' }]}>
+            <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#FEE2E2', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+              <Clock size={36} color="#DC2626" strokeWidth={2.2} />
+            </View>
+            <Text style={[styles.modalTitleText, { color: p.ink, fontSize: 20, textAlign: 'center' }]}>
+              Time&apos;s Up!
+            </Text>
+            <Text style={[styles.modalBodyText, { color: p.muted, textAlign: 'center' }]}>
+              The examination time has expired. Your answers have been recorded and your exam is submitting now...
+            </Text>
+            <Pressable
+              style={[styles.primaryModalBtn, { backgroundColor: accentColor, width: '100%', marginTop: 8 }]}
+              onPress={() => goSubmit('time_expired')}
+            >
+              <Text style={styles.primaryModalBtnText}>Submit Now</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {/* Proctor Ended Examination Modal */}
+      {proctorEndedModalOpen ? (
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { backgroundColor: p.card, borderColor: p.border, borderWidth: 1, alignItems: 'center' }]}>
+            <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#E0E7FF', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+              <ShieldAlert size={36} color="#4F46E5" strokeWidth={2.2} />
+            </View>
+            <Text style={[styles.modalTitleText, { color: p.ink, fontSize: 20, textAlign: 'center' }]}>
+              The Proctor Has Ended the Exam
+            </Text>
+            <Text style={[styles.modalBodyText, { color: p.muted, textAlign: 'center' }]}>
+              The examination session was concluded by the proctor. Your progress has been saved. Please wait for official updates and results.
+            </Text>
+            <Pressable
+              style={[styles.primaryModalBtn, { backgroundColor: accentColor, width: '100%', marginTop: 8 }]}
+              onPress={() => void leaveEndedExam()}
+            >
+              <Text style={styles.primaryModalBtnText}>Return Home</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       {/* WiFi Disconnect Overlay */}
       <ExamWifiDisconnectOverlay
-        visible={wifiLocked || roomEnded}
+        visible={wifiLocked && !roomEnded}
         requiresPin={requiresPin}
         loading={reconnectLoading}
         error={reconnectError}
-        examinationEnded={roomEnded}
+        examinationEnded={false}
         wrongNetwork={disconnectReason === 'wrong_network'}
         proctorNetworkChanged={disconnectReason === 'proctor_network_change'}
         graceSecondsRemaining={graceSecondsRemaining ?? undefined}
@@ -1178,54 +1682,19 @@ const styles = StyleSheet.create({
   topRowTwo: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     marginTop: 2,
   },
-  violationsPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  violationsText: {
-    fontSize: 12,
-    fontFamily: examProcess.fontSemiBold,
-    letterSpacing: 0.2,
-  },
   timerMonospaceText: {
-    fontSize: 24,
+    fontSize: 48,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     fontVariant: ['tabular-nums'],
-    fontWeight: '700',
-    letterSpacing: 0.5,
+    fontWeight: '800',
+    letterSpacing: 1,
+    textAlign: 'center',
   },
-  violationToast: {
-    marginTop: 6,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-  },
-  violationToastText: {
-    flex: 1,
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontFamily: examProcess.fontMedium,
-  },
-  kioskBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  kioskBannerText: {
-    flex: 1,
-    fontSize: 11,
-    fontFamily: examProcess.fontMedium,
+  topBarDivider: {
+    height: 1,
   },
   mainCardSheet: {
     flex: 1,
@@ -1244,6 +1713,7 @@ const styles = StyleSheet.create({
   },
   examHeaderSection: {
     marginBottom: 16,
+    paddingTop: 4,
   },
   subjectSubtitle: {
     fontSize: 13,
@@ -1252,18 +1722,25 @@ const styles = StyleSheet.create({
   },
   titleRow: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
   },
   examMainTitle: {
-    fontSize: 24,
+    fontSize: 28,
     fontFamily: examProcess.fontSemiBold,
+    fontWeight: '800',
     letterSpacing: -0.3,
+    lineHeight: 34,
+  },
+  examSubtitle: {
+    fontSize: 14,
+    fontFamily: examProcess.fontMedium,
+    marginTop: 2,
   },
   answeredRatioText: {
     fontSize: 13,
     fontFamily: examProcess.fontMedium,
-    marginBottom: 2,
+    marginTop: 4,
   },
   questionBlock: {
     marginBottom: 20,
@@ -1402,9 +1879,11 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0, 0, 0, 0.65)',
     justifyContent: 'center',
     padding: 24,
+    zIndex: 99999,
   },
   modalSheet: {
     borderRadius: 20,
@@ -1473,4 +1952,261 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontFamily: examProcess.fontMedium,
   },
+  iosPrivacyBlackoutShield: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000000',
+    zIndex: 999999,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 28,
+    gap: 16,
+  },
+  iosPrivacyShieldTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontFamily: examProcess.fontSemiBold,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+  },
+  iosPrivacyShieldSubtitle: {
+    color: '#E2E8F0',
+    fontSize: 15,
+    fontFamily: examProcess.fontMedium,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  iosPrivacyShieldInstruction: {
+    color: '#94A3B8',
+    fontSize: 13,
+    fontFamily: examProcess.fontSemiBold,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  pinRequiredBlockingShield: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(10, 12, 20, 0.94)',
+    zIndex: 999998,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  pinRequiredCard: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#1E2235',
+    borderRadius: 24,
+    padding: 24,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 10,
+    borderWidth: 1,
+    borderColor: '#2F3550',
+  },
+  pinRequiredIconWrap: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#282746',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+    borderWidth: 1.5,
+    borderColor: '#7C6CF6',
+  },
+  pinRequiredTitle: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontFamily: examProcess.fontSemiBold,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  pinRequiredSubtitle: {
+    color: '#E2E8F0',
+    fontSize: 15,
+    fontFamily: examProcess.fontMedium,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 10,
+  },
+  pinRequiredInstruction: {
+    color: '#F87171',
+    fontSize: 13,
+    fontFamily: examProcess.fontSemiBold,
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 20,
+  },
+  pinRequiredBtn: {
+    backgroundColor: '#7C6CF6',
+    width: '100%',
+    height: 50,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pinRequiredBtnText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontFamily: examProcess.fontSemiBold,
+    fontWeight: '700',
+  },
+  navModeToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1.5,
+  },
+  navModeToggleText: {
+    fontSize: 12,
+    fontFamily: examProcess.fontMedium,
+  },
+  navModeModalRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginVertical: 4,
+  },
+  navModeOptionCard: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    gap: 6,
+  },
+  navModeOptionTitle: {
+    fontSize: 14,
+    fontFamily: examProcess.fontSemiBold,
+  },
+  navModeOptionDesc: {
+    fontSize: 11,
+    fontFamily: examProcess.fontRegular,
+    textAlign: 'center',
+  },
+  phraseBadge: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    alignSelf: 'center',
+    marginVertical: 6,
+  },
+  phraseBadgeText: {
+    fontSize: 15,
+    fontFamily: examProcess.fontSemiBold,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  confirmTextInput: {
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    fontFamily: examProcess.fontMedium,
+    marginVertical: 4,
+  },
+  cellFlagDot: {
+    position: 'absolute',
+    top: 3,
+    right: 3,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#F59E0B',
+  },
+  gridLegendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 18,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(150, 150, 150, 0.15)',
+    marginBottom: 8,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendText: {
+    fontSize: 12,
+    fontFamily: examProcess.fontMedium,
+  },
+  oneAtATimeNavRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 18,
+    marginBottom: 10,
+  },
+  oneAtATimeNavBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    gap: 6,
+    minHeight: 48,
+    flex: 1,
+  },
+  oneAtATimePrevBtn: {
+    borderWidth: 1.5,
+  },
+  oneAtATimeNextBtn: {
+    elevation: 2,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+  },
+  oneAtATimeBtnText: {
+    fontSize: 14,
+    fontFamily: examProcess.fontSemiBold,
+  },
+  oneAtATimeNextBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontFamily: examProcess.fontSemiBold,
+  },
+  oneAtATimeCounterWrap: {
+    paddingHorizontal: 6,
+  },
+  oneAtATimeCounterText: {
+    fontSize: 13,
+    fontFamily: examProcess.fontSemiBold,
+  },
+  oneAtATimeStripWrap: {
+    marginVertical: 12,
+  },
+  oneAtATimeStripItem: {
+    width: 42,
+    height: 42,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    marginRight: 8,
+    position: 'relative',
+  },
+  oneAtATimeStripText: {
+    fontSize: 14,
+    fontFamily: examProcess.fontSemiBold,
+  },
 });
+

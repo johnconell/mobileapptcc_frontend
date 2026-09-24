@@ -1,25 +1,54 @@
 export { examProcess, EXAM_PROCESS_STEPS } from './examProcess';
 export type { ExamProcessStepIndex } from './examProcess';
 
-/** TCC brand: cream canvas + maroon (not bright red). */
-export const colors = {
-  primary: '#7A1F2B',
-  primaryDark: '#5C1620',
-  secondary: '#C4A35A',
-  background: '#FAF7F2',
-  surface: '#FFFDF8',
-  surfaceMuted: '#F5EFE6',
-  ink: '#2C241C',
-  inkSecondary: '#7A6E62',
-  inkMuted: '#9A8E82',
-  border: '#E8DFD3',
-  success: '#1B6B3A',
-  warning: '#B45309',
-  danger: '#9B1C1C',
-  info: '#3B6EA5',
-  white: '#FFFFFF',
-  overlay: 'rgba(44, 36, 28, 0.45)',
+export const designTokens = {
+  light: {
+    primary: '#7A1F2B',
+    primaryDark: '#5C1620',
+    primarySoft: '#F5E8EA',
+    secondary: '#D8901F',
+    secondarySoft: '#F5E4C3',
+    background: '#FAF7F2',
+    surface: '#FFFDF8',
+    surfaceMuted: '#F5EFE6',
+    ink: '#2C241C',
+    inkSecondary: '#7A6E62',
+    inkMuted: '#9A8E82',
+    border: '#E8DFD3',
+    success: '#1B6B3A',
+    warning: '#B45309',
+    danger: '#9B1C1C',
+    info: '#3B6EA5',
+    white: '#FFFFFF',
+    overlay: 'rgba(44, 36, 28, 0.45)',
+    heroGradient: 'radial-gradient(ellipse 60% 45% at 50% 25%, rgba(216, 144, 31, 0.18) 0%, rgba(123, 16, 32, 0.08) 40%, rgba(253, 242, 248, 0.15) 65%, transparent 80%)',
+  },
+  dark: {
+    primary: '#A63A4A',
+    primaryDark: '#C05D68',
+    primarySoft: 'rgba(166, 58, 74, 0.14)',
+    secondary: '#D3902A',
+    secondarySoft: 'rgba(211, 144, 42, 0.2)',
+    background: '#14110F',
+    surface: '#1E1A17',
+    surfaceMuted: '#25201C',
+    ink: '#FAF7F2',
+    inkSecondary: '#C9BDB0',
+    inkMuted: '#9A8E82',
+    border: '#322C27',
+    success: '#3D9B5F',
+    warning: '#D97706',
+    danger: '#C45A5A',
+    info: '#7EA9D8',
+    white: '#FFFFFF',
+    overlay: 'rgba(14, 10, 9, 0.66)',
+    heroGradient: 'radial-gradient(ellipse 60% 45% at 50% 25%, rgba(211, 144, 42, 0.22) 0%, rgba(166, 58, 74, 0.14) 38%, rgba(20, 17, 15, 0.1) 65%, transparent 80%)',
+  },
 } as const;
+
+/** TCC brand: cream canvas + maroon (not bright red). */
+export const colors = designTokens.light;
+export const darkColors = designTokens.dark;
 
 export const spacing = {
   xs: 4,

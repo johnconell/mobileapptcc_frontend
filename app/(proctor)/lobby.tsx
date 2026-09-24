@@ -1229,11 +1229,11 @@ export default function ProctorLobbyScreen() {
                 delay={40}
               />
               <StatisticCard
-                label="Disconnected / Alerts"
-                value={`${lobby.disconnectedCount ?? 0}${lobby.violationsDetected ? ` (${lobby.violationsDetected}!)` : ''}`}
-                hint={lobby.violationsDetected ? `${lobby.violationsDetected} security flags` : 'Network integrity'}
-                tone={(lobby.disconnectedCount ?? 0) > 0 || lobby.violationsDetected > 0 ? 'warning' : 'info'}
-                icon={<ShieldAlert size={18} color={lobby.violationsDetected > 0 ? themeColors.danger : themeColors.warning} />}
+                label="Disconnected"
+                value={`${lobby.disconnectedCount ?? 0}`}
+                hint="Network integrity"
+                tone={(lobby.disconnectedCount ?? 0) > 0 ? 'warning' : 'info'}
+                icon={<ShieldAlert size={18} color={(lobby.disconnectedCount ?? 0) > 0 ? themeColors.warning : themeColors.textMuted} />}
                 compact
                 delay={60}
               />
@@ -1245,27 +1245,6 @@ export default function ProctorLobbyScreen() {
               {lobby.connectedCount} joined of {lobby.registeredCount} registered. Tap a student
               for details. Disconnected students show a 6-digit reconnect PIN (not the exam code).
             </Text>
-
-            {(lobby.recentViolations?.length ?? 0) > 0 ? (
-              <Card>
-                <Text style={[styles.historyTitle, { color: themeColors.textPrimary }]}>Security violations</Text>
-                {(lobby.recentViolations ?? []).slice(0, 8).map((v) => (
-                  <View key={String(v.id)} style={[styles.historyRow, { borderBottomColor: themeColors.cardBorder }]}>
-                    <Text style={[styles.historyKind, styles.historyDisconnect]}>
-                      {String(v.type).replace(/_/g, ' ')}
-                    </Text>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.historyBody, { color: themeColors.textPrimary }]}>
-                        {v.studentName}: {v.message || v.type}
-                      </Text>
-                      <Text style={[styles.historyTime, { color: themeColors.textMuted }]}>
-                        {formatTime(v.occurredAt)} · warning #{v.violationCount}
-                      </Text>
-                    </View>
-                  </View>
-                ))}
-              </Card>
-            ) : null}
 
             <Button
               title={
@@ -1564,7 +1543,6 @@ export default function ProctorLobbyScreen() {
                         : selected.status.replace('_', ' ')
                 }
               />
-              <DetailRow label="Number of Violations" value={String(selected.violationCount)} />
               <DetailRow label="Time Connected" value={formatTime(selected.joinedAt)} />
               <DetailRow label="Time Started" value={formatTime(selected.startedAt)} />
               <DetailRow label="Last Activity" value={formatTime(selected.lastActivityAt)} />

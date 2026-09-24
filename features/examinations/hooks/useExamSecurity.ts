@@ -3,9 +3,6 @@ import { DeviceEventEmitter } from 'react-native';
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
 import { useAppState } from '@/shared/hooks/useAppState';
 import { useKioskMode } from '@/features/examinations/hooks/useKioskMode';
-import { useViolationMonitor } from '@/features/monitoring/hooks/useViolationMonitor';
-import { resolveTabSwitchGraceSeconds } from '@/shared/utils/gracePeriod';
-import { DEFAULT_TAB_SWITCH_GRACE_SECONDS } from '@/shared/constants';
 import type { ExamSecurityCapabilities, SecurityViolationType } from '@/shared/types';
 
 interface UseExamSecurityOptions {
@@ -18,19 +15,15 @@ interface UseExamSecurityOptions {
   onRequestSubmit?: () => void;
 }
 
-const LEAVE_MESSAGE = 'Leaving the examination is prohibited.';
+const LEAVE_MESSAGE = 'Screen Pinning is active. Leaving the examination is prohibited.';
 
 /**
- * Orchestrates Secure Examination / Kiosk Mode + violation monitoring.
- * Screens must only use this hook — never call Expo security APIs directly.
+ * Orchestrates Secure Examination / Kiosk Mode.
+ * Mandatory screen pinning enforces kiosk containment; violation tracking is disabled.
  */
 export function useExamSecurity(options: UseExamSecurityOptions) {
   const {
     enabled,
-    sessionId,
-    studentId,
-    studentName,
-    onMaxViolations,
     onRequestSubmit,
   } = options;
 
@@ -42,127 +35,42 @@ export function useExamSecurity(options: UseExamSecurityOptions) {
   const suppressUntilRef = useRef(0);
   const pausedRef = useRef(false);
 
-  const tabSwitchGraceSecondsRef = useRef<number>(DEFAULT_TAB_SWITCH_GRACE_SECONDS);
-  const pendingGraceTypeRef = useRef<SecurityViolationType | null>(null);
-  const leaveTimestampRef = useRef<number>(0);
-  const graceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   useEffect(() => {
     pausedRef.current = paused;
   }, [paused]);
 
-  const {
-    violationCount,
-    maxViolations,
-    latestViolation,
-    recordViolation,
-    setViolationCount,
-  } = useViolationMonitor({
-    sessionId,
-    studentId,
-    studentName,
-    enabled,
-    onTerminated: () => {
-      setPaused(true);
-      setWarningVisible(false);
-      onMaxViolations?.();
-    },
-    onViolation: ({ violation }) => {
+  const handleSecurityEvent = useCallback(
+    (_type: SecurityViolationType) => {
+      if (!enabled || !armedRef.current) return;
+      if (Date.now() < suppressUntilRef.current) return;
+      if (pausedRef.current) return;
+
+      // Show reminder warning to remain in the exam screen
       setPaused(true);
       setWarningVisible(true);
       setWarningMessage(
-        violation.type === 'app_background' ||
-          violation.type === 'app_inactive' ||
-          violation.type === 'leave_attempt'
-          ? LEAVE_MESSAGE
-          : violation.message || LEAVE_MESSAGE,
+        'Warning: You navigated away from the examination. Screen pinning is required to continue. Please remain on this screen.'
       );
     },
-  });
-
-  const handleSecurityEvent = useCallback(
-    async (type: SecurityViolationType) => {
-      if (!enabled || !armedRef.current) return;
-      if (Date.now() < suppressUntilRef.current) return;
-      // While warning is showing, ignore duplicate leave events (except screenshots).
-      if (pausedRef.current && type !== 'screenshot') return;
-
-      // Screenshots are immediate violations without grace period
-      if (type === 'screenshot') {
-        await recordViolation(type);
-        return;
-      }
-
-      const graceSeconds = tabSwitchGraceSecondsRef.current;
-      if (graceSeconds <= 0) {
-        // Immediate violation if grace period is set to 0
-        await recordViolation(type);
-        return;
-      }
-
-      // Begin grace period tracking if not already pending
-      if (!pendingGraceTypeRef.current) {
-        pendingGraceTypeRef.current = type;
-        leaveTimestampRef.current = Date.now();
-
-        if (graceTimeoutRef.current) {
-          clearTimeout(graceTimeoutRef.current);
-        }
-
-        graceTimeoutRef.current = setTimeout(async () => {
-          if (pendingGraceTypeRef.current) {
-            const pendingType = pendingGraceTypeRef.current;
-            pendingGraceTypeRef.current = null;
-            leaveTimestampRef.current = 0;
-            await recordViolation(pendingType);
-          }
-        }, graceSeconds * 1000);
-      }
-    },
-    [enabled, recordViolation],
+    [enabled],
   );
 
-  const handleReturnToExam = useCallback(async () => {
-    if (graceTimeoutRef.current) {
-      clearTimeout(graceTimeoutRef.current);
-      graceTimeoutRef.current = null;
-    }
-
-    const pendingType = pendingGraceTypeRef.current;
-    const leftAt = leaveTimestampRef.current;
-    pendingGraceTypeRef.current = null;
-    leaveTimestampRef.current = 0;
-
-    if (pendingType && leftAt > 0) {
-      const elapsedSeconds = (Date.now() - leftAt) / 1000;
-      const graceSeconds = tabSwitchGraceSecondsRef.current;
-      if (elapsedSeconds >= graceSeconds) {
-        // Grace period expired while away
-        await recordViolation(pendingType);
-      } else {
-        // Returned within grace period: warn without incrementing violation strikes
-        setPaused(true);
-        setWarningVisible(true);
-        setWarningMessage(
-          `Warning: You navigated away from the examination. Please remain on this screen. Leaving or switching tabs for more than ${graceSeconds}s will record an automatic violation strike.`
-        );
-      }
-    } else if (pausedRef.current) {
+  const handleReturnToExam = useCallback(() => {
+    if (pausedRef.current) {
       setWarningVisible(true);
     }
-  }, [recordViolation]);
+  }, []);
 
   useKioskMode({
     enabled,
     onBackAttempt: () => {
-      void handleSecurityEvent('leave_attempt');
+      handleSecurityEvent('leave_attempt');
     },
     onScreenshot: () => {
-      void handleSecurityEvent('screenshot');
+      handleSecurityEvent('screenshot');
     },
     onMultiWindow: () => {
-      // Split-screen / freeform — counted as leaving the examination.
-      void handleSecurityEvent('app_inactive');
+      handleSecurityEvent('app_inactive');
     },
   });
 
@@ -171,15 +79,15 @@ export function useExamSecurity(options: UseExamSecurityOptions) {
     onChange: (event) => {
       if (!armedRef.current) return;
       if (event === 'background') {
-        void handleSecurityEvent('app_background');
+        handleSecurityEvent('app_background');
         return;
       }
       if (event === 'inactive') {
-        void handleSecurityEvent('app_inactive');
+        handleSecurityEvent('app_inactive');
         return;
       }
       if (event === 'active') {
-        void handleReturnToExam();
+        handleReturnToExam();
       }
     },
   });
@@ -194,13 +102,9 @@ export function useExamSecurity(options: UseExamSecurityOptions) {
     let cancelled = false;
 
     async function arm() {
-      const [caps, grace] = await Promise.all([
-        ExamSecurityService.getCapabilities(),
-        resolveTabSwitchGraceSeconds().catch(() => DEFAULT_TAB_SWITCH_GRACE_SECONDS),
-      ]);
+      const caps = await ExamSecurityService.getCapabilities();
       if (cancelled) return;
       setCapabilities(caps);
-      tabSwitchGraceSecondsRef.current = grace;
       suppressUntilRef.current = Date.now() + 1500;
       armedRef.current = true;
     }
@@ -211,18 +115,18 @@ export function useExamSecurity(options: UseExamSecurityOptions) {
     let cleanupWeb: (() => void) | undefined;
     if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       const handleBlur = () => {
-        void handleSecurityEvent('app_inactive');
+        handleSecurityEvent('app_inactive');
       };
       const handleFocus = () => {
-        void handleReturnToExam();
+        handleReturnToExam();
       };
       const handleContextMenu = (e: MouseEvent) => {
         e.preventDefault();
-        void handleSecurityEvent('app_inactive');
+        handleSecurityEvent('app_inactive');
       };
       const handleCopy = (e: ClipboardEvent) => {
         e.preventDefault();
-        void handleSecurityEvent('app_inactive');
+        handleSecurityEvent('app_inactive');
       };
       window.addEventListener('blur', handleBlur);
       window.addEventListener('focus', handleFocus);
@@ -238,19 +142,15 @@ export function useExamSecurity(options: UseExamSecurityOptions) {
 
     // Native window focus loss & gain (floating screens, chatheads, overlays)
     const focusLostSub = DeviceEventEmitter.addListener('onWindowFocusLost', () => {
-      void handleSecurityEvent('app_blur');
+      handleSecurityEvent('app_blur');
     });
     const focusGainedSub = DeviceEventEmitter.addListener('onWindowFocusGained', () => {
-      void handleReturnToExam();
+      handleReturnToExam();
     });
 
     return () => {
       cancelled = true;
       armedRef.current = false;
-      if (graceTimeoutRef.current) {
-        clearTimeout(graceTimeoutRef.current);
-        graceTimeoutRef.current = null;
-      }
       focusLostSub.remove();
       focusGainedSub.remove();
       cleanupWeb?.();
@@ -258,24 +158,12 @@ export function useExamSecurity(options: UseExamSecurityOptions) {
   }, [enabled, handleReturnToExam, handleSecurityEvent]);
 
   const acknowledgeWarning = useCallback(() => {
-    if (graceTimeoutRef.current) {
-      clearTimeout(graceTimeoutRef.current);
-      graceTimeoutRef.current = null;
-    }
-    pendingGraceTypeRef.current = null;
-    leaveTimestampRef.current = 0;
     setWarningVisible(false);
     setPaused(false);
     suppressUntilRef.current = Date.now() + 1000;
   }, []);
 
   const requestSubmitFromWarning = useCallback(() => {
-    if (graceTimeoutRef.current) {
-      clearTimeout(graceTimeoutRef.current);
-      graceTimeoutRef.current = null;
-    }
-    pendingGraceTypeRef.current = null;
-    leaveTimestampRef.current = 0;
     setWarningVisible(false);
     setPaused(false);
     onRequestSubmit?.();
@@ -286,12 +174,12 @@ export function useExamSecurity(options: UseExamSecurityOptions) {
     warningVisible,
     warningMessage,
     capabilities,
-    violationCount,
-    maxViolations,
-    latestViolation,
+    violationCount: 0,
+    maxViolations: 0,
+    latestViolation: null,
     acknowledgeWarning,
     requestSubmitFromWarning,
-    recordViolation,
-    setViolationCount,
+    recordViolation: async () => null,
+    setViolationCount: () => {},
   };
 }

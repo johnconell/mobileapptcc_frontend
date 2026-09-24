@@ -5,8 +5,7 @@ import { STORAGE_KEYS } from '@/shared/constants';
 import { appStorage } from '@/shared/services/storage';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { encryptJson, decryptJson } from '@/features/synchronization/services/offlineStore';
-import { persistViolationLimit, clampViolationLimit } from '@/shared/utils/violationLimit';
-import { persistDisconnectGraceSeconds, persistTabSwitchGraceSeconds } from '@/shared/utils/gracePeriod';
+import { persistDisconnectGraceSeconds } from '@/shared/utils/gracePeriod';
 import {
   countMediaAssets,
   INITIAL_PACK_PROGRESS,
@@ -223,20 +222,8 @@ export const ExamPreloader = {
         serverReportedHash = packageRes.packageHash || '';
         durationMinutes = packageRes.durationMinutes || 60;
         examinationSettings = packageRes.examinationSettings ?? { duration_minutes: durationMinutes };
-        if (packageRes.violationLimit != null) {
-          examinationSettings = {
-            ...examinationSettings,
-            violation_limit: clampViolationLimit(packageRes.violationLimit),
-          };
-        }
-        await persistViolationLimit(
-          examinationSettings?.violation_limit ?? packageRes.violationLimit,
-        );
         if (examinationSettings?.disconnect_grace_seconds != null) {
           await persistDisconnectGraceSeconds(examinationSettings.disconnect_grace_seconds);
-        }
-        if (examinationSettings?.tab_switch_grace_seconds != null) {
-          await persistTabSwitchGraceSeconds(examinationSettings.tab_switch_grace_seconds);
         }
         packageVersion = packageRes.packageVersion || 1;
         emitProgress({

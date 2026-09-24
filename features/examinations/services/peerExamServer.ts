@@ -537,8 +537,8 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
     warningCount: warning,
     terminatedCount: terminated,
     disconnectedCount: disconnected,
-    violationsDetected: state.violations.length,
-    recentViolations: state.violations.slice(-8).reverse(),
+    violationsDetected: 0,
+    recentViolations: [],
     students,
     can_control: true,
     is_owner: true,
@@ -765,6 +765,22 @@ function registerRoutes(mod: HttpServerModule) {
       });
     }
 
+    // Check if another student / device is already active in the lobby with this passkey
+    if (
+      existing &&
+      !existing.submittedAt &&
+      existing.status !== 'terminated' &&
+      existing.status !== 'disconnected'
+    ) {
+      return ok({
+        classification: 'already_in_lobby',
+        message:
+          'Someone is already inside the lobby with this examination key. Please verify your examination key or contact the proctor.',
+        student: validated.student,
+        schedule: validated.schedule,
+      });
+    }
+
     const applicantCode = (validated.student?.studentId || '').trim().toUpperCase();
     const queuedResults = await OfflineStore.getResults();
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
@@ -872,16 +888,11 @@ function registerRoutes(mod: HttpServerModule) {
     return ok({
       questions: sanitizedQuestions,
       durationMinutes: session.durationMinutes,
-      violationLimit: clampViolationLimit(
-        pack.examination_settings?.violation_limit ?? session.violationLimit,
-      ),
+      violationLimit: 0,
       packageHash,
       packageVersion: pack.pack_version || 1,
       examinationSettings: {
         ...(pack.examination_settings ?? {}),
-        violation_limit: clampViolationLimit(
-          pack.examination_settings?.violation_limit ?? session.violationLimit,
-        ),
       },
     });
   });
@@ -1131,9 +1142,7 @@ function registerRoutes(mod: HttpServerModule) {
     return ok({
       questions: outgoing,
       durationMinutes: session.durationMinutes,
-      violationLimit: clampViolationLimit(
-        session.violationLimit ?? pack.examination_settings?.violation_limit,
-      ),
+      violationLimit: 0,
       answers: student.answers,
     });
   });
@@ -1164,9 +1173,7 @@ function registerRoutes(mod: HttpServerModule) {
     return ok({
       questions: outgoing,
       durationMinutes: session.durationMinutes,
-      violationLimit: clampViolationLimit(
-        session.violationLimit ?? pack.examination_settings?.violation_limit,
-      ),
+      violationLimit: 0,
       answers: student.answers,
     });
   });
@@ -1280,37 +1287,10 @@ function registerRoutes(mod: HttpServerModule) {
     const student = studentByToken(String(body.participation_token ?? ''));
     if (!student) return fail(404, 'You are no longer joined to this examination.');
 
-    student.violationCount += 1;
-    student.lastActivityAt = new Date().toISOString();
-    session.violationSeq += 1;
-    session.violations.push({
-      id: session.violationSeq,
-      registration_id: student.registrationId,
-      studentName: student.fullName,
-      studentId: student.applicantCode,
-      type: String(body.type ?? 'unknown').slice(0, 60),
-      message: body.message ? String(body.message).slice(0, 500) : null,
-      violationCount: student.violationCount,
-      occurredAt: student.lastActivityAt,
-    });
-    if (session.violations.length > 60) {
-      session.violations = session.violations.slice(-60);
-    }
-    const limit = clampViolationLimit(
-      session.violationLimit ?? _packCache?.examination_settings?.violation_limit,
-    );
-    session.violationLimit = limit;
-    if (student.violationCount >= limit && student.status === 'taking_exam') {
-      student.status = 'warning';
-    }
-
-    invalidateSnapshot();
-    await persist();
-    notify();
-
+    // Violation tracking is disabled: mandatory screen pinning physically enforces security.
     return ok({
-      violation_count: student.violationCount,
-      violation_limit: limit,
+      violation_count: 0,
+      violation_limit: 0,
       lobby_status: student.status,
     });
   });
@@ -1543,14 +1523,12 @@ export const PeerExamServer = {
       session.startSeq = Number(session.startSeq ?? (session.status === 'in_progress' ? 1 : 0));
       try {
         const pack = await OfflineStore.getPack();
-        session.violationLimit = clampViolationLimit(
-          pack?.examination_settings?.violation_limit ?? session.violationLimit,
-        );
+        session.violationLimit = 0;
         if (pack?.examination_settings?.duration_minutes) {
           session.durationMinutes = pack.examination_settings.duration_minutes;
         }
       } catch {
-        session.violationLimit = clampViolationLimit(session.violationLimit);
+        session.violationLimit = 0;
       }
       for (const student of Object.values(session.students || {})) {
         student.downloadPercent = Number(student.downloadPercent ?? (student.isReady ? 100 : 0));
@@ -1671,8 +1649,7 @@ export const PeerExamServer = {
 
     if (reopening && session) {
       session.startSeq = Number(session.startSeq ?? 0);
-      // Always refresh admin settings from the latest downloaded pack.
-      session.violationLimit = clampViolationLimit(pack.examination_settings?.violation_limit);
+      session.violationLimit = 0;
       session.durationMinutes =
         pack.examination_settings?.duration_minutes ?? session.durationMinutes;
     }
@@ -1688,7 +1665,7 @@ export const PeerExamServer = {
         startedAt: null,
         endedAt: null,
         durationMinutes: pack.examination_settings?.duration_minutes ?? 60,
-        violationLimit: clampViolationLimit(pack.examination_settings?.violation_limit),
+        violationLimit: 0,
         students: {},
         tokenMap: {},
         violations: [],

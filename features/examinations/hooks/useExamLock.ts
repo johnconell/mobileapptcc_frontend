@@ -11,34 +11,25 @@ interface UseExamLockOptions {
   /** Whether kiosk lock should be active. Pass false to skip locking. */
   enabled: boolean;
   /**
-   * Called whenever a lock-related security event is detected.
-   * Maps to the existing recordViolation(type) from useViolationMonitor.
+   * Optional callback if lock-related events need custom handling.
    */
-  onViolation: (type: 'kiosk_lock_failed' | 'app_exit_during_lock' | 'lock_task_state_lost') => void;
+  onViolation?: (type: 'kiosk_lock_failed' | 'app_exit_during_lock' | 'lock_task_state_lost') => void;
 }
 
 /**
  * useExamLock — Automatic Android Screen Pinning for exam sessions.
  *
  * Behaviour:
- * - On mount (when enabled = true): calls startExamLock(), then after 1 s
- *   verifies the pin via isExamLocked(). If still unlocked → onViolation('kiosk_lock_failed').
- * - Every 15 s: polls isExamLocked(). If the pin was released (student used
- *   Settings → Unpin) → onViolation('lock_task_state_lost') + re-pin attempt.
- * - AppState background/inactive → onViolation('app_exit_during_lock').
+ * - Checks lock state immediately on mount.
+ * - If not locked, calls startExamLock() and polls every 500ms for user confirmation.
+ * - Polls every 1.5s while enabled to detect unpinning or late pin approval.
+ * - On iOS: isKioskActive defaults to and remains true (AppState monitoring handles anti-cheat).
  * - On unmount: calls stopExamLock() to unpin cleanly.
- * - iOS: only AppState monitoring fires; all lock-task calls are no-ops.
- *
- * First-time BYOD note:
- * On a device that has never used Screen Pinning, Android shows a one-time
- * system dialog "Use Screen Pinning?" before pinning. This is expected and
- * only happens once per OS session (or until the device is rebooted and Screen
- * Pinning is toggled off/on in Settings → Security). On subsequent exams within
- * the same OS session, startLockTask() pins silently.
  */
 export function useExamLock({ enabled, onViolation }: UseExamLockOptions) {
-  const [isKioskActive, setIsKioskActive] = useState(false);
+  const [isKioskActive, setIsKioskActive] = useState(Platform.OS !== 'android');
   const [examLockError, setExamLockError] = useState<string | null>(null);
+  const wasEverLockedRef = useRef(false);
 
   // Use a ref so callbacks inside intervals/timeouts are always fresh
   const onViolationRef = useRef(onViolation);
@@ -60,92 +51,129 @@ export function useExamLock({ enabled, onViolation }: UseExamLockOptions) {
 
     if (!enabledRef.current) return;
 
-    // Going to background or inactive while exam is locked = violation
     if (
       (nextState === 'background' || nextState === 'inactive') &&
       (prev === 'active' || prev === 'inactive')
     ) {
-      onViolationRef.current('app_exit_during_lock');
+      onViolationRef.current?.('app_exit_during_lock');
+    }
+  }, []);
+
+  const requestLock = useCallback(async () => {
+    if (Platform.OS !== 'android' || !enabledRef.current) return;
+    try {
+      await startExamLock();
+      // Poll quickly (every 400ms for up to 8s) to detect immediately when student taps "GOT IT"
+      const start = Date.now();
+      while (Date.now() - start < 8000) {
+        await new Promise((r) => setTimeout(r, 400));
+        const locked = await isExamLocked().catch(() => false);
+        if (locked) {
+          wasEverLockedRef.current = true;
+          setIsKioskActive(true);
+          setExamLockError(null);
+          return;
+        }
+      }
+      setIsKioskActive(false);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Screen pinning request failed';
+      setExamLockError(msg);
     }
   }, []);
 
   // ── Main lock lifecycle ───────────────────────────────────────────────────
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      if (Platform.OS === 'android') {
+        setIsKioskActive(false);
+      }
+      return;
+    }
+
+    if (Platform.OS !== 'android') {
+      setIsKioskActive(true);
+      return;
+    }
 
     let cancelled = false;
     let pollIntervalId: ReturnType<typeof setInterval> | null = null;
-    let verifyTimeoutId: ReturnType<typeof setTimeout> | null = null;
     let appStateSub: NativeEventSubscription | null = null;
 
     async function activateLock() {
-      try {
-        await startExamLock();
-        if (cancelled) return;
+      // First check if already locked (e.g. pinned earlier in terms/lobby)
+      const alreadyLocked = await isExamLocked().catch(() => false);
+      if (cancelled) return;
+
+      if (alreadyLocked) {
+        wasEverLockedRef.current = true;
         setIsKioskActive(true);
         setExamLockError(null);
-      } catch (e) {
-        if (cancelled) return;
-        const msg = e instanceof Error ? e.message : 'Unknown error';
-        setExamLockError(msg);
-        onViolationRef.current('kiosk_lock_failed');
-        return;
+      } else {
+        try {
+          await startExamLock();
+        } catch (e) {
+          if (cancelled) return;
+          const msg = e instanceof Error ? e.message : 'Unknown error';
+          setExamLockError(msg);
+        }
+
+        // Poll every 500ms for initial prompt confirmation
+        const start = Date.now();
+        while (Date.now() - start < 8000) {
+          if (cancelled) return;
+          await new Promise((r) => setTimeout(r, 500));
+          if (cancelled) return;
+          const locked = await isExamLocked().catch(() => false);
+          if (locked) {
+            wasEverLockedRef.current = true;
+            setIsKioskActive(true);
+            setExamLockError(null);
+            break;
+          }
+        }
       }
 
-      // Verify 1 s after calling startLockTask — Android may silently refuse on emulators
-      verifyTimeoutId = setTimeout(async () => {
-        if (cancelled) return;
-        const locked = await isExamLocked().catch(() => false);
-        if (cancelled) return;
-        if (!locked && Platform.OS === 'android') {
-          setExamLockError('Screen pinning was not confirmed by the system.');
-          onViolationRef.current('kiosk_lock_failed');
-          // Try once more — student may have just dismissed the system dialog
-          try {
-            await startExamLock();
-          } catch {
-            /* ignore second-attempt failures */
-          }
-        }
-      }, 1000);
-
-      // Poll every 15 s for unexpected unpin (e.g. student navigated to Settings)
+      // Continuous monitoring: poll every 1,500ms to detect unpinning or late pin approval
       pollIntervalId = setInterval(async () => {
         if (cancelled || !enabledRef.current) return;
-        const locked = await isExamLocked().catch(() => true); // default to true on error (safe)
+        const locked = await isExamLocked().catch(() => false);
         if (cancelled) return;
-        if (!locked) {
+
+        if (locked) {
+          wasEverLockedRef.current = true;
+          setIsKioskActive(true);
+        } else {
+          // Device is currently not pinned
           setIsKioskActive(false);
-          onViolationRef.current('lock_task_state_lost');
-          // Attempt to re-pin immediately
-          try {
-            await startExamLock();
-            if (!cancelled) setIsKioskActive(true);
-          } catch {
-            /* re-pin failed; violation already recorded */
+          if (wasEverLockedRef.current) {
+            wasEverLockedRef.current = false;
+            onViolationRef.current?.('lock_task_state_lost');
+            // Re-prompt pinning
+            try {
+              await startExamLock();
+            } catch {
+              /* ignore */
+            }
           }
         }
-      }, 15_000);
+      }, 1500);
     }
 
-    // Subscribe to AppState before starting lock so we don't miss any transition
     appStateSub = AppState.addEventListener('change', handleAppStateChange);
-
     void activateLock();
 
     return () => {
       cancelled = true;
-      if (verifyTimeoutId !== null) clearTimeout(verifyTimeoutId);
       if (pollIntervalId !== null) clearInterval(pollIntervalId);
       appStateSub?.remove();
 
       // Unpin cleanly — fire-and-forget, best effort
-      void stopExamLock().catch(() => { /* ignore errors during cleanup */ });
+      void stopExamLock().catch(() => { /* ignore */ });
       setIsKioskActive(false);
+      wasEverLockedRef.current = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]); // handleAppStateChange is stable (useCallback with no deps)
+  }, [enabled, handleAppStateChange]);
 
-  return { isKioskActive, examLockError };
+  return { isKioskActive, examLockError, requestLock };
 }
-
