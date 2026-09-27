@@ -1,4 +1,4 @@
-import React, { Component, ErrorInfo, ReactNode } from 'react';
+﻿import React, { Component, ErrorInfo, ReactNode } from 'react';
 import {
   View,
   Text,
@@ -21,7 +21,7 @@ interface State {
 }
 
 /**
- * React Error Boundary — wraps any subtree and catches JS errors during render.
+ * React Error Boundary ΓÇö wraps any subtree and catches JS errors during render.
  * In DEV builds the full stack trace is printed on-screen so you can see the
  * exact cause without needing a connected debugger.
  */

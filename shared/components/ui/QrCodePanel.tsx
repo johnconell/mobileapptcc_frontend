@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { Text, View, StyleSheet, useWindowDimensions } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { radii, shadows } from '@/shared/theme';
@@ -19,11 +19,15 @@ export function QrCodePanel({
   const { colors: themeColors, isDark } = useAppTheme();
   const qrSize = size ?? Math.min(220, Math.max(160, width - 120));
 
+  // react-native-qrcode-svg throws if value is empty or not a string.
+  // Guard: fall back to a placeholder so the component never crashes.
+  const safeValue = typeof value === 'string' && value.trim().length > 0 ? value : '----';
+
   return (
     <View style={styles.wrap}>
       <View style={[styles.frame, { borderColor: isDark ? '#333333' : themeColors.cardBorder }]}>
         <QRCode
-          value={value}
+          value={safeValue}
           size={qrSize}
           ecl="L"
           quietZone={8}
