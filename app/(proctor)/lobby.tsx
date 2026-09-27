@@ -1,11 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, Modal, Pressable, Text, View, StyleSheet, Alert, Share } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ScrollView, Modal, Pressable, Text, View, StyleSheet, Alert, Share } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Button } from '@/shared/components/ui/Button';
+import { ErrorBoundary } from '@/shared/components/ErrorBoundary';
 import { Card } from '@/shared/components/ui/Card';
 import { ConfirmationModal } from '@/shared/components/ui/Dialog';
 import { Header } from '@/shared/components/ui/Header';
@@ -52,6 +53,8 @@ import {
   Search,
   Bell,
   X,
+  ChevronDown,
+  ChevronUp,
   ChevronRight,
   Keyboard,
   CalendarDays,
@@ -93,7 +96,7 @@ function liveRemainingSeconds(lobby: {
   return lobby.session?.remainingSeconds ?? lobby.remainingSeconds ?? null;
 }
 
-export default function ProctorLobbyScreen() {
+function ProctorLobbyContent() {
   useKeepAwake();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -135,6 +138,47 @@ export default function ProctorLobbyScreen() {
   const [cloudCode, setCloudCode] = useState<string | null>(null);
   const [cloudQrValue, setCloudQrValue] = useState<string | null>(null);
   const [cloudSessionId, setCloudSessionId] = useState<number | null>(null);
+  const [attendedIds, setAttendedIds] = useState<Set<string>>(new Set());
+
+  const toggleAttendance = (studentId: string) => {
+    setAttendedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(studentId)) {
+        next.delete(studentId);
+      } else {
+        next.add(studentId);
+      }
+      return next;
+    });
+  };
+
+  const [waitingExpanded, setWaitingExpanded] = useState<boolean>(true);
+  const [takingExpanded, setTakingExpanded] = useState<boolean>(true);
+  const [completedExpanded, setCompletedExpanded] = useState<boolean>(true);
+  const [disconnectedExpanded, setDisconnectedExpanded] = useState<boolean>(true);
+
+  const handleRemoveStudent = (student: LobbyStudent) => {
+    Alert.alert(
+      'Remove Examinee',
+      `Examinee: ${student.fullName}\n\nAre you sure you want to remove this examinee from the session? Their device will be immediately disconnected.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove Examinee',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await LobbyRepository.removeStudent(student.id, 'Removed by proctor');
+              await refresh();
+              Alert.alert('Examinee Removed', `${student.fullName} has been removed from this room.`);
+            } catch (err) {
+              Alert.alert('Removal Failed', err instanceof Error ? err.message : 'Could not remove student.');
+            }
+          },
+        },
+      ],
+    );
+  };
 
   // REPLICATION STATES: SWAP MODAL ('Switch Active Room') & SEND MODAL ('Room Access Code')
   const [swapModalVisible, setSwapModalVisible] = useState(false);
@@ -525,6 +569,33 @@ export default function ProctorLobbyScreen() {
     router.replace('/(proctor)/(tabs)/examination');
   };
 
+  // ─── Derived student lists (MUST be above every early-return) ─────────────
+  // React requires hooks to run the same number of times on every render.
+  // These were originally placed AFTER `if (!ready) return` — that caused
+  // "Rendered more hooks than during previous render" crash → blank screen.
+  const studentsList = useMemo(
+    () => (Array.isArray(lobby?.students) ? lobby!.students : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lobby?.students],
+  );
+  const waitingStudents = useMemo(
+    () => studentsList.filter((s) => s.status === 'waiting' || s.status === 'connected'),
+    [studentsList],
+  );
+  const takingStudents = useMemo(
+    () => studentsList.filter((s) => s.status === 'taking_exam' || s.status === 'warning'),
+    [studentsList],
+  );
+  const completedStudents = useMemo(
+    () => studentsList.filter((s) => s.status === 'finished'),
+    [studentsList],
+  );
+  const disconnectedStudents = useMemo(
+    () => studentsList.filter((s) => s.status === 'disconnected'),
+    [studentsList],
+  );
+  // ─────────────────────────────────────────────────────────────────────────
+
   if (!ready) {
     return (
       <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
@@ -713,7 +784,7 @@ export default function ProctorLobbyScreen() {
             {scheduleLabel}
           </Text>
           <Text style={[styles.navSubtitleText, { color: themeColors.textSecondary }]} numberOfLines={1}>
-            {roomLabel} · {batchLabel} · {lobby.registeredCount || lobby.students.length} Candidates
+            {roomLabel} · {batchLabel} · {lobby.registeredCount || studentsList.length} Candidates
           </Text>
         </View>
 
@@ -730,12 +801,8 @@ export default function ProctorLobbyScreen() {
         </View>
       </View>
 
-      <FlatList
-        data={lobby.students}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
-        ListHeaderComponent={
-          <View style={styles.headerBlock}>
+      <ScrollView contentContainerStyle={styles.list}>
+        <View style={styles.headerBlock}>
             {/* ============================================================= */}
             {/* CURRENT EXAMINATION SCHEDULE CARD                             */}
             {/* Prominently placed at the top for instant recognition        */}
@@ -843,9 +910,78 @@ export default function ProctorLobbyScreen() {
                 >
                   <Users size={13} color={themeColors.textSecondary} />
                   <Text style={[styles.scheduleMetaPillText, { color: themeColors.textPrimary }]}>
-                    {`${lobby.registeredCount || lobby.students.length} Candidates`}
+                    {`${lobby.registeredCount || studentsList.length} Candidates`}
                   </Text>
                 </View>
+
+                <View
+                  style={[
+                    styles.scheduleMetaPill,
+                    {
+                      backgroundColor: isDark ? '#1A1A1A' : themeColors.background,
+                      borderColor: themeColors.cardBorder,
+                    },
+                  ]}
+                >
+                  <Wifi size={13} color={themeColors.textSecondary} />
+                  <Text style={[styles.scheduleMetaPillText, { color: themeColors.textPrimary }]}>
+                    {`IP: ${peerHost || hosting.host || 'LAN Host'}`}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* ============================================================= */}
+            {/* MONITORING STATS (Moved to Top: Waiting -> Answering -> Submitted -> Disconnected) */}
+            {/* ============================================================= */}
+            <View style={{ marginBottom: 16 }}>
+              <Text style={[styles.section, { color: themeColors.textMuted, marginTop: 4, marginBottom: 2 }]}>
+                Monitoring
+              </Text>
+              <Text style={[styles.sectionHint, { color: themeColors.textSecondary, marginBottom: 12 }]}>
+                {`${lobby.registeredCount || studentsList.length} Candidates registered · Live examinee integrity`}
+              </Text>
+              <View style={styles.statsGrid}>
+                <StatisticCard
+                  label="Waiting"
+                  value={lobby.waitingCount}
+                  hint="In Lobby"
+                  tone="warning"
+                  icon={<UserCheck size={18} color={themeColors.warning} />}
+                  compact
+                />
+                <StatisticCard
+                  label="Answering"
+                  value={lobby.takingCount}
+                  hint="Taking Exam"
+                  tone="default"
+                  icon={<Play size={18} color={themeColors.accent} />}
+                  compact
+                  delay={20}
+                />
+                <StatisticCard
+                  label="Submitted"
+                  value={lobby.finishedCount}
+                  hint="Completed"
+                  tone="success"
+                  icon={<CheckCircle2 size={18} color={themeColors.success} />}
+                  compact
+                  delay={40}
+                />
+                <StatisticCard
+                  label="Disconnected"
+                  value={`${lobby.disconnectedCount ?? 0}`}
+                  hint="Offline"
+                  tone={(lobby.disconnectedCount ?? 0) > 0 ? 'warning' : 'info'}
+                  icon={
+                    <ShieldAlert
+                      size={18}
+                      color={(lobby.disconnectedCount ?? 0) > 0 ? themeColors.warning : themeColors.textMuted}
+                    />
+                  }
+                  compact
+                  delay={60}
+                />
               </View>
             </View>
 
@@ -979,64 +1115,6 @@ export default function ProctorLobbyScreen() {
                       <Share2 size={18} color={isDark ? '#FFFFFF' : '#7A1F2B'} />
                     </Pressable>
                   </View>
-                </View>
-              </View>
-
-              {/* Data Detail Rows */}
-              <View
-                style={[
-                  styles.depositDetailsTable,
-                  {
-                    backgroundColor: isDark ? '#1A1A1A' : themeColors.cardMuted,
-                    borderColor: isDark ? '#262626' : themeColors.cardBorder,
-                  },
-                ]}
-              >
-                <View style={styles.depositDetailRow}>
-                  <Text style={[styles.depositDetailLabel, { color: isDark ? '#A1A1AA' : themeColors.textSecondary }]}>Schedule</Text>
-                  <Text style={[styles.depositDetailVal, { color: isDark ? '#FFFFFF' : themeColors.textPrimary }]}>
-                    {scheduleLabel}
-                  </Text>
-                </View>
-                <View style={[styles.depositDetailDivider, { backgroundColor: isDark ? '#262626' : themeColors.cardBorder }]} />
-
-                <View style={styles.depositDetailRow}>
-                  <Text style={[styles.depositDetailLabel, { color: isDark ? '#A1A1AA' : themeColors.textSecondary }]}>Room & Venue</Text>
-                  <Text style={[styles.depositDetailVal, { color: isDark ? '#FFFFFF' : themeColors.textPrimary }]}>
-                    {roomLabel}
-                  </Text>
-                </View>
-                <View style={[styles.depositDetailDivider, { backgroundColor: isDark ? '#262626' : themeColors.cardBorder }]} />
-
-                <View style={styles.depositDetailRow}>
-                  <Text style={[styles.depositDetailLabel, { color: isDark ? '#A1A1AA' : themeColors.textSecondary }]}>Batch Number</Text>
-                  <Text style={[styles.depositDetailVal, { color: isDark ? '#FFFFFF' : themeColors.textPrimary }]}>
-                    {batchLabel}
-                  </Text>
-                </View>
-                <View style={[styles.depositDetailDivider, { backgroundColor: isDark ? '#262626' : themeColors.cardBorder }]} />
-
-                <View style={styles.depositDetailRow}>
-                  <Text style={[styles.depositDetailLabel, { color: isDark ? '#A1A1AA' : themeColors.textSecondary }]}>LAN Server Host</Text>
-                  <Text style={[styles.depositDetailVal, { color: isDark ? '#FFFFFF' : themeColors.textPrimary }]}>
-                    {peerHost ? `${peerHost}:${hosting.port}` : 'Local P2P Broadcast'}
-                  </Text>
-                </View>
-                <View style={[styles.depositDetailDivider, { backgroundColor: isDark ? '#262626' : themeColors.cardBorder }]} />
-
-                <View style={styles.depositDetailRow}>
-                  <Text style={[styles.depositDetailLabel, { color: isDark ? '#A1A1AA' : themeColors.textSecondary }]}>Wi-Fi Network</Text>
-                  <Text style={[styles.depositDetailVal, { color: isDark ? '#FFFFFF' : themeColors.textPrimary }]}>
-                    {lobby.wifiSsid || 'Testing Wi-Fi'}
-                  </Text>
-                </View>
-                <View style={[styles.depositDetailDivider, { backgroundColor: isDark ? '#262626' : themeColors.cardBorder }]} />
-
-                <View style={styles.depositDetailRow}>
-                  <Text style={[styles.depositDetailLabel, { color: isDark ? '#A1A1AA' : themeColors.textSecondary }]}>Registered Examinees</Text>
-                  <Text style={[styles.depositDetailVal, { color: isDark ? '#FFFFFF' : themeColors.textPrimary }]}>
-                    {lobby.registeredCount || lobby.students.length} Candidates
-                  </Text>
                 </View>
               </View>
 
@@ -1197,54 +1275,250 @@ export default function ProctorLobbyScreen() {
               </Card>
             ) : null}
 
-            <Text style={[styles.section, { color: themeColors.textMuted }]}>Security Monitoring</Text>
-            <Text style={[styles.sectionHint, { color: themeColors.textSecondary }]}>
-              {lobby.registeredCount || lobby.students.length} Candidates registered · Live examinee integrity
-            </Text>
-            <View style={styles.statsGrid}>
-              <StatisticCard
-                label="In Lobby"
-                value={lobby.waitingCount}
-                hint="Waiting to start"
-                tone="warning"
-                icon={<UserCheck size={18} color={themeColors.warning} />}
-                compact
-              />
-              <StatisticCard
-                label="Taking Exam"
-                value={lobby.takingCount}
-                hint="Actively answering"
-                tone="default"
-                icon={<Play size={18} color={themeColors.accent} />}
-                compact
-                delay={20}
-              />
-              <StatisticCard
-                label="Completed"
-                value={lobby.finishedCount}
-                hint="Exam submitted"
-                tone="success"
-                icon={<CheckCircle2 size={18} color={themeColors.success} />}
-                compact
-                delay={40}
-              />
-              <StatisticCard
-                label="Disconnected"
-                value={`${lobby.disconnectedCount ?? 0}`}
-                hint="Network integrity"
-                tone={(lobby.disconnectedCount ?? 0) > 0 ? 'warning' : 'info'}
-                icon={<ShieldAlert size={18} color={(lobby.disconnectedCount ?? 0) > 0 ? themeColors.warning : themeColors.textMuted} />}
-                compact
-                delay={60}
-              />
-            </View>
 
-            <Text style={[styles.section, { color: themeColors.textMuted }]}>Students in this room</Text>
-            <Text style={[styles.sectionHint, { color: themeColors.textSecondary }]}>
-              {lobby.waitingCount} waiting to start · {lobby.takingCount} taking ·{' '}
-              {lobby.connectedCount} joined of {lobby.registeredCount} registered. Tap a student
-              for details. Disconnected students show a 6-digit reconnect PIN (not the exam code).
+
+            {/* ============================================================= */}
+            {/* EXAMINEE MONITORING SECTION                                   */}
+            {/* Directly beneath the Access Pass section                      */}
+            {/* ============================================================= */}
+            <Text style={[styles.section, { color: themeColors.textMuted, marginTop: 18 }]}>
+              Examinee Monitoring
             </Text>
+            <Text style={[styles.sectionHint, { color: themeColors.textSecondary, marginBottom: 12 }]}>
+              Real-time examinee tracking grouped by status. {attendedIds.size} of {studentsList.length} verified in room. Tap any category to expand or collapse.
+            </Text>
+
+            {/* CATEGORY 1: WAITING */}
+            <Pressable
+              style={[
+                styles.categoryAccordionHeader,
+                {
+                  backgroundColor: isDark ? '#1F1A12' : '#FFFBEB',
+                  borderColor: isDark ? '#78350F' : '#FDE68A',
+                },
+              ]}
+              onPress={() => setWaitingExpanded((v) => !v)}
+            >
+              <View style={styles.categoryLeftRow}>
+                <View style={[styles.categoryIconBadge, { backgroundColor: isDark ? '#451A03' : '#FEF3C7' }]}>
+                  <Clock size={16} color="#D97706" />
+                </View>
+                <Text style={[styles.categoryTitle, { color: isDark ? '#FDE68A' : '#92400E' }]}>
+                  Waiting to Start
+                </Text>
+                <View style={[styles.categoryCountBadge, { backgroundColor: isDark ? '#78350F' : '#FDE68A' }]}>
+                  <Text style={[styles.categoryCountText, { color: isDark ? '#FEF3C7' : '#78350F' }]}>
+                    {waitingStudents.length}
+                  </Text>
+                </View>
+              </View>
+              {waitingExpanded ? (
+                <ChevronUp size={18} color={isDark ? '#FDE68A' : '#92400E'} />
+              ) : (
+                <ChevronDown size={18} color={isDark ? '#FDE68A' : '#92400E'} />
+              )}
+            </Pressable>
+
+            {waitingExpanded ? (
+              <View style={styles.categoryContentBlock}>
+                {waitingStudents.length === 0 ? (
+                  <Text style={[styles.emptyCategoryText, { color: themeColors.textMuted }]}>
+                    No applicants waiting in lobby.
+                  </Text>
+                ) : (
+                  waitingStudents.map((item, index) => (
+                    <LobbyStudentCard
+                      key={item.id}
+                      student={item}
+                      delay={Math.min(index * 40, 200)}
+                      isAttended={attendedIds.has(item.id)}
+                      onToggleAttendance={() => toggleAttendance(item.id)}
+                      onKick={() => handleRemoveStudent(item)}
+                      onPress={() => {
+                        setSelected(item);
+                        setReconnectCode(item.reconnectCode ?? null);
+                        setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
+                      }}
+                    />
+                  ))
+                )}
+              </View>
+            ) : null}
+
+            {/* CATEGORY 2: TAKING EXAM */}
+            <Pressable
+              style={[
+                styles.categoryAccordionHeader,
+                {
+                  backgroundColor: isDark ? '#111827' : '#EFF6FF',
+                  borderColor: isDark ? '#1E3A8A' : '#BFDBFE',
+                },
+              ]}
+              onPress={() => setTakingExpanded((v) => !v)}
+            >
+              <View style={styles.categoryLeftRow}>
+                <View style={[styles.categoryIconBadge, { backgroundColor: isDark ? '#1E3A8A' : '#DBEAFE' }]}>
+                  <Users size={16} color="#2563EB" />
+                </View>
+                <Text style={[styles.categoryTitle, { color: isDark ? '#93C5FD' : '#1E40AF' }]}>
+                  Answering / Taking Exam
+                </Text>
+                <View style={[styles.categoryCountBadge, { backgroundColor: isDark ? '#1E3A8A' : '#DBEAFE' }]}>
+                  <Text style={[styles.categoryCountText, { color: isDark ? '#DBEAFE' : '#1E40AF' }]}>
+                    {takingStudents.length}
+                  </Text>
+                </View>
+              </View>
+              {takingExpanded ? (
+                <ChevronUp size={18} color={isDark ? '#93C5FD' : '#1E40AF'} />
+              ) : (
+                <ChevronDown size={18} color={isDark ? '#93C5FD' : '#1E40AF'} />
+              )}
+            </Pressable>
+
+            {takingExpanded ? (
+              <View style={styles.categoryContentBlock}>
+                {takingStudents.length === 0 ? (
+                  <Text style={[styles.emptyCategoryText, { color: themeColors.textMuted }]}>
+                    No applicants currently answering.
+                  </Text>
+                ) : (
+                  takingStudents.map((item, index) => (
+                    <LobbyStudentCard
+                      key={item.id}
+                      student={item}
+                      delay={Math.min(index * 40, 200)}
+                      isAttended={attendedIds.has(item.id)}
+                      onToggleAttendance={() => toggleAttendance(item.id)}
+                      onKick={() => handleRemoveStudent(item)}
+                      onPress={() => {
+                        setSelected(item);
+                        setReconnectCode(item.reconnectCode ?? null);
+                        setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
+                      }}
+                    />
+                  ))
+                )}
+              </View>
+            ) : null}
+
+            {/* CATEGORY 3: SUBMITTED / COMPLETED */}
+            <Pressable
+              style={[
+                styles.categoryAccordionHeader,
+                {
+                  backgroundColor: isDark ? '#064E3B20' : '#F0FDF4',
+                  borderColor: isDark ? '#065F46' : '#BBF7D0',
+                },
+              ]}
+              onPress={() => setCompletedExpanded((v) => !v)}
+            >
+              <View style={styles.categoryLeftRow}>
+                <View style={[styles.categoryIconBadge, { backgroundColor: isDark ? '#065F46' : '#DCFCE7' }]}>
+                  <CheckCircle2 size={16} color="#16A34A" />
+                </View>
+                <Text style={[styles.categoryTitle, { color: isDark ? '#86EFAC' : '#166534' }]}>
+                  Submitted / Completed
+                </Text>
+                <View style={[styles.categoryCountBadge, { backgroundColor: isDark ? '#065F46' : '#DCFCE7' }]}>
+                  <Text style={[styles.categoryCountText, { color: isDark ? '#DCFCE7' : '#166534' }]}>
+                    {completedStudents.length}
+                  </Text>
+                </View>
+              </View>
+              {completedExpanded ? (
+                <ChevronUp size={18} color={isDark ? '#86EFAC' : '#166534'} />
+              ) : (
+                <ChevronDown size={18} color={isDark ? '#86EFAC' : '#166534'} />
+              )}
+            </Pressable>
+
+            {completedExpanded ? (
+              <View style={styles.categoryContentBlock}>
+                {completedStudents.length === 0 ? (
+                  <Text style={[styles.emptyCategoryText, { color: themeColors.textMuted }]}>
+                    No completed submissions yet.
+                  </Text>
+                ) : (
+                  completedStudents.map((item, index) => (
+                    <LobbyStudentCard
+                      key={item.id}
+                      student={item}
+                      delay={Math.min(index * 40, 200)}
+                      isAttended={attendedIds.has(item.id)}
+                      onToggleAttendance={() => toggleAttendance(item.id)}
+                      onKick={() => handleRemoveStudent(item)}
+                      onPress={() => {
+                        setSelected(item);
+                        setReconnectCode(item.reconnectCode ?? null);
+                        setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
+                      }}
+                    />
+                  ))
+                )}
+              </View>
+            ) : null}
+
+            {/* CATEGORY 4: DISCONNECTED (if any) */}
+            {disconnectedStudents.length > 0 ? (
+              <>
+                <Pressable
+                  style={[
+                    styles.categoryAccordionHeader,
+                    {
+                      backgroundColor: isDark ? '#450A0A20' : '#FEF2F2',
+                      borderColor: isDark ? '#7F1D1D' : '#FECACA',
+                    },
+                  ]}
+                  onPress={() => setDisconnectedExpanded((v) => !v)}
+                >
+                  <View style={styles.categoryLeftRow}>
+                    <View style={[styles.categoryIconBadge, { backgroundColor: isDark ? '#7F1D1D' : '#FEE2E2' }]}>
+                      <AlertTriangle size={16} color="#DC2626" />
+                    </View>
+                    <Text style={[styles.categoryTitle, { color: isDark ? '#FCA5A5' : '#991B1B' }]}>
+                      Disconnected / Lost Connection
+                    </Text>
+                    <View style={[styles.categoryCountBadge, { backgroundColor: isDark ? '#7F1D1D' : '#FEE2E2' }]}>
+                      <Text style={[styles.categoryCountText, { color: isDark ? '#FEE2E2' : '#991B1B' }]}>
+                        {disconnectedStudents.length}
+                      </Text>
+                    </View>
+                  </View>
+                  {disconnectedExpanded ? (
+                    <ChevronUp size={18} color={isDark ? '#FCA5A5' : '#991B1B'} />
+                  ) : (
+                    <ChevronDown size={18} color={isDark ? '#FCA5A5' : '#991B1B'} />
+                  )}
+                </Pressable>
+
+                {disconnectedExpanded ? (
+                  <View style={styles.categoryContentBlock}>
+                    {disconnectedStudents.map((item, index) => (
+                      <LobbyStudentCard
+                        key={item.id}
+                        student={item}
+                        delay={Math.min(index * 40, 200)}
+                        isAttended={attendedIds.has(item.id)}
+                        onToggleAttendance={() => toggleAttendance(item.id)}
+                        onKick={() => handleRemoveStudent(item)}
+                        onPress={() => {
+                          setSelected(item);
+                          setReconnectCode(item.reconnectCode ?? null);
+                          setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
+                        }}
+                      />
+                    ))}
+                  </View>
+                ) : null}
+              </>
+            ) : null}
+
+            {studentsList.length === 0 ? (
+              <Text style={[styles.empty, { color: themeColors.textMuted }]}>
+                No students have joined yet. Share the QR Code or access code.
+              </Text>
+            ) : null}
 
             <Button
               title={
@@ -1255,6 +1529,7 @@ export default function ProctorLobbyScreen() {
               variant="ghost"
               fullWidth
               onPress={() => setShowHistory((v) => !v)}
+              style={{ marginTop: 12 }}
             />
             {showHistory ? (
               <Card>
@@ -1282,24 +1557,7 @@ export default function ProctorLobbyScreen() {
               </Card>
             ) : null}
           </View>
-        }
-        renderItem={({ item, index }) => (
-          <LobbyStudentCard
-            student={item}
-            delay={Math.min(index * 40, 200)}
-            onPress={() => {
-              setSelected(item);
-              setReconnectCode(item.reconnectCode ?? null);
-              setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
-            }}
-          />
-        )}
-        ListEmptyComponent={
-          <Text style={[styles.empty, { color: themeColors.textMuted }]}>
-            No students have joined yet. Share the QR Code or exam code.
-          </Text>
-        }
-      />
+        </ScrollView>
 
       <ConfirmationModal
         visible={startOpen}
@@ -1708,7 +1966,7 @@ export default function ProctorLobbyScreen() {
                     {lobby.session?.roomName || lobby.roomName || 'Room 101'}
                   </Text>
                   <Text style={styles.swapCardMeta}>
-                    Batch {lobby.session?.batchNumber || '1'} · {lobby.registeredCount || lobby.students.length} Registered Candidates
+                    Batch {lobby.session?.batchNumber || '1'} · {lobby.registeredCount || studentsList.length} Registered Candidates
                   </Text>
                 </View>
                 <View style={styles.swapActiveBadge}>
@@ -1885,6 +2143,30 @@ export default function ProctorLobbyScreen() {
         </View>
       </Modal>
     </View>
+  );
+}
+
+/**
+ * Default export — what Expo Router mounts.
+ * ProctorLobbyContent is wrapped in ErrorBoundary so any render crash
+ * shows a visible on-screen message instead of a blank white screen.
+ */
+export default function ProctorLobbyScreen() {
+  const router = useRouter();
+  return (
+    <ErrorBoundary
+      fallbackTitle="Examination Lobby Error"
+      fallbackMessage="Could not load the examination lobby. Tap 'Try Again' to reload, or go back to the dashboard."
+      onReset={() => {
+        if (router.canGoBack()) {
+          router.back();
+        } else {
+          router.replace('/(proctor)/(tabs)/examination');
+        }
+      }}
+    >
+      <ProctorLobbyContent />
+    </ErrorBoundary>
   );
 }
 
@@ -2634,5 +2916,51 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  categoryAccordionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 8,
+    marginBottom: 6,
+  },
+  categoryLeftRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  categoryIconBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  categoryTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  categoryCountBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  categoryCountText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  categoryContentBlock: {
+    gap: 8,
+    marginBottom: 8,
+  },
+  emptyCategoryText: {
+    fontSize: 13,
+    fontStyle: 'italic',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
   },
 });
