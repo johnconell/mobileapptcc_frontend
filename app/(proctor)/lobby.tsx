@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, Modal, Pressable, Text, View, StyleSheet, Alert, Share } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -129,7 +129,9 @@ function ProctorLobbyContent() {
     Array<{ id: string; title: string; body: string; at: string; kind: 'connect' | 'disconnect' }>
   >([]);
   const [clockTick, setClockTick] = useState(0);
-  const [showHistory, setShowHistory] = useState(false);
+  const [activeStatusFilter, setActiveStatusFilter] = useState<
+    'waiting' | 'taking' | 'submitted' | 'disconnected' | null
+  >(null);
   const [reconnectCode, setReconnectCode] = useState<string | null>(null);
   const [reconnectExpiresAt, setReconnectExpiresAt] = useState<string | null>(null);
   const [peerHost, setPeerHost] = useState<string | null>(null);
@@ -151,11 +153,6 @@ function ProctorLobbyContent() {
       return next;
     });
   };
-
-  const [waitingExpanded, setWaitingExpanded] = useState<boolean>(true);
-  const [takingExpanded, setTakingExpanded] = useState<boolean>(true);
-  const [completedExpanded, setCompletedExpanded] = useState<boolean>(true);
-  const [disconnectedExpanded, setDisconnectedExpanded] = useState<boolean>(true);
 
   const handleRemoveStudent = (student: LobbyStudent) => {
     Alert.alert(
@@ -753,6 +750,68 @@ function ProctorLobbyContent() {
     'Standard Session';
   const schoolYear = activeSchedule?.schoolYear ? `S.Y. ${activeSchedule.schoolYear}` : null;
 
+  const waitingCount = waitingStudents.length || lobby.waitingCount || 0;
+  const takingCount = takingStudents.length || lobby.takingCount || 0;
+  const finishedCount = completedStudents.length || lobby.finishedCount || 0;
+  const disconnectedCount = disconnectedStudents.length || (lobby.disconnectedCount ?? 0);
+
+  const categoryConfigs: Record<
+    'waiting' | 'taking' | 'submitted' | 'disconnected',
+    {
+      title: string;
+      subtitle: string;
+      emptyMessage: string;
+      students: LobbyStudent[];
+      badgeBg: string;
+      countBadgeBg: string;
+      countBadgeText: string;
+      icon: React.ReactNode;
+    }
+  > = {
+    waiting: {
+      title: 'Waiting to Start',
+      subtitle: `${attendedIds.size} of ${waitingStudents.length} verified in room`,
+      emptyMessage: 'No applicants currently waiting in the lobby.',
+      students: waitingStudents,
+      badgeBg: isDark ? '#451A03' : '#FEF3C7',
+      countBadgeBg: isDark ? '#78350F' : '#FDE68A',
+      countBadgeText: isDark ? '#FEF3C7' : '#78350F',
+      icon: <Clock size={16} color={isDark ? '#FBBF24' : '#D97706'} />,
+    },
+    taking: {
+      title: 'Answering / Taking Exam',
+      subtitle: 'Active examinees currently answering questions',
+      emptyMessage: 'No applicants currently taking the examination.',
+      students: takingStudents,
+      badgeBg: isDark ? '#1E3A8A' : '#DBEAFE',
+      countBadgeBg: isDark ? '#1E3A8A' : '#DBEAFE',
+      countBadgeText: isDark ? '#DBEAFE' : '#1E40AF',
+      icon: <Play size={16} color={isDark ? '#60A5FA' : '#2563EB'} />,
+    },
+    submitted: {
+      title: 'Submitted / Completed',
+      subtitle: 'Examinees who finished and submitted their exam',
+      emptyMessage: 'No completed submissions yet.',
+      students: completedStudents,
+      badgeBg: isDark ? '#065F46' : '#DCFCE7',
+      countBadgeBg: isDark ? '#065F46' : '#DCFCE7',
+      countBadgeText: isDark ? '#DCFCE7' : '#166534',
+      icon: <CheckCircle2 size={16} color={isDark ? '#4ADE80' : '#16A34A'} />,
+    },
+    disconnected: {
+      title: 'Disconnected / Offline',
+      subtitle: 'Examinees who lost connection and may need reconnect PIN',
+      emptyMessage: 'No examinees currently disconnected.',
+      students: disconnectedStudents,
+      badgeBg: isDark ? '#7F1D1D' : '#FEE2E2',
+      countBadgeBg: isDark ? '#7F1D1D' : '#FEE2E2',
+      countBadgeText: isDark ? '#FEE2E2' : '#991B1B',
+      icon: <ShieldAlert size={16} color={isDark ? '#F87171' : '#DC2626'} />,
+    },
+  };
+
+  const currentCategory = activeStatusFilter ? categoryConfigs[activeStatusFilter] : null;
+
   return (
     <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
       {/* 1. UNIFORM HEADER NAV BAR (Avatar Left, Title Center, Logout Right) */}
@@ -928,60 +987,6 @@ function ProctorLobbyContent() {
                     {`IP: ${peerHost || hosting.host || 'LAN Host'}`}
                   </Text>
                 </View>
-              </View>
-            </View>
-
-            {/* ============================================================= */}
-            {/* MONITORING STATS (Moved to Top: Waiting -> Answering -> Submitted -> Disconnected) */}
-            {/* ============================================================= */}
-            <View style={{ marginBottom: 16 }}>
-              <Text style={[styles.section, { color: themeColors.textMuted, marginTop: 4, marginBottom: 2 }]}>
-                Monitoring
-              </Text>
-              <Text style={[styles.sectionHint, { color: themeColors.textSecondary, marginBottom: 12 }]}>
-                {`${lobby.registeredCount || studentsList.length} Candidates registered · Live examinee integrity`}
-              </Text>
-              <View style={styles.statsGrid}>
-                <StatisticCard
-                  label="Waiting"
-                  value={lobby.waitingCount}
-                  hint="In Lobby"
-                  tone="warning"
-                  icon={<UserCheck size={18} color={themeColors.warning} />}
-                  compact
-                />
-                <StatisticCard
-                  label="Answering"
-                  value={lobby.takingCount}
-                  hint="Taking Exam"
-                  tone="default"
-                  icon={<Play size={18} color={themeColors.accent} />}
-                  compact
-                  delay={20}
-                />
-                <StatisticCard
-                  label="Submitted"
-                  value={lobby.finishedCount}
-                  hint="Completed"
-                  tone="success"
-                  icon={<CheckCircle2 size={18} color={themeColors.success} />}
-                  compact
-                  delay={40}
-                />
-                <StatisticCard
-                  label="Disconnected"
-                  value={`${lobby.disconnectedCount ?? 0}`}
-                  hint="Offline"
-                  tone={(lobby.disconnectedCount ?? 0) > 0 ? 'warning' : 'info'}
-                  icon={
-                    <ShieldAlert
-                      size={18}
-                      color={(lobby.disconnectedCount ?? 0) > 0 ? themeColors.warning : themeColors.textMuted}
-                    />
-                  }
-                  compact
-                  delay={60}
-                />
               </View>
             </View>
 
@@ -1278,284 +1283,434 @@ function ProctorLobbyContent() {
 
 
             {/* ============================================================= */}
-            {/* EXAMINEE MONITORING SECTION                                   */}
-            {/* Directly beneath the Access Pass section                      */}
+            {/* MONITORING SECTION (Directly below Access Pass / Room Code)   */}
+            {/* 4 Interactive status cards in a single row + Expandable List  */}
             {/* ============================================================= */}
-            <Text style={[styles.section, { color: themeColors.textMuted, marginTop: 18 }]}>
-              Examinee Monitoring
-            </Text>
-            <Text style={[styles.sectionHint, { color: themeColors.textSecondary, marginBottom: 12 }]}>
-              Real-time examinee tracking grouped by status. {attendedIds.size} of {studentsList.length} verified in room. Tap any category to expand or collapse.
-            </Text>
-
-            {/* CATEGORY 1: WAITING */}
-            <Pressable
-              style={[
-                styles.categoryAccordionHeader,
-                {
-                  backgroundColor: isDark ? '#1F1A12' : '#FFFBEB',
-                  borderColor: isDark ? '#78350F' : '#FDE68A',
-                },
-              ]}
-              onPress={() => setWaitingExpanded((v) => !v)}
-            >
-              <View style={styles.categoryLeftRow}>
-                <View style={[styles.categoryIconBadge, { backgroundColor: isDark ? '#451A03' : '#FEF3C7' }]}>
-                  <Clock size={16} color="#D97706" />
-                </View>
-                <Text style={[styles.categoryTitle, { color: isDark ? '#FDE68A' : '#92400E' }]}>
-                  Waiting to Start
-                </Text>
-                <View style={[styles.categoryCountBadge, { backgroundColor: isDark ? '#78350F' : '#FDE68A' }]}>
-                  <Text style={[styles.categoryCountText, { color: isDark ? '#FEF3C7' : '#78350F' }]}>
-                    {waitingStudents.length}
+            <View style={styles.monitoringSection}>
+              <View style={styles.monitoringHeaderRow}>
+                <View>
+                  <Text style={[styles.section, { color: themeColors.textMuted, marginTop: 14, marginBottom: 2 }]}>
+                    Monitoring
+                  </Text>
+                  <Text style={[styles.sectionHint, { color: themeColors.textSecondary, marginBottom: 10 }]}>
+                    {`${lobby.registeredCount || studentsList.length} Candidates registered · Tap a category to view examinees`}
                   </Text>
                 </View>
               </View>
-              {waitingExpanded ? (
-                <ChevronUp size={18} color={isDark ? '#FDE68A' : '#92400E'} />
-              ) : (
-                <ChevronDown size={18} color={isDark ? '#FDE68A' : '#92400E'} />
-              )}
-            </Pressable>
 
-            {waitingExpanded ? (
-              <View style={styles.categoryContentBlock}>
-                {waitingStudents.length === 0 ? (
-                  <Text style={[styles.emptyCategoryText, { color: themeColors.textMuted }]}>
-                    No applicants waiting in lobby.
-                  </Text>
-                ) : (
-                  waitingStudents.map((item, index) => (
-                    <LobbyStudentCard
-                      key={item.id}
-                      student={item}
-                      delay={Math.min(index * 40, 200)}
-                      isAttended={attendedIds.has(item.id)}
-                      onToggleAttendance={() => toggleAttendance(item.id)}
-                      onKick={() => handleRemoveStudent(item)}
-                      onPress={() => {
-                        setSelected(item);
-                        setReconnectCode(item.reconnectCode ?? null);
-                        setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
-                      }}
-                    />
-                  ))
-                )}
-              </View>
-            ) : null}
-
-            {/* CATEGORY 2: TAKING EXAM */}
-            <Pressable
-              style={[
-                styles.categoryAccordionHeader,
-                {
-                  backgroundColor: isDark ? '#111827' : '#EFF6FF',
-                  borderColor: isDark ? '#1E3A8A' : '#BFDBFE',
-                },
-              ]}
-              onPress={() => setTakingExpanded((v) => !v)}
-            >
-              <View style={styles.categoryLeftRow}>
-                <View style={[styles.categoryIconBadge, { backgroundColor: isDark ? '#1E3A8A' : '#DBEAFE' }]}>
-                  <Users size={16} color="#2563EB" />
-                </View>
-                <Text style={[styles.categoryTitle, { color: isDark ? '#93C5FD' : '#1E40AF' }]}>
-                  Answering / Taking Exam
-                </Text>
-                <View style={[styles.categoryCountBadge, { backgroundColor: isDark ? '#1E3A8A' : '#DBEAFE' }]}>
-                  <Text style={[styles.categoryCountText, { color: isDark ? '#DBEAFE' : '#1E40AF' }]}>
-                    {takingStudents.length}
-                  </Text>
-                </View>
-              </View>
-              {takingExpanded ? (
-                <ChevronUp size={18} color={isDark ? '#93C5FD' : '#1E40AF'} />
-              ) : (
-                <ChevronDown size={18} color={isDark ? '#93C5FD' : '#1E40AF'} />
-              )}
-            </Pressable>
-
-            {takingExpanded ? (
-              <View style={styles.categoryContentBlock}>
-                {takingStudents.length === 0 ? (
-                  <Text style={[styles.emptyCategoryText, { color: themeColors.textMuted }]}>
-                    No applicants currently answering.
-                  </Text>
-                ) : (
-                  takingStudents.map((item, index) => (
-                    <LobbyStudentCard
-                      key={item.id}
-                      student={item}
-                      delay={Math.min(index * 40, 200)}
-                      isAttended={attendedIds.has(item.id)}
-                      onToggleAttendance={() => toggleAttendance(item.id)}
-                      onKick={() => handleRemoveStudent(item)}
-                      onPress={() => {
-                        setSelected(item);
-                        setReconnectCode(item.reconnectCode ?? null);
-                        setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
-                      }}
-                    />
-                  ))
-                )}
-              </View>
-            ) : null}
-
-            {/* CATEGORY 3: SUBMITTED / COMPLETED */}
-            <Pressable
-              style={[
-                styles.categoryAccordionHeader,
-                {
-                  backgroundColor: isDark ? '#064E3B20' : '#F0FDF4',
-                  borderColor: isDark ? '#065F46' : '#BBF7D0',
-                },
-              ]}
-              onPress={() => setCompletedExpanded((v) => !v)}
-            >
-              <View style={styles.categoryLeftRow}>
-                <View style={[styles.categoryIconBadge, { backgroundColor: isDark ? '#065F46' : '#DCFCE7' }]}>
-                  <CheckCircle2 size={16} color="#16A34A" />
-                </View>
-                <Text style={[styles.categoryTitle, { color: isDark ? '#86EFAC' : '#166534' }]}>
-                  Submitted / Completed
-                </Text>
-                <View style={[styles.categoryCountBadge, { backgroundColor: isDark ? '#065F46' : '#DCFCE7' }]}>
-                  <Text style={[styles.categoryCountText, { color: isDark ? '#DCFCE7' : '#166534' }]}>
-                    {completedStudents.length}
-                  </Text>
-                </View>
-              </View>
-              {completedExpanded ? (
-                <ChevronUp size={18} color={isDark ? '#86EFAC' : '#166534'} />
-              ) : (
-                <ChevronDown size={18} color={isDark ? '#86EFAC' : '#166534'} />
-              )}
-            </Pressable>
-
-            {completedExpanded ? (
-              <View style={styles.categoryContentBlock}>
-                {completedStudents.length === 0 ? (
-                  <Text style={[styles.emptyCategoryText, { color: themeColors.textMuted }]}>
-                    No completed submissions yet.
-                  </Text>
-                ) : (
-                  completedStudents.map((item, index) => (
-                    <LobbyStudentCard
-                      key={item.id}
-                      student={item}
-                      delay={Math.min(index * 40, 200)}
-                      isAttended={attendedIds.has(item.id)}
-                      onToggleAttendance={() => toggleAttendance(item.id)}
-                      onKick={() => handleRemoveStudent(item)}
-                      onPress={() => {
-                        setSelected(item);
-                        setReconnectCode(item.reconnectCode ?? null);
-                        setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
-                      }}
-                    />
-                  ))
-                )}
-              </View>
-            ) : null}
-
-            {/* CATEGORY 4: DISCONNECTED (if any) */}
-            {disconnectedStudents.length > 0 ? (
-              <>
+              {/* 4 Status Buttons in a Single Row (Horizontally scrollable if cramped) */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.statusCardsRow}
+              >
+                {/* 1. WAITING */}
                 <Pressable
-                  style={[
-                    styles.categoryAccordionHeader,
+                  accessibilityRole="button"
+                  accessibilityLabel={`Waiting: ${waitingCount} candidates. Tap to view.`}
+                  onPress={() => setActiveStatusFilter((prev) => (prev === 'waiting' ? null : 'waiting'))}
+                  style={({ pressed }) => [
+                    styles.statusButton,
                     {
-                      backgroundColor: isDark ? '#450A0A20' : '#FEF2F2',
-                      borderColor: isDark ? '#7F1D1D' : '#FECACA',
+                      backgroundColor: activeStatusFilter === 'waiting'
+                        ? (isDark ? '#2D1B05' : '#FFFBEB')
+                        : (isDark ? '#18181B' : themeColors.card),
+                      borderColor: activeStatusFilter === 'waiting'
+                        ? (isDark ? '#F59E0B' : '#D97706')
+                        : (isDark ? '#2E2E2E' : themeColors.cardBorder),
+                      borderWidth: activeStatusFilter === 'waiting' ? 2 : 1,
+                      opacity: pressed ? 0.85 : 1,
+                      transform: [{ scale: pressed ? 0.96 : 1 }],
                     },
                   ]}
-                  onPress={() => setDisconnectedExpanded((v) => !v)}
                 >
-                  <View style={styles.categoryLeftRow}>
-                    <View style={[styles.categoryIconBadge, { backgroundColor: isDark ? '#7F1D1D' : '#FEE2E2' }]}>
-                      <AlertTriangle size={16} color="#DC2626" />
+                  <View style={styles.statusButtonTopRow}>
+                    <View style={[styles.statusButtonIconBadge, { backgroundColor: isDark ? '#451A03' : '#FEF3C7' }]}>
+                      <Clock size={15} color={isDark ? '#FBBF24' : '#D97706'} />
                     </View>
-                    <Text style={[styles.categoryTitle, { color: isDark ? '#FCA5A5' : '#991B1B' }]}>
-                      Disconnected / Lost Connection
-                    </Text>
-                    <View style={[styles.categoryCountBadge, { backgroundColor: isDark ? '#7F1D1D' : '#FEE2E2' }]}>
-                      <Text style={[styles.categoryCountText, { color: isDark ? '#FEE2E2' : '#991B1B' }]}>
-                        {disconnectedStudents.length}
-                      </Text>
+                    <View
+                      style={[
+                        styles.statusButtonChevronBadge,
+                        { backgroundColor: activeStatusFilter === 'waiting' ? (isDark ? '#451A03' : '#FEF3C7') : 'transparent' },
+                      ]}
+                    >
+                      {activeStatusFilter === 'waiting' ? (
+                        <ChevronUp size={13} color={isDark ? '#FBBF24' : '#D97706'} strokeWidth={2.5} />
+                      ) : (
+                        <ChevronDown size={13} color={themeColors.textMuted} strokeWidth={2} />
+                      )}
                     </View>
                   </View>
-                  {disconnectedExpanded ? (
-                    <ChevronUp size={18} color={isDark ? '#FCA5A5' : '#991B1B'} />
-                  ) : (
-                    <ChevronDown size={18} color={isDark ? '#FCA5A5' : '#991B1B'} />
-                  )}
+
+                  <Text
+                    style={[
+                      styles.statusButtonCount,
+                      { color: activeStatusFilter === 'waiting' ? (isDark ? '#FBBF24' : '#D97706') : themeColors.textPrimary },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {waitingCount}
+                  </Text>
+
+                  <Text
+                    style={[
+                      styles.statusButtonLabel,
+                      { color: activeStatusFilter === 'waiting' ? themeColors.textPrimary : themeColors.textSecondary },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    Waiting
+                  </Text>
+
+                  <View
+                    style={[
+                      styles.statusButtonAffordancePill,
+                      {
+                        backgroundColor: activeStatusFilter === 'waiting'
+                          ? (isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(217, 119, 6, 0.1)')
+                          : (isDark ? '#262626' : themeColors.cardMuted),
+                        borderColor: activeStatusFilter === 'waiting'
+                          ? (isDark ? '#F59E0B' : '#D97706')
+                          : themeColors.cardBorder,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.statusButtonAffordanceText,
+                        { color: activeStatusFilter === 'waiting' ? (isDark ? '#FBBF24' : '#D97706') : themeColors.textMuted },
+                      ]}
+                    >
+                      {activeStatusFilter === 'waiting' ? 'Hide ▲' : 'View ▼'}
+                    </Text>
+                  </View>
                 </Pressable>
 
-                {disconnectedExpanded ? (
-                  <View style={styles.categoryContentBlock}>
-                    {disconnectedStudents.map((item, index) => (
-                      <LobbyStudentCard
-                        key={item.id}
-                        student={item}
-                        delay={Math.min(index * 40, 200)}
-                        isAttended={attendedIds.has(item.id)}
-                        onToggleAttendance={() => toggleAttendance(item.id)}
-                        onKick={() => handleRemoveStudent(item)}
-                        onPress={() => {
-                          setSelected(item);
-                          setReconnectCode(item.reconnectCode ?? null);
-                          setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
-                        }}
-                      />
-                    ))}
+                {/* 2. ANSWERING */}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Answering: ${takingCount} candidates. Tap to view.`}
+                  onPress={() => setActiveStatusFilter((prev) => (prev === 'taking' ? null : 'taking'))}
+                  style={({ pressed }) => [
+                    styles.statusButton,
+                    {
+                      backgroundColor: activeStatusFilter === 'taking'
+                        ? (isDark ? '#0C1E3A' : '#EFF6FF')
+                        : (isDark ? '#18181B' : themeColors.card),
+                      borderColor: activeStatusFilter === 'taking'
+                        ? (isDark ? '#3B82F6' : '#2563EB')
+                        : (isDark ? '#2E2E2E' : themeColors.cardBorder),
+                      borderWidth: activeStatusFilter === 'taking' ? 2 : 1,
+                      opacity: pressed ? 0.85 : 1,
+                      transform: [{ scale: pressed ? 0.96 : 1 }],
+                    },
+                  ]}
+                >
+                  <View style={styles.statusButtonTopRow}>
+                    <View style={[styles.statusButtonIconBadge, { backgroundColor: isDark ? '#1E3A8A' : '#DBEAFE' }]}>
+                      <Play size={15} color={isDark ? '#60A5FA' : '#2563EB'} />
+                    </View>
+                    <View
+                      style={[
+                        styles.statusButtonChevronBadge,
+                        { backgroundColor: activeStatusFilter === 'taking' ? (isDark ? '#1E3A8A' : '#DBEAFE') : 'transparent' },
+                      ]}
+                    >
+                      {activeStatusFilter === 'taking' ? (
+                        <ChevronUp size={13} color={isDark ? '#60A5FA' : '#2563EB'} strokeWidth={2.5} />
+                      ) : (
+                        <ChevronDown size={13} color={themeColors.textMuted} strokeWidth={2} />
+                      )}
+                    </View>
                   </View>
-                ) : null}
-              </>
-            ) : null}
 
-            {studentsList.length === 0 ? (
-              <Text style={[styles.empty, { color: themeColors.textMuted }]}>
-                No students have joined yet. Share the QR Code or access code.
-              </Text>
-            ) : null}
+                  <Text
+                    style={[
+                      styles.statusButtonCount,
+                      { color: activeStatusFilter === 'taking' ? (isDark ? '#60A5FA' : '#2563EB') : themeColors.textPrimary },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {takingCount}
+                  </Text>
 
-            <Button
-              title={
-                showHistory
-                  ? 'Hide connection history'
-                  : `Connection history (${notifications.length})`
-              }
-              variant="ghost"
-              fullWidth
-              onPress={() => setShowHistory((v) => !v)}
-              style={{ marginTop: 12 }}
-            />
-            {showHistory ? (
-              <Card>
-                <Text style={[styles.historyTitle, { color: themeColors.textPrimary }]}>Live connection log</Text>
-                {notifications.length === 0 ? (
-                  <Text style={[styles.historyEmpty, { color: themeColors.textMuted }]}>No connection events yet.</Text>
-                ) : (
-                  notifications.slice(0, 12).map((n) => (
-                    <View key={n.id} style={[styles.historyRow, { borderBottomColor: themeColors.cardBorder }]}>
-                      <Text
-                        style={[
-                          styles.historyKind,
-                          n.kind === 'disconnect' ? styles.historyDisconnect : null,
-                        ]}
-                      >
-                        {n.kind === 'connect' ? 'Connected' : 'Left'}
-                      </Text>
+                  <Text
+                    style={[
+                      styles.statusButtonLabel,
+                      { color: activeStatusFilter === 'taking' ? themeColors.textPrimary : themeColors.textSecondary },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    Answering
+                  </Text>
+
+                  <View
+                    style={[
+                      styles.statusButtonAffordancePill,
+                      {
+                        backgroundColor: activeStatusFilter === 'taking'
+                          ? (isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(37, 99, 235, 0.1)')
+                          : (isDark ? '#262626' : themeColors.cardMuted),
+                        borderColor: activeStatusFilter === 'taking'
+                          ? (isDark ? '#3B82F6' : '#2563EB')
+                          : themeColors.cardBorder,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.statusButtonAffordanceText,
+                        { color: activeStatusFilter === 'taking' ? (isDark ? '#60A5FA' : '#2563EB') : themeColors.textMuted },
+                      ]}
+                    >
+                      {activeStatusFilter === 'taking' ? 'Hide ▲' : 'View ▼'}
+                    </Text>
+                  </View>
+                </Pressable>
+
+                {/* 3. SUBMITTED */}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Submitted: ${finishedCount} candidates. Tap to view.`}
+                  onPress={() => setActiveStatusFilter((prev) => (prev === 'submitted' ? null : 'submitted'))}
+                  style={({ pressed }) => [
+                    styles.statusButton,
+                    {
+                      backgroundColor: activeStatusFilter === 'submitted'
+                        ? (isDark ? '#0B2316' : '#F0FDF4')
+                        : (isDark ? '#18181B' : themeColors.card),
+                      borderColor: activeStatusFilter === 'submitted'
+                        ? (isDark ? '#22C55E' : '#16A34A')
+                        : (isDark ? '#2E2E2E' : themeColors.cardBorder),
+                      borderWidth: activeStatusFilter === 'submitted' ? 2 : 1,
+                      opacity: pressed ? 0.85 : 1,
+                      transform: [{ scale: pressed ? 0.96 : 1 }],
+                    },
+                  ]}
+                >
+                  <View style={styles.statusButtonTopRow}>
+                    <View style={[styles.statusButtonIconBadge, { backgroundColor: isDark ? '#065F46' : '#DCFCE7' }]}>
+                      <CheckCircle2 size={15} color={isDark ? '#4ADE80' : '#16A34A'} />
+                    </View>
+                    <View
+                      style={[
+                        styles.statusButtonChevronBadge,
+                        { backgroundColor: activeStatusFilter === 'submitted' ? (isDark ? '#065F46' : '#DCFCE7') : 'transparent' },
+                      ]}
+                    >
+                      {activeStatusFilter === 'submitted' ? (
+                        <ChevronUp size={13} color={isDark ? '#4ADE80' : '#16A34A'} strokeWidth={2.5} />
+                      ) : (
+                        <ChevronDown size={13} color={themeColors.textMuted} strokeWidth={2} />
+                      )}
+                    </View>
+                  </View>
+
+                  <Text
+                    style={[
+                      styles.statusButtonCount,
+                      { color: activeStatusFilter === 'submitted' ? (isDark ? '#4ADE80' : '#16A34A') : themeColors.textPrimary },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {finishedCount}
+                  </Text>
+
+                  <Text
+                    style={[
+                      styles.statusButtonLabel,
+                      { color: activeStatusFilter === 'submitted' ? themeColors.textPrimary : themeColors.textSecondary },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    Submitted
+                  </Text>
+
+                  <View
+                    style={[
+                      styles.statusButtonAffordancePill,
+                      {
+                        backgroundColor: activeStatusFilter === 'submitted'
+                          ? (isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(22, 163, 74, 0.1)')
+                          : (isDark ? '#262626' : themeColors.cardMuted),
+                        borderColor: activeStatusFilter === 'submitted'
+                          ? (isDark ? '#22C55E' : '#16A34A')
+                          : themeColors.cardBorder,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.statusButtonAffordanceText,
+                        { color: activeStatusFilter === 'submitted' ? (isDark ? '#4ADE80' : '#16A34A') : themeColors.textMuted },
+                      ]}
+                    >
+                      {activeStatusFilter === 'submitted' ? 'Hide ▲' : 'View ▼'}
+                    </Text>
+                  </View>
+                </Pressable>
+
+                {/* 4. DISCONNECTED */}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Disconnected: ${disconnectedCount} candidates. Tap to view.`}
+                  onPress={() => setActiveStatusFilter((prev) => (prev === 'disconnected' ? null : 'disconnected'))}
+                  style={({ pressed }) => [
+                    styles.statusButton,
+                    {
+                      backgroundColor: activeStatusFilter === 'disconnected'
+                        ? (isDark ? '#2D1212' : '#FEF2F2')
+                        : (isDark ? '#18181B' : themeColors.card),
+                      borderColor: activeStatusFilter === 'disconnected'
+                        ? (isDark ? '#EF4444' : '#DC2626')
+                        : (isDark ? '#2E2E2E' : themeColors.cardBorder),
+                      borderWidth: activeStatusFilter === 'disconnected' ? 2 : 1,
+                      opacity: pressed ? 0.85 : 1,
+                      transform: [{ scale: pressed ? 0.96 : 1 }],
+                    },
+                  ]}
+                >
+                  <View style={styles.statusButtonTopRow}>
+                    <View style={[styles.statusButtonIconBadge, { backgroundColor: isDark ? '#7F1D1D' : '#FEE2E2' }]}>
+                      <ShieldAlert size={15} color={isDark ? '#F87171' : '#DC2626'} />
+                    </View>
+                    <View
+                      style={[
+                        styles.statusButtonChevronBadge,
+                        { backgroundColor: activeStatusFilter === 'disconnected' ? (isDark ? '#7F1D1D' : '#FEE2E2') : 'transparent' },
+                      ]}
+                    >
+                      {activeStatusFilter === 'disconnected' ? (
+                        <ChevronUp size={13} color={isDark ? '#F87171' : '#DC2626'} strokeWidth={2.5} />
+                      ) : (
+                        <ChevronDown size={13} color={themeColors.textMuted} strokeWidth={2} />
+                      )}
+                    </View>
+                  </View>
+
+                  <Text
+                    style={[
+                      styles.statusButtonCount,
+                      { color: activeStatusFilter === 'disconnected' ? (isDark ? '#F87171' : '#DC2626') : themeColors.textPrimary },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {disconnectedCount}
+                  </Text>
+
+                  <Text
+                    style={[
+                      styles.statusButtonLabel,
+                      { color: activeStatusFilter === 'disconnected' ? themeColors.textPrimary : themeColors.textSecondary },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    Disconnected
+                  </Text>
+
+                  <View
+                    style={[
+                      styles.statusButtonAffordancePill,
+                      {
+                        backgroundColor: activeStatusFilter === 'disconnected'
+                          ? (isDark ? 'rgba(239, 68, 68, 0.15)' : 'rgba(220, 38, 38, 0.1)')
+                          : (isDark ? '#262626' : themeColors.cardMuted),
+                        borderColor: activeStatusFilter === 'disconnected'
+                          ? (isDark ? '#EF4444' : '#DC2626')
+                          : themeColors.cardBorder,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.statusButtonAffordanceText,
+                        { color: activeStatusFilter === 'disconnected' ? (isDark ? '#F87171' : '#DC2626') : themeColors.textMuted },
+                      ]}
+                    >
+                      {activeStatusFilter === 'disconnected' ? 'Hide ▲' : 'View ▼'}
+                    </Text>
+                  </View>
+                </Pressable>
+              </ScrollView>
+
+              {/* Expandable Per-Status Student List Panel */}
+              {activeStatusFilter && currentCategory ? (
+                <View
+                  style={[
+                    styles.categoryPanel,
+                    {
+                      backgroundColor: isDark ? '#141414' : themeColors.card,
+                      borderColor: isDark ? '#2E2E2E' : themeColors.cardBorder,
+                    },
+                  ]}
+                >
+                  <View style={styles.categoryPanelHeader}>
+                    <View style={styles.categoryPanelHeaderLeft}>
+                      <View style={[styles.categoryPanelIconBadge, { backgroundColor: currentCategory.badgeBg }]}>
+                        {currentCategory.icon}
+                      </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={[styles.historyBody, { color: themeColors.textPrimary }]}>{n.body}</Text>
-                        <Text style={[styles.historyTime, { color: themeColors.textMuted }]}>{formatTime(n.at)}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={[styles.categoryPanelTitle, { color: themeColors.textPrimary }]}>
+                            {currentCategory.title}
+                          </Text>
+                          <View style={[styles.categoryPanelCountBadge, { backgroundColor: currentCategory.countBadgeBg }]}>
+                            <Text style={[styles.categoryPanelCountText, { color: currentCategory.countBadgeText }]}>
+                              {currentCategory.students.length}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={[styles.categoryPanelSubtitle, { color: themeColors.textSecondary }]}>
+                          {currentCategory.subtitle}
+                        </Text>
                       </View>
                     </View>
-                  ))
-                )}
-              </Card>
-            ) : null}
+                    <Pressable
+                      onPress={() => setActiveStatusFilter(null)}
+                      style={[styles.categoryPanelCloseBtn, { backgroundColor: isDark ? '#262626' : themeColors.cardMuted }]}
+                      hitSlop={8}
+                      accessibilityLabel="Close student list"
+                    >
+                      <X size={16} color={themeColors.textSecondary} />
+                    </Pressable>
+                  </View>
+
+                  <View style={styles.categoryPanelList}>
+                    {currentCategory.students.length === 0 ? (
+                      <View style={styles.emptyCategoryBlock}>
+                        <Text style={[styles.emptyCategoryText, { color: themeColors.textMuted }]}>
+                          {currentCategory.emptyMessage}
+                        </Text>
+                      </View>
+                    ) : (
+                      currentCategory.students.map((item, index) => (
+                        <LobbyStudentCard
+                          key={item.id}
+                          student={item}
+                          delay={Math.min(index * 30, 150)}
+                          isAttended={attendedIds.has(item.id)}
+                          onToggleAttendance={() => toggleAttendance(item.id)}
+                          onKick={() => handleRemoveStudent(item)}
+                          onPress={() => {
+                            setSelected(item);
+                            setReconnectCode(item.reconnectCode ?? null);
+                            setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
+                          }}
+                        />
+                      ))
+                    )}
+                  </View>
+                </View>
+              ) : null}
+
+              {studentsList.length === 0 && !activeStatusFilter ? (
+                <View style={styles.emptyRosterCard}>
+                  <Text style={[styles.empty, { color: themeColors.textMuted }]}>
+                    No students have joined yet. Share the QR Code or access code.
+                  </Text>
+                </View>
+              ) : null}
+            </View>
           </View>
         </ScrollView>
 
@@ -2152,6 +2307,7 @@ function ProctorLobbyContent() {
  * shows a visible on-screen message instead of a blank white screen.
  */
 export default function ProctorLobbyScreen() {
+  const { useRouter } = require('expo-router');
   const router = useRouter();
   return (
     <ErrorBoundary
@@ -2917,50 +3073,150 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  categoryAccordionHeader: {
+  // NEW MONITORING SECTION STYLES
+  monitoringSection: {
+    marginTop: 18,
+    marginBottom: 16,
+  },
+  monitoringHeaderRow: {
+    marginBottom: 4,
+  },
+  statusCardsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+    minWidth: '100%',
+  },
+  statusButton: {
+    flex: 1,
+    minWidth: 84,
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  statusButtonTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    borderWidth: 1,
-    marginTop: 8,
-    marginBottom: 6,
+    width: '100%',
   },
-  categoryLeftRow: {
+  statusButtonIconBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statusButtonChevronBadge: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statusButtonCount: {
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  statusButtonLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  statusButtonAffordancePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    marginTop: 2,
+    width: '100%',
+  },
+  statusButtonAffordanceText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  categoryPanel: {
+    marginTop: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 14,
+    gap: 12,
+  },
+  categoryPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(150,150,150,0.15)',
+  },
+  categoryPanelHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    flex: 1,
   },
-  categoryIconBadge: {
+  categoryPanelIconBadge: {
     width: 32,
     height: 32,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  categoryTitle: {
+  categoryPanelTitle: {
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: '800',
   },
-  categoryCountBadge: {
+  categoryPanelSubtitle: {
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  categoryPanelCountBadge: {
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 10,
   },
-  categoryCountText: {
-    fontSize: 12,
-    fontWeight: '700',
+  categoryPanelCountText: {
+    fontSize: 11,
+    fontWeight: '800',
   },
-  categoryContentBlock: {
+  categoryPanelCloseBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  categoryPanelList: {
     gap: 8,
-    marginBottom: 8,
+  },
+  emptyCategoryBlock: {
+    paddingVertical: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   emptyCategoryText: {
     fontSize: 13,
-    fontStyle: 'italic',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  emptyRosterCard: {
+    paddingVertical: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
