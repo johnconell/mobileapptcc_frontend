@@ -1,20 +1,28 @@
-import React, { memo, useCallback } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Flag } from 'lucide-react-native';
+import React, { memo, useCallback, useEffect, useState } from 'react';
+import { Pressable, Text, View, StyleSheet } from 'react-native';
+import { Bookmark, BookmarkCheck } from 'lucide-react-native';
 import type { ChoiceKey, Question } from '@/shared/types';
 import { choiceKeys } from '@/shared/utils';
-import { OptionRow } from './OptionRow';
-import { useTheme } from '@/shared/contexts/ThemeContext';
+import { examProcess } from '@/shared/theme/examProcess';
+import { examUi, examUiPalette } from '@/shared/theme/examUi';
 
-export interface QuestionCardProps {
+export type ExamAppearance = {
+  fontScale: number;
+  darkMode: boolean;
+};
+
+interface QuestionCardProps {
   question: Question;
-  questionNumber: number;
-  totalQuestions: number;
+  questionIndex?: number;
+  totalQuestions?: number;
   selectedAnswer: ChoiceKey | null;
   onSelect: (choice: ChoiceKey) => void;
-  isFlagged: boolean;
-  onToggleFlag: () => void;
-  disabled?: boolean;
+  isFlagged?: boolean;
+  onToggleFlag?: () => void;
+  secure?: boolean;
+  appearance?: ExamAppearance;
+  /** Continuous scroll card layout */
+  readerMode?: boolean;
 }
 
 function cleanChoiceText(rawText: string): string {
@@ -33,7 +41,7 @@ function cleanChoiceText(rawText: string): string {
   return trimmed;
 }
 
-function getChoiceLabel(question: Question, key: ChoiceKey): string {
+function choiceLabel(question: Question, key: ChoiceKey): string {
   const choices = question.choices as unknown;
   if (!choices) return '';
 
@@ -59,20 +67,37 @@ function getChoiceLabel(question: Question, key: ChoiceKey): string {
 
 function QuestionCardComponent({
   question,
-  questionNumber,
+  questionIndex,
   totalQuestions,
   selectedAnswer,
   onSelect,
-  isFlagged,
+  isFlagged = false,
   onToggleFlag,
-  disabled = false,
+  secure = false,
+  appearance,
 }: QuestionCardProps) {
-  const { theme, fontScale } = useTheme();
+  const fontScale = appearance?.fontScale ?? 1;
+  const dark = appearance?.darkMode ?? false;
   const keys = choiceKeys();
+  const p = examUiPalette(dark);
+  const qNum =
+    Number(question.number) ||
+    (questionIndex !== undefined ? questionIndex + 1 : 1);
   const category = (question.category || question.subjectId || 'General').trim();
 
-  const handleSelect = useCallback(
+  // Optimistic local state: UI highlights instantly on touch (0ms delay)
+  const [localSelection, setLocalSelection] = useState<ChoiceKey | null>(selectedAnswer);
+
+  // Sync when parent prop changes (e.g., initial restore or navigation)
+  useEffect(() => {
+    setLocalSelection(selectedAnswer);
+  }, [selectedAnswer]);
+
+  const handlePress = useCallback(
     (key: ChoiceKey) => {
+      // 1. Instant local visual update (zero waiting)
+      setLocalSelection(key);
+      // 2. Notify parent / store asynchronously
       onSelect(key);
     },
     [onSelect],
@@ -83,176 +108,292 @@ function QuestionCardComponent({
       style={[
         styles.card,
         {
-          backgroundColor: theme.surface,
-          borderColor: theme.border,
+          backgroundColor: p.card,
+          shadowColor: p.shadow,
+          borderColor: isFlagged ? (dark ? '#D97706' : '#F59E0B') : p.border,
+          borderWidth: isFlagged ? 1.5 : 1,
         },
       ]}
     >
-      {/* Header: Question N of Total on left, Category badge on right */}
-      <View style={styles.header}>
-        <Text
-          style={[
-            styles.questionNumberText,
-            {
-              color: theme.accentText,
-            },
-          ]}
-        >
-          {`Question ${questionNumber} of ${totalQuestions}`}
-        </Text>
-        <View
-          style={[
-            styles.badge,
-            {
-              backgroundColor: theme.badgeBg,
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.badgeText,
-              {
-                color: theme.badgeText,
-              },
-            ]}
-          >
+
+      {/* Header: Q. 1/9 on left, Category + Sure/Not Sure Flag on right */}
+      <View style={styles.cardHeader}>
+        <View style={styles.cardHeaderLeft}>
+          <Text style={[styles.qMeta, { color: p.muted, fontSize: 13 * fontScale }]}>
+            {`Q. ${qNum}${totalQuestions ? `/${totalQuestions}` : ''}`}
+          </Text>
+          <Text style={[styles.categoryMeta, { color: p.muted, fontSize: 13 * fontScale }]}>
             {category}
           </Text>
         </View>
+
+        {onToggleFlag ? (
+          <Pressable
+            style={[
+              styles.flagBtn,
+              isFlagged
+                ? {
+                    backgroundColor: dark ? '#451A03' : '#FEF3C7',
+                    borderColor: dark ? '#B45309' : '#F59E0B',
+                  }
+                : {
+                    backgroundColor: dark ? '#1E2235' : '#F1F5F9',
+                    borderColor: p.border,
+                  },
+            ]}
+            onPress={onToggleFlag}
+            accessibilityRole="button"
+            accessibilityLabel={isFlagged ? 'Marked as Not Sure. Tap to change.' : 'Marked as Sure. Tap to change.'}
+            hitSlop={6}
+          >
+            {isFlagged ? (
+              <>
+                <BookmarkCheck size={13 * fontScale} color={dark ? '#FBBF24' : '#D97706'} strokeWidth={2.4} />
+                <Text
+                  style={[
+                    styles.flagBtnText,
+                    {
+                      color: dark ? '#FBBF24' : '#B45309',
+                      fontSize: 12 * fontScale,
+                      fontFamily: examProcess.fontSemiBold,
+                    },
+                  ]}
+                >
+                  Not Sure
+                </Text>
+              </>
+            ) : (
+              <>
+                <Bookmark size={13 * fontScale} color={p.muted} strokeWidth={2} />
+                <Text
+                  style={[
+                    styles.flagBtnText,
+                    {
+                      color: p.muted,
+                      fontSize: 12 * fontScale,
+                      fontFamily: examProcess.fontMedium,
+                    },
+                  ]}
+                >
+                  Sure
+                </Text>
+              </>
+            )}
+          </Pressable>
+        ) : null}
       </View>
 
       {/* Question Prompt */}
       <Text
         style={[
-          styles.promptText,
+          styles.prompt,
           {
-            color: theme.text,
-            fontSize: 16 * fontScale,
-            lineHeight: 16 * fontScale * 1.45,
+            color: p.ink,
+            fontSize: 18 * fontScale,
+            lineHeight: 26 * fontScale,
+            userSelect: secure ? 'none' : 'auto',
           },
         ]}
+        selectable={!secure}
+        {...(secure ? ({ contextMenuHidden: true } as object) : null)}
       >
         {String(question.question ?? '')}
       </Text>
 
-      {/* 4 Full-width OptionRows */}
-      <View style={styles.optionsList}>
+      {/* Choices: Full-container highlighted stadium pills */}
+      <View style={styles.choices}>
         {keys.map((key) => {
-          const body = getChoiceLabel(question, key);
+          const isSelected = selectedAnswer === key;
+          const body = choiceLabel(question, key);
           if (!body) return null;
+
+          const containerBg = isSelected
+            ? dark ? '#282746' : '#F0EEFF'
+            : dark ? '#282D42' : '#ECEFF3';
+
+          const containerBorder = isSelected ? '#7C6CF6' : 'transparent';
+          const containerBorderWidth = isSelected ? 2 : 0;
+
+          const circleBg = isSelected
+            ? '#7C6CF6'
+            : dark ? '#1D2132' : '#FFFFFF';
+
+          const circleTextColor = isSelected
+            ? '#FFFFFF'
+            : dark ? '#94A3B8' : '#475569';
+
+          const textColor = isSelected
+            ? dark ? '#FFFFFF' : '#1E1B4B'
+            : dark ? '#CBD5E1' : '#1E293B';
+
+          const textFontFamily = isSelected
+            ? examProcess.fontSemiBold
+            : examProcess.fontMedium;
+
           return (
-            <OptionRow
+            <Pressable
               key={key}
-              optionKey={key}
-              text={body}
-              isSelected={selectedAnswer === key}
-              onSelect={handleSelect}
-              disabled={disabled}
-              fontScale={fontScale}
-              theme={theme}
-            />
+              accessibilityRole="radio"
+              accessibilityState={{ selected: isSelected }}
+              accessibilityLabel={`Option ${key}: ${body}`}
+              onPress={() => handlePress(key)}
+              onLongPress={secure ? () => undefined : undefined}
+              delayLongPress={secure ? 10_000 : undefined}
+            >
+              {({ pressed }) => (
+                <View
+                  style={[
+                    styles.choicePill,
+                    {
+                      backgroundColor: pressed
+                        ? dark ? '#352E5C' : '#E0E7FF'
+                        : containerBg,
+                      borderColor: containerBorder,
+                      borderWidth: containerBorderWidth,
+                    },
+                  ]}
+                >
+                  {/* Badge Circle */}
+                  <View style={[styles.choiceCircle, { backgroundColor: circleBg }]}>
+                    <Text
+                      style={[
+                        styles.choiceCircleText,
+                        {
+                          color: circleTextColor,
+                          fontSize: 15 * fontScale,
+                          fontFamily: examProcess.fontSemiBold,
+                          fontWeight: '700',
+                        },
+                      ]}
+                    >
+                      {key}
+                    </Text>
+                  </View>
+
+                  {/* Choice Text */}
+                  <Text
+                    style={[
+                      styles.choiceText,
+                      {
+                        color: textColor,
+                        fontFamily: textFontFamily,
+                        fontSize: 16 * fontScale,
+                        lineHeight: 22 * fontScale,
+                        fontWeight: isSelected ? '600' : '500',
+                        userSelect: secure ? 'none' : 'auto',
+                      },
+                    ]}
+                    selectable={!secure}
+                    {...(secure ? ({ contextMenuHidden: true } as object) : null)}
+                  >
+                    {body}
+                  </Text>
+                </View>
+              )}
+            </Pressable>
           );
         })}
       </View>
-
-      {/* Full-width 44px Mark as Not Sure Button */}
-      <Pressable
-        onPress={onToggleFlag}
-        disabled={disabled}
-        accessibilityRole="button"
-        accessibilityLabel={isFlagged ? 'Marked as not sure. Tap to unmark.' : 'Mark as not sure'}
-        style={({ pressed }) => [
-          styles.notSureBtn,
-          {
-            backgroundColor: isFlagged ? theme.notSure.button : theme.surfaceAlt,
-            borderColor: isFlagged ? theme.notSure.border : theme.border,
-            opacity: pressed ? 0.85 : 1,
-          },
-        ]}
-      >
-        <Flag
-          size={18}
-          color={isFlagged ? theme.notSure.text : theme.accentText}
-          strokeWidth={2}
-          fill={isFlagged ? theme.notSure.dot : 'transparent'}
-        />
-        <Text
-          style={[
-            styles.notSureBtnText,
-            {
-              color: isFlagged ? theme.notSure.text : theme.accentText,
-            },
-          ]}
-        >
-          {isFlagged ? 'Marked as not sure' : 'Mark as not sure'}
-        </Text>
-      </Pressable>
     </View>
   );
 }
 
-function areQuestionCardPropsEqual(prev: QuestionCardProps, next: QuestionCardProps) {
+function arePropsEqual(prevProps: QuestionCardProps, nextProps: QuestionCardProps) {
   return (
-    prev.question.id === next.question.id &&
-    prev.questionNumber === next.questionNumber &&
-    prev.totalQuestions === next.totalQuestions &&
-    prev.selectedAnswer === next.selectedAnswer &&
-    prev.isFlagged === next.isFlagged &&
-    prev.disabled === next.disabled &&
-    prev.onSelect === next.onSelect &&
-    prev.onToggleFlag === next.onToggleFlag
+    prevProps.question.id === nextProps.question.id &&
+    prevProps.selectedAnswer === nextProps.selectedAnswer &&
+    prevProps.isFlagged === nextProps.isFlagged &&
+    prevProps.appearance?.darkMode === nextProps.appearance?.darkMode &&
+    prevProps.appearance?.fontScale === nextProps.appearance?.fontScale &&
+    prevProps.totalQuestions === nextProps.totalQuestions &&
+    prevProps.questionIndex === nextProps.questionIndex &&
+    prevProps.secure === nextProps.secure &&
+    prevProps.readerMode === nextProps.readerMode
   );
 }
 
-export const QuestionCard = memo(QuestionCardComponent, areQuestionCardPropsEqual);
+export const QuestionCard = memo(QuestionCardComponent, arePropsEqual);
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 16,
-    borderWidth: 0.5,
-    padding: 14,
-    marginBottom: 12,
+    borderRadius: 24,
+    padding: 22,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 1,
+    shadowRadius: 14,
+    elevation: 3,
+    position: 'relative',
+    overflow: 'hidden',
   },
-  header: {
+  cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 10,
+    zIndex: 1,
   },
-  questionNumberText: {
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  badge: {
-    borderRadius: 10,
-    paddingVertical: 3,
-    paddingHorizontal: 10,
-  },
-  badgeText: {
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  promptText: {
-    marginBottom: 12,
-    fontWeight: '400',
-  },
-  optionsList: {
-    flexDirection: 'column',
-    gap: 8,
-  },
-  notSureBtn: {
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 0.5,
-    marginTop: 12,
+  cardHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     gap: 8,
-    paddingHorizontal: 14,
+    flexWrap: 'wrap',
+    flex: 1,
+    marginRight: 8,
   },
-  notSureBtnText: {
-    fontSize: 14,
-    fontWeight: '500',
+  flagBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  flagBtnText: {
+    letterSpacing: 0.2,
+  },
+  qMeta: {
+    fontFamily: examProcess.fontSemiBold,
+    letterSpacing: 0.3,
+  },
+  categoryMeta: {
+    fontFamily: examProcess.fontSemiBold,
+    letterSpacing: 0.3,
+  },
+  prompt: {
+    fontFamily: examProcess.fontSemiBold,
+    fontWeight: '700',
+    marginBottom: 18,
+    zIndex: 1,
+  },
+  choices: {
+    gap: 12,
+    zIndex: 1,
+  },
+  choicePill: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 9999,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    minHeight: 56,
+  },
+  choiceCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  choiceCircleText: {
+    includeFontPadding: false,
+    textAlign: 'center',
+  },
+  choiceText: {
+    flex: 1,
+    marginLeft: 14,
+    marginRight: 8,
   },
 });

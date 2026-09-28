@@ -1,0 +1,303 @@
+<svg width="1200" height="1600" viewBox="0 0 1200 1600" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="1600" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0D0D0D"/>
+      <stop offset="1" stop-color="#101214"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#1A1A1A"/>
+      <stop offset="1" stop-color="#121212"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="1600" fill="url(#bg)"/>
+
+  <!-- Top navigation -->
+  <rect x="0" y="0" width="1200" height="106" fill="#0D0D0D"/>
+  <circle cx="67" cy="53" r="22" fill="#1E1E1E" stroke="#333333" stroke-width="1.5"/>
+  <path d="M80 53L62 53M62 53L69 46M62 53L69 60" stroke="#F1F5F9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="142" cy="53" r="20" fill="#1E1E1E" stroke="#333333" stroke-width="1.5"/>
+  <text x="142" y="60" text-anchor="middle" font-size="12" font-weight="800" fill="#FFFFFF" font-family="Arial, sans-serif">P1</text>
+
+  <text x="600" y="44" text-anchor="middle" fill="#FFFFFF" font-size="16" font-weight="800" font-family="Arial, sans-serif">Entrance Examination</text>
+  <text x="600" y="67" text-anchor="middle" fill="#A1A1AA" font-size="11" font-weight="500" font-family="Arial, sans-serif">Room 101 · Batch 1 · 36 Candidates</text>
+
+  <circle cx="1128" cy="53" r="22" fill="#1E1E1E" stroke="#333333" stroke-width="1.5"/>
+  <path d="M1112 47H1144M1112 59H1144M1123 47V59M1133 47V59" stroke="#7A1F2B" stroke-width="1.5" stroke-linecap="round"/>
+
+  <!-- Main content -->
+  <g filter="url(#shadow)">
+    <!-- Current exam card -->
+    <rect x="40" y="122" width="1120" height="222" rx="22" fill="#1A1A1A" stroke="#FECACA" stroke-width="1.1"/>
+    <rect x="63" y="146" width="214" height="32" rx="16" fill="#2A1414" stroke="#7A1F2B" stroke-opacity="0.4"/>
+    <text x="170" y="166" text-anchor="middle" fill="#E8342A" font-size="11" font-weight="800" letter-spacing="0.6" font-family="Arial, sans-serif">CURRENT EXAMINATION SCHEDULE</text>
+
+    <text x="63" y="224" fill="#FFFFFF" font-size="36" font-weight="800" font-family="Arial, sans-serif">Mobile Entrance Examination</text>
+
+    <g>
+      <rect x="63" y="246" width="190" height="38" rx="12" fill="#1D1D1D" stroke="#333333"/>
+      <text x="85" y="272" fill="#D4D4D8" font-size="12" font-weight="700" font-family="Arial, sans-serif">📅 2026-09-28</text>
+    </g>
+    <g>
+      <rect x="265" y="246" width="172" height="38" rx="12" fill="#1D1D1D" stroke="#333333"/>
+      <text x="286" y="272" fill="#D4D4D8" font-size="12" font-weight="700" font-family="Arial, sans-serif">⏰ 08:30 AM</text>
+    </g>
+    <g>
+      <rect x="449" y="246" width="228" height="38" rx="12" fill="#1D1D1D" stroke="#333333"/>
+      <text x="470" y="272" fill="#D4D4D8" font-size="12" font-weight="700" font-family="Arial, sans-serif">📍 Room 101 · Batch 1</text>
+    </g>
+    <g>
+      <rect x="689" y="246" width="180" height="38" rx="12" fill="#1D1D1D" stroke="#333333"/>
+      <text x="710" y="272" fill="#D4D4D8" font-size="12" font-weight="700" font-family="Arial, sans-serif">👥 36 Candidates</text>
+    </g>
+    <g>
+      <rect x="881" y="246" width="240" height="38" rx="12" fill="#1D1D1D" stroke="#333333"/>
+      <text x="903" y="272" fill="#D4D4D8" font-size="12" font-weight="700" font-family="Arial, sans-serif">📡 IP: 192.168.1.12</text>
+    </g>
+  </g>
+
+  <!-- Access pass card -->
+  <rect x="40" y="380" width="1120" height="468" rx="26" fill="#1A1A1A" stroke="#2B2B2B"/>
+  <rect x="64" y="410" width="172" height="30" rx="15" fill="#2A1414" stroke="#7A1F2B" stroke-opacity="0.5"/>
+  <text x="150" y="430" text-anchor="middle" fill="#E8342A" font-size="11" font-weight="800" letter-spacing="0.7" font-family="Arial, sans-serif">EXAMINATION ACCESS PASS</text>
+
+  <rect x="868" y="404" width="248" height="34" rx="17" fill="#142918" stroke="#22C55E" stroke-opacity="0.3"/>
+  <circle cx="894" cy="421" r="6" fill="#22C55E"/>
+  <text x="912" y="427" fill="#4ADE80" font-size="11" font-weight="800" letter-spacing="0.5" font-family="Arial, sans-serif">LAN BROADCAST ACTIVE</text>
+
+  <!-- QR code area -->
+  <rect x="100" y="472" width="332" height="252" rx="18" fill="#FFFFFF" stroke="#333333" stroke-width="1"/>
+  <g transform="translate(122 494)" fill="#111111">
+    <rect x="0" y="0" width="18" height="18"/>
+    <rect x="18" y="0" width="18" height="18"/>
+    <rect x="36" y="0" width="18" height="18"/>
+    <rect x="54" y="0" width="18" height="18"/>
+    <rect x="72" y="0" width="18" height="18"/>
+    <rect x="90" y="0" width="18" height="18"/>
+    <rect x="126" y="0" width="18" height="18"/>
+    <rect x="162" y="0" width="18" height="18"/>
+    <rect x="180" y="0" width="18" height="18"/>
+    <rect x="216" y="0" width="18" height="18"/>
+    <rect x="234" y="0" width="18" height="18"/>
+    <rect x="252" y="0" width="18" height="18"/>
+    <rect x="270" y="0" width="18" height="18"/>
+    <rect x="288" y="0" width="18" height="18"/>
+    <rect x="0" y="18" width="18" height="18"/>
+    <rect x="54" y="18" width="18" height="18"/>
+    <rect x="90" y="18" width="18" height="18"/>
+    <rect x="108" y="18" width="18" height="18"/>
+    <rect x="144" y="18" width="18" height="18"/>
+    <rect x="180" y="18" width="18" height="18"/>
+    <rect x="198" y="18" width="18" height="18"/>
+    <rect x="234" y="18" width="18" height="18"/>
+    <rect x="288" y="18" width="18" height="18"/>
+    <rect x="0" y="36" width="18" height="18"/>
+    <rect x="18" y="36" width="18" height="18"/>
+    <rect x="36" y="36" width="18" height="18"/>
+    <rect x="54" y="36" width="18" height="18"/>
+    <rect x="90" y="36" width="18" height="18"/>
+    <rect x="126" y="36" width="18" height="18"/>
+    <rect x="144" y="36" width="18" height="18"/>
+    <rect x="162" y="36" width="18" height="18"/>
+    <rect x="180" y="36" width="18" height="18"/>
+    <rect x="216" y="36" width="18" height="18"/>
+    <rect x="234" y="36" width="18" height="18"/>
+    <rect x="252" y="36" width="18" height="18"/>
+    <rect x="270" y="36" width="18" height="18"/>
+    <rect x="288" y="36" width="18" height="18"/>
+    <rect x="0" y="54" width="18" height="18"/>
+    <rect x="36" y="54" width="18" height="18"/>
+    <rect x="72" y="54" width="18" height="18"/>
+    <rect x="108" y="54" width="18" height="18"/>
+    <rect x="126" y="54" width="18" height="18"/>
+    <rect x="162" y="54" width="18" height="18"/>
+    <rect x="198" y="54" width="18" height="18"/>
+    <rect x="216" y="54" width="18" height="18"/>
+    <rect x="252" y="54" width="18" height="18"/>
+    <rect x="288" y="54" width="18" height="18"/>
+    <rect x="0" y="72" width="18" height="18"/>
+    <rect x="18" y="72" width="18" height="18"/>
+    <rect x="36" y="72" width="18" height="18"/>
+    <rect x="54" y="72" width="18" height="18"/>
+    <rect x="72" y="72" width="18" height="18"/>
+    <rect x="90" y="72" width="18" height="18"/>
+    <rect x="108" y="72" width="18" height="18"/>
+    <rect x="126" y="72" width="18" height="18"/>
+    <rect x="180" y="72" width="18" height="18"/>
+    <rect x="216" y="72" width="18" height="18"/>
+    <rect x="234" y="72" width="18" height="18"/>
+    <rect x="252" y="72" width="18" height="18"/>
+    <rect x="270" y="72" width="18" height="18"/>
+    <rect x="288" y="72" width="18" height="18"/>
+    <rect x="0" y="90" width="18" height="18"/>
+    <rect x="36" y="90" width="18" height="18"/>
+    <rect x="72" y="90" width="18" height="18"/>
+    <rect x="90" y="90" width="18" height="18"/>
+    <rect x="126" y="90" width="18" height="18"/>
+    <rect x="180" y="90" width="18" height="18"/>
+    <rect x="216" y="90" width="18" height="18"/>
+    <rect x="234" y="90" width="18" height="18"/>
+    <rect x="288" y="90" width="18" height="18"/>
+    <rect x="0" y="108" width="18" height="18"/>
+    <rect x="18" y="108" width="18" height="18"/>
+    <rect x="36" y="108" width="18" height="18"/>
+    <rect x="54" y="108" width="18" height="18"/>
+    <rect x="72" y="108" width="18" height="18"/>
+    <rect x="126" y="108" width="18" height="18"/>
+    <rect x="180" y="108" width="18" height="18"/>
+    <rect x="216" y="108" width="18" height="18"/>
+    <rect x="234" y="108" width="18" height="18"/>
+    <rect x="252" y="108" width="18" height="18"/>
+    <rect x="270" y="108" width="18" height="18"/>
+    <rect x="0" y="126" width="18" height="18"/>
+    <rect x="18" y="126" width="18" height="18"/>
+    <rect x="54" y="126" width="18" height="18"/>
+    <rect x="72" y="126" width="18" height="18"/>
+    <rect x="90" y="126" width="18" height="18"/>
+    <rect x="126" y="126" width="18" height="18"/>
+    <rect x="144" y="126" width="18" height="18"/>
+    <rect x="180" y="126" width="18" height="18"/>
+    <rect x="216" y="126" width="18" height="18"/>
+    <rect x="252" y="126" width="18" height="18"/>
+    <rect x="270" y="126" width="18" height="18"/>
+    <rect x="288" y="126" width="18" height="18"/>
+    <rect x="0" y="144" width="18" height="18"/>
+    <rect x="18" y="144" width="18" height="18"/>
+    <rect x="54" y="144" width="18" height="18"/>
+    <rect x="90" y="144" width="18" height="18"/>
+    <rect x="126" y="144" width="18" height="18"/>
+    <rect x="198" y="144" width="18" height="18"/>
+    <rect x="216" y="144" width="18" height="18"/>
+    <rect x="252" y="144" width="18" height="18"/>
+    <rect x="270" y="144" width="18" height="18"/>
+    <rect x="288" y="144" width="18" height="18"/>
+    <rect x="0" y="162" width="18" height="18"/>
+    <rect x="36" y="162" width="18" height="18"/>
+    <rect x="54" y="162" width="18" height="18"/>
+    <rect x="72" y="162" width="18" height="18"/>
+    <rect x="90" y="162" width="18" height="18"/>
+    <rect x="108" y="162" width="18" height="18"/>
+    <rect x="126" y="162" width="18" height="18"/>
+    <rect x="144" y="162" width="18" height="18"/>
+    <rect x="180" y="162" width="18" height="18"/>
+    <rect x="216" y="162" width="18" height="18"/>
+    <rect x="252" y="162" width="18" height="18"/>
+    <rect x="270" y="162" width="18" height="18"/>
+    <rect x="288" y="162" width="18" height="18"/>
+    <rect x="0" y="180" width="18" height="18"/>
+    <rect x="36" y="180" width="18" height="18"/>
+    <rect x="72" y="180" width="18" height="18"/>
+    <rect x="126" y="180" width="18" height="18"/>
+    <rect x="162" y="180" width="18" height="18"/>
+    <rect x="216" y="180" width="18" height="18"/>
+    <rect x="234" y="180" width="18" height="18"/>
+    <rect x="252" y="180" width="18" height="18"/>
+    <rect x="270" y="180" width="18" height="18"/>
+    <rect x="288" y="180" width="18" height="18"/>
+    <rect x="0" y="198" width="18" height="18"/>
+    <rect x="18" y="198" width="18" height="18"/>
+    <rect x="36" y="198" width="18" height="18"/>
+    <rect x="54" y="198" width="18" height="18"/>
+    <rect x="72" y="198" width="18" height="18"/>
+    <rect x="90" y="198" width="18" height="18"/>
+    <rect x="108" y="198" width="18" height="18"/>
+    <rect x="144" y="198" width="18" height="18"/>
+    <rect x="180" y="198" width="18" height="18"/>
+    <rect x="198" y="198" width="18" height="18"/>
+    <rect x="252" y="198" width="18" height="18"/>
+    <rect x="270" y="198" width="18" height="18"/>
+    <rect x="288" y="198" width="18" height="18"/>
+  </g>
+
+  <text x="525" y="502" fill="#F8FAFC" font-size="12" font-weight="700" letter-spacing="1.5" font-family="Arial, sans-serif">EXAMINATION ROOM ACCESS CODE</text>
+  <text x="525" y="570" fill="#B51830" font-size="68" font-weight="800" letter-spacing="6" font-family="Arial, sans-serif">3958</text>
+
+  <rect x="520" y="613" width="54" height="54" rx="12" fill="#1E1E1E" stroke="#2E2E2E"/>
+  <path d="M547 632V644.5H534.5V652.5H547V665H555V652.5H567.5V644.5H555V632H547Z" fill="#FFFFFF"/>
+  <rect x="585" y="613" width="54" height="54" rx="12" fill="#1E1E1E" stroke="#2E2E2E"/>
+  <path d="M598 630C598 625.6 601.6 622 606 622H622C626.4 622 630 625.6 630 630V646C630 650.4 626.4 654 622 654H606C601.6 654 598 650.4 598 646V630ZM604 630V646H624V630H604Z" fill="#FFFFFF"/>
+  <path d="M612 629H619V648H612V629ZM606 636H625V643H606V636Z" fill="#FFFFFF"/>
+
+  <rect x="1020" y="482" width="92" height="48" rx="14" fill="#1E1E1E" stroke="#2E2E2E"/>
+  <text x="1066" y="512" text-anchor="middle" fill="#FFFFFF" font-size="18" font-weight="700" font-family="Arial, sans-serif">Copy</text>
+  <rect x="1020" y="551" width="92" height="48" rx="14" fill="#1E1E1E" stroke="#2E2E2E"/>
+  <text x="1066" y="581" text-anchor="middle" fill="#FFFFFF" font-size="18" font-weight="700" font-family="Arial, sans-serif">Share</text>
+
+  <rect x="520" y="684" width="198" height="54" rx="14" fill="#1A1A1A" stroke="#333333"/>
+  <text x="619" y="717" text-anchor="middle" fill="#D1D5DB" font-size="18" font-weight="700" font-family="Arial, sans-serif">Regenerate QR</text>
+  <rect x="734" y="684" width="330" height="54" rx="14" fill="#7A1F2B"/>
+  <text x="899" y="717" text-anchor="middle" fill="#FFFFFF" font-size="20" font-weight="800" font-family="Arial, sans-serif">Start Examination</text>
+
+  <!-- monitoring section -->
+  <text x="57" y="908" fill="#A1A1AA" font-size="13" font-weight="700" letter-spacing="1.2" font-family="Arial, sans-serif">MONITORING</text>
+  <text x="57" y="932" fill="#71717A" font-size="12" font-weight="500" font-family="Arial, sans-serif">36 Candidates registered · Tap a category to view examinees</text>
+
+  <g>
+    <rect x="57" y="953" width="207" height="136" rx="18" fill="#FEF9C3" stroke="#FDE047" stroke-width="1.3"/>
+    <text x="85" y="999" fill="#854D0E" font-size="33" font-weight="800" font-family="Arial, sans-serif">19</text>
+    <text x="85" y="1022" fill="#18181B" font-size="15" font-weight="700" font-family="Arial, sans-serif">Waiting</text>
+    <text x="85" y="1041" fill="#71717A" font-size="12" font-weight="500" font-family="Arial, sans-serif">In Lobby</text>
+  </g>
+  <g>
+    <rect x="276" y="953" width="207" height="136" rx="18" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1.3"/>
+    <text x="304" y="999" fill="#1E40AF" font-size="33" font-weight="800" font-family="Arial, sans-serif">10</text>
+    <text x="304" y="1022" fill="#18181B" font-size="15" font-weight="700" font-family="Arial, sans-serif">Answering</text>
+    <text x="304" y="1041" fill="#71717A" font-size="12" font-weight="500" font-family="Arial, sans-serif">Taking Exam</text>
+  </g>
+  <g>
+    <rect x="495" y="953" width="207" height="136" rx="18" fill="#F0FDF4" stroke="#BBF7D0" stroke-width="1.3"/>
+    <text x="523" y="999" fill="#166534" font-size="33" font-weight="800" font-family="Arial, sans-serif">5</text>
+    <text x="523" y="1022" fill="#18181B" font-size="15" font-weight="700" font-family="Arial, sans-serif">Submitted</text>
+    <text x="523" y="1041" fill="#71717A" font-size="12" font-weight="500" font-family="Arial, sans-serif">Completed</text>
+  </g>
+  <g>
+    <rect x="714" y="953" width="207" height="136" rx="18" fill="#FEF2F2" stroke="#FECACA" stroke-width="1.3"/>
+    <text x="742" y="999" fill="#991B1B" font-size="33" font-weight="800" font-family="Arial, sans-serif">2</text>
+    <text x="742" y="1022" fill="#18181B" font-size="15" font-weight="700" font-family="Arial, sans-serif">Disconnected</text>
+    <text x="742" y="1041" fill="#71717A" font-size="12" font-weight="500" font-family="Arial, sans-serif">Offline</text>
+  </g>
+
+  <!-- Students list panel -->
+  <rect x="57" y="1114" width="1086" height="378" rx="22" fill="#141414" stroke="#2E2E2E"/>
+  <text x="90" y="1160" fill="#FFFFFF" font-size="18" font-weight="800" font-family="Arial, sans-serif">Waiting</text>
+  <rect x="185" y="1143" width="44" height="26" rx="13" fill="#FEF08A"/>
+  <text x="207" y="1161" text-anchor="middle" fill="#854D0E" font-size="12" font-weight="800" font-family="Arial, sans-serif">19</text>
+  <text x="1040" y="1158" fill="#A1A1AA" font-size="18" font-weight="700" font-family="Arial, sans-serif">×</text>
+
+  <g>
+    <rect x="87" y="1188" width="1020" height="72" rx="16" fill="#1A1A1A" stroke="#2D2D2D"/>
+    <circle cx="120" cy="1224" r="20" fill="#2A2A2A"/>
+    <text x="120" y="1231" text-anchor="middle" fill="#FFFFFF" font-size="14" font-weight="700" font-family="Arial, sans-serif">AS</text>
+    <text x="154" y="1219" fill="#FFFFFF" font-size="17" font-weight="700" font-family="Arial, sans-serif">Alice Santos</text>
+    <text x="154" y="1239" fill="#A1A1AA" font-size="12" font-weight="500" font-family="Arial, sans-serif">alice.santos@gmail.com</text>
+    <rect x="780" y="1206" width="120" height="30" rx="15" fill="#1F2937"/>
+    <text x="840" y="1226" text-anchor="middle" fill="#CBD5E1" font-size="11" font-weight="700" font-family="Arial, sans-serif">Waiting</text>
+    <rect x="920" y="1206" width="142" height="30" rx="15" fill="#1A1A1A" stroke="#333333"/>
+    <text x="991" y="1226" text-anchor="middle" fill="#FFFFFF" font-size="11" font-weight="700" font-family="Arial, sans-serif">Remove</text>
+  </g>
+  <g>
+    <rect x="87" y="1270" width="1020" height="72" rx="16" fill="#1A1A1A" stroke="#2D2D2D"/>
+    <circle cx="120" cy="1306" r="20" fill="#2A2A2A"/>
+    <text x="120" y="1313" text-anchor="middle" fill="#FFFFFF" font-size="14" font-weight="700" font-family="Arial, sans-serif">JM</text>
+    <text x="154" y="1301" fill="#FFFFFF" font-size="17" font-weight="700" font-family="Arial, sans-serif">Joemar Dela Cruz</text>
+    <text x="154" y="1321" fill="#A1A1AA" font-size="12" font-weight="500" font-family="Arial, sans-serif">joemar.dela@gmail.com</text>
+    <rect x="780" y="1288" width="120" height="30" rx="15" fill="#0B1728" stroke="#1E3A8A"/>
+    <text x="840" y="1308" text-anchor="middle" fill="#93C5FD" font-size="11" font-weight="700" font-family="Arial, sans-serif">Connected</text>
+    <rect x="920" y="1288" width="142" height="30" rx="15" fill="#1A1A1A" stroke="#333333"/>
+    <text x="991" y="1308" text-anchor="middle" fill="#FFFFFF" font-size="11" font-weight="700" font-family="Arial, sans-serif">Remove</text>
+  </g>
+  <g>
+    <rect x="87" y="1352" width="1020" height="72" rx="16" fill="#1A1A1A" stroke="#2D2D2D"/>
+    <circle cx="120" cy="1388" r="20" fill="#2A2A2A"/>
+    <text x="120" y="1395" text-anchor="middle" fill="#FFFFFF" font-size="14" font-weight="700" font-family="Arial, sans-serif">RN</text>
+    <text x="154" y="1383" fill="#FFFFFF" font-size="17" font-weight="700" font-family="Arial, sans-serif">Rhea Navarro</text>
+    <text x="154" y="1403" fill="#A1A1AA" font-size="12" font-weight="500" font-family="Arial, sans-serif">rhea.navarro@gmail.com</text>
+    <rect x="780" y="1370" width="120" height="30" rx="15" fill="#FEF3C7"/>
+    <text x="840" y="1390" text-anchor="middle" fill="#854D0E" font-size="11" font-weight="700" font-family="Arial, sans-serif">Ready</text>
+    <rect x="920" y="1370" width="142" height="30" rx="15" fill="#1A1A1A" stroke="#333333"/>
+    <text x="991" y="1390" text-anchor="middle" fill="#FFFFFF" font-size="11" font-weight="700" font-family="Arial, sans-serif">Remove</text>
+  </g>
+</svg>

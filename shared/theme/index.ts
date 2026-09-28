@@ -1,6 +1,5 @@
 export { examProcess, EXAM_PROCESS_STEPS } from './examProcess';
 export type { ExamProcessStepIndex } from './examProcess';
-export * from './theme';
 
 export const designTokens = {
   light: {
