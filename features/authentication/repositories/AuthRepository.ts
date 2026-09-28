@@ -170,13 +170,7 @@ export const AuthRepository = {
           return profile;
         }
       } catch (error) {
-        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-          const current = await appStorage.getItem(STORAGE_KEYS.proctorToken);
-          if (current === token) {
-            await this.logout();
-          }
-          return null;
-        }
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return cached;
       }
 
       return cached;

@@ -1,9 +1,7 @@
 import React, { useState } from 'react';
-import { Modal, Text, View, StyleSheet } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, Text, TextInput, View, StyleSheet } from 'react-native';
 import { WifiOff } from 'lucide-react-native';
-import { Button } from '@/shared/components/ui/Button';
-import { Input } from '@/shared/components/ui/Input';
-import { colors, shadows } from '@/shared/theme';
+import { useThemeTokens } from '@/shared/contexts/ThemeContext';
 import { userFacingError } from '@/shared/utils/userFacingError';
 
 interface ExamWifiDisconnectOverlayProps {
@@ -41,79 +39,88 @@ export function ExamWifiDisconnectOverlay({
   onExitEnded,
 }: ExamWifiDisconnectOverlayProps) {
   const [code, setCode] = useState('');
+  const { theme } = useThemeTokens();
+  const renderAction = (title: string, onPress?: () => void | Promise<void>, disabled = false) => (
+    <Pressable
+      accessibilityRole="button"
+      disabled={disabled || loading}
+      onPress={() => void onPress?.()}
+      style={({ pressed }) => [
+        styles.actionButton,
+        {
+          backgroundColor: theme.accent,
+          opacity: disabled || loading ? 0.55 : pressed ? 0.86 : 1,
+        },
+      ]}
+    >
+      {loading ? (
+        <ActivityIndicator color={theme.onAccent} />
+      ) : (
+        <Text style={[styles.actionText, { color: theme.onAccent }]}>{title}</Text>
+      )}
+    </Pressable>
+  );
 
   return (
     <Modal visible={visible} animationType="fade" transparent={false}>
-      <View style={styles.screen}>
-        <View style={styles.card}>
-          <View style={styles.iconWrap}>
-            <WifiOff size={36} color={colors.danger} />
+      <View style={[styles.screen, { backgroundColor: theme.bg }]}>
+        <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border, shadowColor: theme.text }]}>
+          <View style={[styles.iconWrap, { backgroundColor: theme.accentSoft }]}>
+            <WifiOff size={36} color={theme.accent} />
           </View>
 
           {examinationEnded ? (
             <>
-              <Text style={styles.title}>Examination ended</Text>
-              <Text style={styles.message}>
+              <Text style={[styles.title, { color: theme.text }]}>Examination ended</Text>
+              <Text style={[styles.message, { color: theme.textSecondary }]}>
                 Tapos na ang examination. Maghihintay lang kayo sa result sa inyong Gmail.
               </Text>
-              <Text style={styles.message}>
+              <Text style={[styles.message, { color: theme.textSecondary }]}>
                 Please wait for the official examination result in your Gmail. You can return to the
                 home screen — you are no longer in an active exam.
               </Text>
-              <Button
-                title="Return Home"
-                size="lg"
-                fullWidth
-                loading={loading}
-                onPress={() => void onExitEnded?.()}
-              />
+              {renderAction('Return Home', onExitEnded)}
             </>
           ) : wrongNetwork && !requiresPin ? (
             // Student deliberately connected to a different Wi-Fi network.
             <>
-              <Text style={styles.title}>Wrong Wi‑Fi Network</Text>
-              <Text style={styles.message}>
+              <Text style={[styles.title, { color: theme.text }]}>Wrong Wi‑Fi Network</Text>
+              <Text style={[styles.message, { color: theme.textSecondary }]}>
                 You are connected to a different Wi‑Fi network — not the official examination
                 network.
               </Text>
-              <Text style={styles.message}>
+              <Text style={[styles.message, { color: theme.textSecondary }]}>
                 Please switch back to the official examination Wi‑Fi network. Your exam remains
                 paused until you reconnect to the correct room network.
               </Text>
               {error ? (
-                <Text style={styles.error}>
+                <Text style={[styles.error, { color: theme.timer.red.text }]}>
                   {userFacingError(error, 'Unable to verify network. Please try again.')}
                 </Text>
               ) : null}
-              <Text style={styles.disclaimer}>Your answers remain saved locally on this phone.</Text>
+              <Text style={[styles.disclaimer, { color: theme.textMuted }]}>Your answers remain saved locally on this phone.</Text>
             </>
           ) : proctorNetworkChanged && !requiresPin ? (
             // Proctor's LAN IP changed — not the student's fault.
             <>
-              <Text style={styles.title}>Proctor&apos;s connection changed</Text>
-              <Text style={styles.message}>
+              <Text style={[styles.title, { color: theme.text }]}>Proctor&apos;s connection changed</Text>
+              <Text style={[styles.message, { color: theme.textSecondary }]}>
                 The proctor phone moved to a different Wi‑Fi network or got a new address. Stay on
                 the exam Wi‑Fi, then tap Reconnect. This is not counted as a violation.
               </Text>
               {error ? (
-                <Text style={styles.error}>
+                <Text style={[styles.error, { color: theme.timer.red.text }]}>
                   {userFacingError(error, 'Unable to reconnect. Please try again.')}
                 </Text>
               ) : null}
-              <Button
-                title="Reconnect"
-                size="lg"
-                fullWidth
-                loading={loading}
-                onPress={() => void onRetry?.()}
-              />
-              <Text style={styles.disclaimer}>Your answers remain saved locally on this phone.</Text>
+              {renderAction('Reconnect', onRetry)}
+              <Text style={[styles.disclaimer, { color: theme.textMuted }]}>Your answers remain saved locally on this phone.</Text>
             </>
           ) : (
             // wifi_lost — or wrong_network/proctor_change after grace expiry (PIN required).
             <>
-              <Text style={styles.title}>{requiresPin ? 'Examination locked' : 'Reconnecting...'}</Text>
-              <Text style={styles.message}>
+              <Text style={[styles.title, { color: theme.text }]}>{requiresPin ? 'Examination locked' : 'Reconnecting...'}</Text>
+              <Text style={[styles.message, { color: theme.textSecondary }]}>
                 {requiresPin
                   ? 'Disconnection exceeded 2 minutes. Campus Wi‑Fi must be restored and a proctor must issue a 6-digit PIN to unlock your exam.'
                   : 'Wi‑Fi connection lost. Attempting to reconnect automatically...'}
@@ -121,42 +128,39 @@ export function ExamWifiDisconnectOverlay({
 
               {/* Grace period countdown — shown while not yet PIN-locked */}
               {!requiresPin && typeof graceSecondsRemaining === 'number' && graceSecondsRemaining > 0 && (
-                <Text style={styles.graceCountdown}>
+                <Text style={[styles.graceCountdown, { color: theme.timer.orange.text }]}>
                   {`Auto-submitting in ${graceSecondsRemaining}s if not reconnected…`}
                 </Text>
               )}
 
               {requiresPin ? (
                 <>
-                  <Input
-                    label="6-digit reconnect PIN"
+                  <View style={styles.pinInputGroup}>
+                    <Text style={[styles.pinInputLabel, { color: theme.textSecondary }]}>6-digit reconnect PIN</Text>
+                    <TextInput
                     value={code}
                     onChangeText={(text) => setCode(text.replace(/\D/g, '').slice(0, 6))}
                     keyboardType="number-pad"
                     maxLength={6}
                     placeholder="e.g. 482917"
+                    placeholderTextColor={theme.textMuted}
                     editable={!loading}
                     autoFocus
-                  />
+                    style={[styles.pinInput, { backgroundColor: theme.surfaceAlt, borderColor: theme.border, color: theme.text }]}
+                    />
+                  </View>
                   {error ? (
-                    <Text style={styles.error}>
+                    <Text style={[styles.error, { color: theme.timer.red.text }]}>
                       {userFacingError(error, 'Invalid reconnect code. Please try again.')}
                     </Text>
                   ) : null}
-                  <Button
-                    title="Unlock & Resume"
-                    size="lg"
-                    fullWidth
-                    loading={loading}
-                    disabled={code.trim().length !== 6 || loading}
-                    onPress={() => void onSubmitCode(code.trim())}
-                  />
+                  {renderAction('Unlock & Resume', () => onSubmitCode(code.trim()), code.trim().length !== 6)}
                 </>
               ) : (
-                <Text style={styles.hint}>Please move closer to the exam Wi‑Fi hotspot.</Text>
+                <Text style={[styles.hint, { color: theme.textSecondary }]}>Please move closer to the exam Wi‑Fi hotspot.</Text>
               )}
 
-              <Text style={styles.disclaimer}>Your answers remain saved locally on this phone.</Text>
+              <Text style={[styles.disclaimer, { color: theme.textMuted }]}>Your answers remain saved locally on this phone.</Text>
             </>
           )}
         </View>
@@ -168,7 +172,6 @@ export function ExamWifiDisconnectOverlay({
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
@@ -176,17 +179,19 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 400,
-    backgroundColor: colors.surface,
-    borderRadius: 20,
+    borderWidth: 1,
+    borderRadius: 16,
     padding: 24,
     gap: 14,
-    ...shadows.card,
+    elevation: 4,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.14,
+    shadowRadius: 8,
   },
   iconWrap: {
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#FEE2E2',
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'center',
@@ -194,52 +199,60 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
     fontWeight: '800',
-    color: colors.ink,
     textAlign: 'center',
   },
   message: {
     fontSize: 14,
     lineHeight: 21,
-    color: colors.inkSecondary,
     fontWeight: '500',
     textAlign: 'center',
   },
   error: {
     fontSize: 13,
-    color: colors.danger,
     fontWeight: '600',
     textAlign: 'center',
   },
   hint: {
     fontSize: 13,
-    color: colors.primary,
     textAlign: 'center',
     fontWeight: '700',
   },
   disclaimer: {
     fontSize: 11,
-    color: colors.inkMuted,
     textAlign: 'center',
     marginTop: 8,
     fontWeight: '500',
   },
   graceCountdown: {
     fontSize: 13,
-    color: colors.danger,
     textAlign: 'center',
     fontWeight: '700',
   },
-  violationBadge: {
-    backgroundColor: '#FEE2E2',
-    borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    alignSelf: 'center',
+  pinInputGroup: {
+    width: '100%',
+    gap: 6,
   },
-  violationBadgeText: {
-    color: colors.danger,
+  pinInputLabel: {
     fontSize: 13,
-    fontWeight: '700',
-    textAlign: 'center',
+    fontWeight: '600',
+  },
+  pinInput: {
+    minHeight: 52,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    fontSize: 15,
+  },
+  actionButton: {
+    width: '100%',
+    minHeight: 48,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  actionText: {
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

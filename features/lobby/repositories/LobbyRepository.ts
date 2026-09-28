@@ -38,6 +38,7 @@ export type CloudExamSession = {
 
 export type CloudResolveResult = {
   success: boolean;
+  message?: string;
   session_id: number;
   session_code: string;
   proctor_local_ip: string;
@@ -162,7 +163,8 @@ export const LobbyRepository = {
       return hosted;
     };
 
-    if (await OfflineStore.isOfflineMode()) {
+    if (await OfflineStore.hasPack()) {
+      await OfflineStore.setOfflineMode(true);
       return startPeerHost();
     }
 
@@ -223,7 +225,8 @@ export const LobbyRepository = {
     await assertProctorWifiForRoomOpen();
 
     // Offline / peer: always (re)start the local server so a QR with a live host IP exists.
-    if (await OfflineStore.isOfflineMode()) {
+    if (await OfflineStore.hasPack()) {
+      await OfflineStore.setOfflineMode(true);
       return this.openLobby(sessionId, questionBankId, roomId);
     }
 
@@ -1157,11 +1160,9 @@ export const LobbyRepository = {
         throw new Error('Examination has started. Use End Examination instead.');
       }
       await PeerExamServer.closeLobby();
-      // If we're strictly in offline mode, we can stop here.
-      if (await OfflineStore.isOfflineMode()) {
-        await setStoredCode(null);
-        return;
-      }
+      await OfflineStore.setOfflineMode(true);
+      await setStoredCode(null);
+      return;
     }
 
     // 2. Central server closure (online)
@@ -1212,17 +1213,18 @@ export const LobbyRepository = {
 
   async endExamination(sessionId: string, roomId?: string): Promise<LobbySnapshot> {
     const peer = await PeerExamServer.snapshot();
-    let peerSnapshot: LobbySnapshot | null = null;
-    if (peer && peerMatchesRequest(peer, sessionId, roomId)) {
+    if (peer) {
+      if (!peerMatchesRequest(peer, sessionId, roomId)) {
+        throw new Error('A different local examination session is active.');
+      }
       if (peer.status === 'lobby_open') {
         throw new Error('Examination has not started. Close the lobby instead.');
       }
-      peerSnapshot =
-        peer.status === 'ended' ? peer : await PeerExamServer.endExam();
+      return peer.status === 'ended' ? peer : PeerExamServer.endExam();
     }
 
-    let examSessionId = peerSnapshot?.session?.examSessionId ?? null;
-    if (!examSessionId && !(await OfflineStore.isOfflineMode())) {
+    let examSessionId: number | null = null;
+    if (!(await OfflineStore.isOfflineMode())) {
       try {
         const qs = roomId
           ? `?examination_room_id=${encodeURIComponent(roomId)}`
@@ -1250,7 +1252,7 @@ export const LobbyRepository = {
           { method: 'POST' },
         );
         if (json.data) {
-          if (!peerSnapshot && roomId) {
+          if (roomId) {
             const code = json.data.examinationCode || 'ENDED';
             const pack = await OfflineStore.getPack();
             const sid = resolveNumericScheduleId(
@@ -1264,11 +1266,10 @@ export const LobbyRepository = {
           return json.data;
         }
       } catch {
-        // Fall through to peer snapshot if Laravel is unreachable.
+        // Best-effort cloud end; the room can still be inspected locally.
       }
     }
 
-    if (peerSnapshot) return peerSnapshot;
     throw new Error('Examination session not found.');
   },
 
@@ -1307,6 +1308,10 @@ export const LobbyRepository = {
     pending: number;
     configured: boolean;
   }> {
+    if (PeerExamServer.info().running) {
+      const pending = await OfflineStore.pendingResults();
+      return { pending: pending.length, configured: true };
+    }
     // For purely offline sessions, we check the local result outbox.
     if (!examSessionId || String(examSessionId).startsWith('offline-')) {
         const pending = await OfflineStore.pendingResults();
@@ -1617,26 +1622,21 @@ export const LobbyRepository = {
   }): Promise<CloudExamSession> {
     const { getCloudApiBaseUrl, getApiBaseUrl } = await import('@/shared/services/api');
     const base = getCloudApiBaseUrl() || getApiBaseUrl();
-    const url = `${base}/sessions/open`;
-
-    const res = await fetch(url, {
+    const json = await apiRequest<CloudExamSession>('/sessions/open', {
       method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+      auth: false,
+      baseUrl: base,
+      body: {
         proctor_id: Number(params.proctorId),
         local_ip: params.localIp,
         local_port: params.localPort || 9777,
         schedule_id: params.scheduleId ? Number(params.scheduleId) : undefined,
         room_id: params.roomId ? Number(params.roomId) : undefined,
-      }),
+      },
     });
 
-    const json = await res.json().catch(() => null);
-    if (!res.ok || !json?.success) {
-      throw new Error(json?.message || `Failed to open cloud session (${res.status})`);
+    if (!json.success) {
+      throw new Error('Failed to open cloud session.');
     }
 
     // Store cloud session details locally
@@ -1656,11 +1656,12 @@ export const LobbyRepository = {
       if (!id) return false;
       const { getCloudApiBaseUrl, getApiBaseUrl } = await import('@/shared/services/api');
       const base = getCloudApiBaseUrl() || getApiBaseUrl();
-      const res = await fetch(`${base}/sessions/${id}/start`, {
+      await apiRequest(`/sessions/${id}/start`, {
         method: 'POST',
-        headers: { Accept: 'application/json' },
+        auth: false,
+        baseUrl: base,
       });
-      return res.ok;
+      return true;
     } catch {
       return false;
     }
@@ -1675,14 +1676,15 @@ export const LobbyRepository = {
       if (!id) return false;
       const { getCloudApiBaseUrl, getApiBaseUrl } = await import('@/shared/services/api');
       const base = getCloudApiBaseUrl() || getApiBaseUrl();
-      const res = await fetch(`${base}/sessions/${id}/close`, {
+      await apiRequest(`/sessions/${id}/close`, {
         method: 'POST',
-        headers: { Accept: 'application/json' },
+        auth: false,
+        baseUrl: base,
       });
       await appStorage.deleteItem(STORAGE_KEYS.activeCloudSessionId);
       await appStorage.deleteItem(STORAGE_KEYS.activeCloudSessionCode);
       await appStorage.deleteItem(STORAGE_KEYS.activeCloudQrToken);
-      return res.ok;
+      return true;
     } catch {
       return false;
     }
@@ -1706,40 +1708,28 @@ export const LobbyRepository = {
     if (params.studentId) qs.append('student_id', params.studentId.trim());
     if (params.deviceId) qs.append('device_id', params.deviceId.trim());
 
-    const url = `${base}/sessions/resolve?${qs.toString()}`;
-    let res: Response;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3000);
+    let json: CloudResolveResult;
     try {
-      res = await fetch(url, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        signal: controller.signal,
+      json = await apiRequest<CloudResolveResult>(`/sessions/resolve?${qs.toString()}`, {
+        auth: false,
+        baseUrl: base,
       });
-    } catch (netErr) {
-      throw new ApiError(
-        'Unable to reach cloud examination server. Please verify your internet connection and try again.',
-        0,
-        netErr,
-      );
-    } finally {
-      clearTimeout(timeout);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        const payload = error.payload as { message?: string } | undefined;
+        throw new ApiError(
+          payload?.message || 'This student account has already joined this examination session on another device.',
+          409,
+          error.payload,
+        );
+      }
+      throw error;
     }
 
-    const json = await res.json().catch(() => null);
-
-    if (res.status === 409) {
-      throw new ApiError(
-        json?.message || 'This student account has already joined this examination session on another device.',
-        409,
-        json,
-      );
-    }
-
-    if (!res.ok || !json?.success) {
+    if (!json?.success) {
       throw new ApiError(
         json?.message || 'This code is no longer valid, ask your proctor for a new one.',
-        res.status,
+        0,
         json,
       );
     }

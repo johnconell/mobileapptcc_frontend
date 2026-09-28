@@ -17,6 +17,14 @@ export default function StudentLayout() {
       <Stack.Screen name="verify" />
       <Stack.Screen name="confirmation" />
       <Stack.Screen
+        name="terms"
+        options={{
+          gestureEnabled: false,
+          fullScreenGestureEnabled: false,
+          animation: 'slide_from_right',
+        }}
+      />
+      <Stack.Screen
         name="lobby"
         options={{
           gestureEnabled: false,

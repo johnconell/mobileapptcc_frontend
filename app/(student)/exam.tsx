@@ -11,6 +11,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import type { ViewToken } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
 import { StatusBar } from 'expo-status-bar';
@@ -26,19 +27,21 @@ import {
 
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
-import { ThemeProvider, useTheme } from '@/shared/contexts/ThemeContext';
+import { ThemeProvider, useThemeTokens } from '@/shared/contexts/ThemeContext';
 import {
   BottomBar,
   ExamHeader,
   QuestionCard,
   QuestionNavigatorSheet,
   SubmitConfirmDialog,
+  Row,
   type CategoryItem,
 } from '@/shared/components/ui';
 import { ExamWifiDisconnectOverlay } from '@/features/examinations/components/ExamWifiDisconnectOverlay';
 import { buildCategoryProgress } from '@/features/examinations/components/ExamCategoryNav';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore, type ExamNavMode } from '@/features/examinations/stores/examStore';
+import type { QuestionNavigatorFilter } from '@/shared/components/ui/QuestionNavigatorSheet';
 import { useExamTimer } from '@/features/examinations/hooks/useExamTimer';
 import { useExamSecurity } from '@/features/examinations/hooks/useExamSecurity';
 import { useExamLock } from '@/features/examinations/hooks/useExamLock';
@@ -58,22 +61,75 @@ function categoryKeyOf(question: Question): string {
   return (question.category || question.subjectId || 'General').trim() || 'General';
 }
 
-const ESTIMATED_ITEM_HEIGHT = 380;
+interface ExamQuestionItemProps {
+  question: Question;
+  index: number;
+  totalQuestions: number;
+  disabled: boolean;
+  onSelectChoice: (questionId: string, choice: ChoiceKey, index: number) => void;
+  onToggleFlag: (questionId: string) => void;
+}
+
+const ExamQuestionItem = React.memo(function ExamQuestionItem({
+  question,
+  index,
+  totalQuestions,
+  disabled,
+  onSelectChoice,
+  onToggleFlag,
+}: ExamQuestionItemProps) {
+  const selectAnswer = useExamStore(
+    useCallback((state) => state.answers[question.id]?.selectedAnswer ?? null, [question.id]),
+  );
+  const isFlagged = useExamStore(
+    useCallback((state) => Boolean(state.flags[question.id]), [question.id]),
+  );
+  const handleSelect = useCallback(
+    (choice: ChoiceKey) => onSelectChoice(question.id, choice, index),
+    [question.id, index, onSelectChoice],
+  );
+  const handleFlag = useCallback(
+    () => onToggleFlag(question.id),
+    [question.id, onToggleFlag],
+  );
+
+  return (
+    <QuestionCard
+      question={question}
+      questionNumber={question.number ?? index + 1}
+      totalQuestions={totalQuestions}
+      selectedAnswer={selectAnswer}
+      isFlagged={isFlagged}
+      onSelect={handleSelect}
+      onToggleFlag={handleFlag}
+      disabled={disabled}
+    />
+  );
+});
 
 function ExamScreenInner() {
   useKeepAwake();
   const router = useRouter();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { theme, isDark } = useTheme();
+  const { theme, isDark } = useThemeTokens();
 
   const flatListRef = useRef<FlatList<Question>>(null);
 
   // Modals & Navigation state
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
-  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string | null>(null);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string | null | undefined>(undefined);
+  const [navigatorFilter, setNavigatorFilter] = useState<QuestionNavigatorFilter>('all');
+  const openSubmitConfirmation = useCallback(() => {
+    setSubmitConfirmOpen(true);
+  }, []);
+  const closeSubmitConfirmation = useCallback(() => {
+    setSubmitConfirmOpen(false);
+  }, []);
+  const closeNavigator = useCallback(() => {
+    setNavigatorOpen(false);
+  }, []);
 
   // Network & Lifecycle state
   const [reconnectLoading, setReconnectLoading] = useState(false);
@@ -87,6 +143,10 @@ function ExamScreenInner() {
   const questions = useExamStore((s) => s.questions);
   const answers = useExamStore((s) => s.answers);
   const flags = useExamStore((s) => s.flags);
+  const currentIndex = useExamStore((s) => s.currentIndex);
+  const setCurrentIndex = useExamStore((s) => s.setCurrentIndex);
+  const remainingSeconds = useExamTimer(questions.length > 0);
+  const totalDurationSeconds = useExamStore((s) => s.totalDurationSeconds);
   const toggleFlag = useExamStore((s) => s.toggleFlag);
   const navMode = useExamStore((s) => s.navMode);
   const setNavMode = useExamStore((s) => s.setNavMode);
@@ -150,7 +210,7 @@ function ExamScreenInner() {
   const unanswered = unansweredCount();
   const flaggedCount = useMemo(() => Object.values(flags).filter(Boolean).length, [flags]);
 
-  const safeIndex = Math.min(Math.max(0, activeIndex), Math.max(0, questions.length - 1));
+  const safeIndex = Math.min(Math.max(0, currentIndex), Math.max(0, questions.length - 1));
   const activeQuestion = questions[safeIndex] ?? null;
 
   useEffect(() => {
@@ -347,31 +407,27 @@ function ExamScreenInner() {
     };
   }, [securityEnabled, router]);
 
-  const leaveEndedExam = useCallback(async () => {
-    markSubmitted('time_expired');
-    void ExamProgressStore.clear();
-    try {
-      const { clearApplicantExamMaterial } = await import(
-        '@/features/applicants/services/applicantExamCleanup'
-      );
-      await clearApplicantExamMaterial();
-    } catch {
-      /* ignore */
-    }
-    await ExamLifecycle.clear();
-    useExamStore.getState().reset();
-    useStudentStore.getState().reset();
-    router.replace('/');
+  const leaveEndedExam = useCallback(() => {
+    markSubmitted('proctor_terminated');
+    router.replace('/(student)/submitting');
   }, [markSubmitted, router]);
 
   const goSubmit = useCallback(
-    (reason: 'submitted' | 'policy_violation' | 'time_expired' = 'submitted') => {
+    (reason: 'submitted' | 'policy_violation' | 'time_expired' | 'proctor_terminated' = 'submitted') => {
       markSubmitted(reason);
-      void ExamProgressStore.clear();
       router.replace('/(student)/submitting');
     },
     [markSubmitted, router],
   );
+  const confirmSubmit = useCallback(() => {
+    setSubmitConfirmOpen(false);
+    goSubmit('submitted');
+  }, [goSubmit]);
+  const reviewUnansweredAndFlagged = useCallback(() => {
+    setSubmitConfirmOpen(false);
+    setNavigatorFilter('review');
+    setNavigatorOpen(true);
+  }, []);
 
   graceExpiredCallbackRef.current = () => {
     if (!autoSubmittedRef.current) {
@@ -386,22 +442,22 @@ function ExamScreenInner() {
 
   // Android Kiosk Pinning
   const { isKioskActive, requestLock } = useExamLock({
-    enabled: securityEnabled && !wifiLocked,
+    enabled: securityEnabled && !wifiLocked && !roomEnded && remainingSeconds > 0,
   });
 
   const isAndroidUnpinned = Platform.OS === 'android' && !isKioskActive;
-  const paused = wifiLocked || isAndroidUnpinned;
+  const paused = wifiLocked || isAndroidUnpinned || roomEnded || remainingSeconds <= 0;
 
   useEffect(() => {
     setPaused(paused);
   }, [paused, setPaused]);
 
   useExamSecurity({
-    enabled: securityEnabled && !wifiLocked,
+    enabled: securityEnabled && !wifiLocked && !roomEnded && remainingSeconds > 0,
     sessionId,
     studentId: verifiedStudent?.id ?? null,
     studentName: verifiedStudent?.fullName ?? null,
-    onRequestSubmit: () => setSubmitConfirmOpen(true),
+    onRequestSubmit: openSubmitConfirmation,
   });
 
   const enforceRepinAfterReconnect = useCallback(async (): Promise<boolean> => {
@@ -502,9 +558,6 @@ function ExamScreenInner() {
     return unsubscribe;
   }, [navigation]);
 
-  const remainingSeconds = useExamTimer(questions.length > 0);
-  const totalDurationSeconds = useExamStore((s) => s.totalDurationSeconds);
-
   useEffect(() => {
     if (remainingSeconds > 10) {
       lowTimeWarnedRef.current = false;
@@ -542,57 +595,53 @@ function ExamScreenInner() {
     (questionId: string, choice: ChoiceKey, index: number) => {
       if (paused) return;
       selectAnswer(questionId, choice);
-      setActiveIndex(index);
+      setCurrentIndex(index);
       if (verifiedStudent?.id) {
         void LobbyRepository.touchActivity(verifiedStudent.id);
+        const state = useExamStore.getState();
         void ExamProgressStore.save({
-          sessionId: sessionId || 'default',
+          sessionId: state.sessionId || 'default',
           studentId: verifiedStudent.id,
-          answers: {
-            ...answers,
-            [questionId]: { questionId, selectedAnswer: choice, answeredAt: new Date().toISOString() },
-          },
-          flags,
-          navMode,
-          remainingSeconds: useExamStore.getState().remainingSeconds,
-          startedAt,
+          answers: state.answers,
+          flags: state.flags,
+          navMode: state.navMode,
+          remainingSeconds: state.remainingSeconds,
+          startedAt: state.startedAt,
         });
       }
     },
-    [paused, selectAnswer, verifiedStudent?.id, answers, flags, navMode, sessionId, startedAt],
+    [paused, selectAnswer, setCurrentIndex, verifiedStudent?.id],
   );
 
   const handleToggleFlag = useCallback(
     (questionId: string) => {
       toggleFlag(questionId);
       if (verifiedStudent?.id) {
+        const state = useExamStore.getState();
         void ExamProgressStore.save({
-          sessionId: sessionId || 'default',
+          sessionId: state.sessionId || 'default',
           studentId: verifiedStudent.id,
-          answers,
-          flags: {
-            ...flags,
-            [questionId]: !flags[questionId],
-          },
-          navMode,
-          remainingSeconds: useExamStore.getState().remainingSeconds,
-          startedAt,
+          answers: state.answers,
+          flags: state.flags,
+          navMode: state.navMode,
+          remainingSeconds: state.remainingSeconds,
+          startedAt: state.startedAt,
         });
       }
     },
-    [toggleFlag, verifiedStudent?.id, answers, flags, navMode, sessionId, startedAt],
+    [toggleFlag, verifiedStudent?.id],
   );
 
   const handleJumpToQuestion = useCallback(
     (index: number) => {
-      setActiveIndex(index);
+      setCurrentIndex(index);
       if (navMode === 'scroll') {
         setTimeout(() => {
           flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0 });
         }, 50);
       }
     },
-    [navMode],
+    [navMode, setCurrentIndex],
   );
 
   const handleSelectCategory = useCallback(
@@ -608,41 +657,55 @@ function ExamScreenInner() {
     [questions, handleJumpToQuestion],
   );
 
-  const visibleQuestions = useMemo(() => {
-    if (!selectedCategoryFilter || selectedCategoryFilter === 'all') {
-      return questions;
-    }
-    return questions.filter((q) => categoryKeyOf(q) === selectedCategoryFilter);
-  }, [questions, selectedCategoryFilter]);
+  const keyExtractor = useCallback((item: Question) => item.id, []);
+  const handleScrollToIndexFailed = useCallback((info: { index: number; averageItemLength: number }) => {
+    flatListRef.current?.scrollToOffset({
+      offset: info.averageItemLength * info.index,
+      animated: true,
+    });
+  }, []);
 
-  const getItemLayout = useCallback(
-    (_data: unknown, index: number) => ({
-      length: ESTIMATED_ITEM_HEIGHT,
-      offset: ESTIMATED_ITEM_HEIGHT * index,
-      index,
-    }),
-    [],
-  );
+  useEffect(() => {
+    if (navMode !== 'scroll') return;
+    const timer = setTimeout(() => {
+      const index = useExamStore.getState().currentIndex;
+      if (index > 0) {
+        flatListRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0 });
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [navMode]);
 
   const renderQuestionItem = useCallback(
     ({ item, index }: { item: Question; index: number }) => {
-      const globalIndex = questions.findIndex((q) => q.id === item.id);
-      const qNum = item.number ?? (globalIndex >= 0 ? globalIndex + 1 : index + 1);
       return (
-        <QuestionCard
+        <ExamQuestionItem
           question={item}
-          questionNumber={qNum}
+          index={index}
           totalQuestions={total}
-          selectedAnswer={answers[item.id]?.selectedAnswer ?? null}
-          isFlagged={Boolean(flags[item.id])}
-          onSelect={(choice) => handleSelectChoice(item.id, choice, globalIndex >= 0 ? globalIndex : index)}
-          onToggleFlag={() => handleToggleFlag(item.id)}
           disabled={paused}
+          onSelectChoice={handleSelectChoice}
+          onToggleFlag={handleToggleFlag}
         />
       );
     },
-    [questions, answers, flags, total, handleSelectChoice, handleToggleFlag, paused],
+    [total, handleSelectChoice, handleToggleFlag, paused],
   );
+
+  const onViewableItemsChanged = useRef(
+    ({ viewableItems }: { viewableItems: ViewToken[] }) => {
+      const firstVisible = viewableItems.find((item) => item.isViewable && item.index !== null);
+      if (typeof firstVisible?.index === 'number') {
+        useExamStore.getState().setCurrentIndex(firstVisible.index);
+      }
+    },
+  ).current;
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 20 }).current;
+
+  const openNavigator = useCallback(() => {
+    setNavigatorFilter('all');
+    setNavigatorOpen(true);
+  }, []);
 
   if (!questions.length) return null;
 
@@ -652,21 +715,33 @@ function ExamScreenInner() {
 
       {/* iOS Privacy Blackout Shield */}
       {Platform.OS === 'ios' && isInactiveOrBackground ? (
-        <View style={styles.iosPrivacyBlackoutShield} pointerEvents="auto">
-          <ShieldAlert size={64} color="#EF4444" strokeWidth={2.2} />
-          <Text style={styles.iosPrivacyShieldTitle}>EXAMINATION PRIVACY SHIELD</Text>
-          <Text style={styles.iosPrivacyShieldSubtitle}>
+        <View
+          style={[
+            styles.iosPrivacyBlackoutShield,
+            { backgroundColor: `${isDark ? theme.bg : theme.text}F2` },
+          ]}
+          pointerEvents="auto"
+        >
+          <ShieldAlert size={64} color={theme.timer.red.text} strokeWidth={2.2} />
+          <Text style={[styles.iosPrivacyShieldTitle, { color: theme.timer.red.text }]}>EXAMINATION PRIVACY SHIELD</Text>
+          <Text style={[styles.iosPrivacyShieldSubtitle, { color: theme.onAccent }]}>
             Leaving the examination screen or accessing system drawers is strictly prohibited.
           </Text>
-          <Text style={styles.iosPrivacyShieldInstruction}>
+          <Text style={[styles.iosPrivacyShieldInstruction, { color: theme.onAccent }]}>
             Return to the app immediately and maintain Guided Access.
           </Text>
         </View>
       ) : null}
 
       {/* Android Mandatory App Pinning Shield */}
-      {Platform.OS === 'android' && !isKioskActive && !wifiLocked && !roomEnded ? (
-        <View style={styles.pinRequiredBlockingShield} pointerEvents="auto">
+      {Platform.OS === 'android' && !isKioskActive && !wifiLocked && !roomEnded && remainingSeconds > 0 ? (
+        <View
+          style={[
+            styles.pinRequiredBlockingShield,
+            { backgroundColor: `${isDark ? theme.bg : theme.text}F2` },
+          ]}
+          pointerEvents="auto"
+        >
           <View style={[styles.pinRequiredCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <View style={[styles.pinRequiredIconWrap, { backgroundColor: theme.accentSoft }]}>
               <ShieldAlert size={48} color={theme.accent} strokeWidth={2.2} />
@@ -679,7 +754,7 @@ function ExamScreenInner() {
               If you tap &quot;No thanks&quot;, you cannot continue the examination. Please tap &quot;Got it&quot; on the system prompt to proceed.
             </Text>
             <Pressable
-              style={[styles.pinRequiredBtn, { backgroundColor: theme.accent }]}
+              style={[styles.pinRequiredBtn, { backgroundColor: theme.accent, borderColor: theme.accent }]}
               onPress={() => void requestLock()}
               accessibilityRole="button"
               accessibilityLabel="Pin Screen & Continue"
@@ -696,15 +771,25 @@ function ExamScreenInner() {
           remainingSeconds={remainingSeconds}
           totalDurationSeconds={totalDurationSeconds}
           categories={categoriesList}
-          selectedCategory={selectedCategoryFilter}
+          selectedCategory={
+            selectedCategoryFilter === undefined
+              ? activeQuestion
+                ? categoryKeyOf(activeQuestion)
+                : null
+              : selectedCategoryFilter
+          }
           onSelectCategory={handleSelectCategory}
           disabled={paused}
         />
       </View>
 
       {/* 2. Info Row: "X of 100 answered" on left, "Scroll | One by one" on right */}
-      <View style={styles.infoRow}>
-        <Text style={[styles.infoAnsweredText, { color: theme.textSecondary }]}>
+      <Row style={styles.infoRow}>
+        <Text
+          numberOfLines={1}
+          ellipsizeMode="tail"
+          style={[styles.infoAnsweredText, { color: theme.textSecondary }]}
+        >
           <Text style={[styles.infoAnsweredBold, { color: theme.text }]}>{answered}</Text>
           {` of ${total} answered`}
         </Text>
@@ -738,6 +823,7 @@ function ExamScreenInner() {
               strokeWidth={2}
             />
             <Text
+              numberOfLines={1}
               style={[
                 styles.modeSegmentText,
                 {
@@ -769,6 +855,7 @@ function ExamScreenInner() {
               strokeWidth={2}
             />
             <Text
+              numberOfLines={1}
               style={[
                 styles.modeSegmentText,
                 {
@@ -781,29 +868,25 @@ function ExamScreenInner() {
             </Text>
           </Pressable>
         </View>
-      </View>
+      </Row>
 
       {/* 3. Question Area */}
       <View style={styles.questionArea}>
         {navMode === 'scroll' ? (
           <FlatList
             ref={flatListRef}
-            data={visibleQuestions}
-            keyExtractor={(item) => item.id}
+            data={questions}
+            keyExtractor={keyExtractor}
             renderItem={renderQuestionItem}
             contentContainerStyle={styles.scrollListContent}
-            getItemLayout={getItemLayout}
             showsVerticalScrollIndicator={false}
             removeClippedSubviews={Platform.OS === 'android'}
             initialNumToRender={4}
             maxToRenderPerBatch={4}
             windowSize={7}
-            onScrollToIndexFailed={(info) => {
-              flatListRef.current?.scrollToOffset({
-                offset: ESTIMATED_ITEM_HEIGHT * info.index,
-                animated: true,
-              });
-            }}
+            onViewableItemsChanged={onViewableItemsChanged}
+            viewabilityConfig={viewabilityConfig}
+            onScrollToIndexFailed={handleScrollToIndexFailed}
           />
         ) : (
           <ScrollView
@@ -813,63 +896,59 @@ function ExamScreenInner() {
           >
             {activeQuestion ? (
               <>
-                <QuestionCard
+                <ExamQuestionItem
                   question={activeQuestion}
-                  questionNumber={activeQuestion.number ?? safeIndex + 1}
+                  index={safeIndex}
                   totalQuestions={total}
-                  selectedAnswer={answers[activeQuestion.id]?.selectedAnswer ?? null}
-                  isFlagged={Boolean(flags[activeQuestion.id])}
-                  onSelect={(choice) => handleSelectChoice(activeQuestion.id, choice, safeIndex)}
-                  onToggleFlag={() => handleToggleFlag(activeQuestion.id)}
                   disabled={paused}
+                  onSelectChoice={handleSelectChoice}
+                  onToggleFlag={handleToggleFlag}
                 />
 
                 {/* Previous & Next Buttons */}
-                <View style={styles.oneByOneNavControls}>
+                <Row style={styles.oneByOneNavControls}>
                   <Pressable
-                    onPress={() => setActiveIndex((prev) => Math.max(0, prev - 1))}
+                    onPress={() => setCurrentIndex(Math.max(0, safeIndex - 1))}
                     disabled={safeIndex <= 0 || paused}
                     accessibilityRole="button"
                     accessibilityLabel="Previous question"
-                    style={({ pressed }) => [
+                    style={[
                       styles.oneByOneNavBtn,
                       {
                         backgroundColor: theme.surfaceAlt,
                         borderColor: theme.border,
-                        opacity: safeIndex <= 0 ? 0.4 : pressed ? 0.8 : 1,
                       },
                     ]}
                   >
                     <ChevronLeft size={18} color={theme.accentText} strokeWidth={2.2} />
-                    <Text style={[styles.oneByOneNavBtnText, { color: theme.accentText }]}>
+                    <Text numberOfLines={1} style={[styles.oneByOneNavBtnText, { color: theme.accentText }]}>
                       Previous
                     </Text>
                   </Pressable>
 
-                  <Text style={[styles.oneByOneCenterIndex, { color: theme.textSecondary }]}>
+                  <Text numberOfLines={1} style={[styles.oneByOneCenterIndex, { color: theme.textSecondary }]}>
                     {`Q. ${safeIndex + 1} of ${total}`}
                   </Text>
 
                   <Pressable
-                    onPress={() => setActiveIndex((prev) => Math.min(questions.length - 1, prev + 1))}
+                    onPress={() => setCurrentIndex(Math.min(questions.length - 1, safeIndex + 1))}
                     disabled={safeIndex >= questions.length - 1 || paused}
                     accessibilityRole="button"
                     accessibilityLabel="Next question"
-                    style={({ pressed }) => [
+                    style={[
                       styles.oneByOneNavBtn,
                       {
                         backgroundColor: theme.surfaceAlt,
                         borderColor: theme.border,
-                        opacity: safeIndex >= questions.length - 1 ? 0.4 : pressed ? 0.8 : 1,
                       },
                     ]}
                   >
-                    <Text style={[styles.oneByOneNavBtnText, { color: theme.accentText }]}>
+                    <Text numberOfLines={1} style={[styles.oneByOneNavBtnText, { color: theme.accentText }]}>
                       Next
                     </Text>
                     <ChevronRight size={18} color={theme.accentText} strokeWidth={2.2} />
                   </Pressable>
-                </View>
+                </Row>
               </>
             ) : null}
           </ScrollView>
@@ -881,19 +960,20 @@ function ExamScreenInner() {
         answeredCount={answered}
         totalQuestions={total}
         flaggedCount={flaggedCount}
-        onOpenQuestions={() => setNavigatorOpen(true)}
-        onSubmit={() => setSubmitConfirmOpen(true)}
+        onOpenQuestions={openNavigator}
+        onSubmit={openSubmitConfirmation}
         disabled={paused}
       />
 
       {/* Question Navigator Sheet ("Jump to question") */}
       <QuestionNavigatorSheet
         visible={navigatorOpen}
-        onClose={() => setNavigatorOpen(false)}
+        onClose={closeNavigator}
         questions={questions}
         answers={answers}
         flags={flags}
         currentIndex={safeIndex}
+        initialFilter={navigatorFilter}
         onJumpToQuestion={handleJumpToQuestion}
       />
 
@@ -904,20 +984,14 @@ function ExamScreenInner() {
         unansweredCount={unanswered}
         flaggedCount={flaggedCount}
         totalQuestions={total}
-        onClose={() => setSubmitConfirmOpen(false)}
-        onReview={() => {
-          setSubmitConfirmOpen(false);
-          setNavigatorOpen(true);
-        }}
-        onSubmit={() => {
-          setSubmitConfirmOpen(false);
-          goSubmit('submitted');
-        }}
+        onClose={closeSubmitConfirmation}
+        onReview={reviewUnansweredAndFlagged}
+        onSubmit={confirmSubmit}
       />
 
       {/* Time Expired Modal */}
       {timeExpiredModalOpen ? (
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: `${isDark ? theme.bg : theme.text}73` }]}>
           <View style={[styles.modalSheet, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <View style={[styles.modalIconCircle, { backgroundColor: theme.timer.red.bg }]}>
               <Clock size={36} color={theme.timer.red.text} strokeWidth={2.2} />
@@ -929,7 +1003,7 @@ function ExamScreenInner() {
               The examination time has expired. Your answers have been recorded and your exam is submitting now...
             </Text>
             <Pressable
-              style={[styles.modalActionBtn, { backgroundColor: theme.accent }]}
+              style={[styles.modalActionBtn, { backgroundColor: theme.accent, borderColor: theme.accent }]}
               onPress={() => goSubmit('time_expired')}
               accessibilityRole="button"
               accessibilityLabel="Submit now"
@@ -942,7 +1016,7 @@ function ExamScreenInner() {
 
       {/* Proctor Ended Examination Modal */}
       {proctorEndedModalOpen ? (
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: `${isDark ? theme.bg : theme.text}73` }]}>
           <View style={[styles.modalSheet, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <View style={[styles.modalIconCircle, { backgroundColor: theme.accentSoft }]}>
               <ShieldAlert size={36} color={theme.accent} strokeWidth={2.2} />
@@ -951,15 +1025,15 @@ function ExamScreenInner() {
               The Proctor Has Ended the Exam
             </Text>
             <Text style={[styles.modalDescription, { color: theme.textSecondary }]}>
-              The examination session was concluded by the proctor. Your progress has been saved. Please wait for official updates and results via Gmail.
+              The examination session was concluded by the proctor. Your recorded answers are being submitted. Please wait for your results via Gmail.
             </Text>
             <Pressable
-              style={[styles.modalActionBtn, { backgroundColor: theme.accent }]}
+              style={[styles.modalActionBtn, { backgroundColor: theme.accent, borderColor: theme.accent }]}
               onPress={() => void leaveEndedExam()}
               accessibilityRole="button"
-              accessibilityLabel="Return home"
+              accessibilityLabel="Submit and return home"
             >
-              <Text style={[styles.modalActionBtnText, { color: theme.onAccent }]}>Return Home</Text>
+              <Text style={[styles.modalActionBtnText, { color: theme.onAccent }]}>Submit &amp; Return Home</Text>
             </Pressable>
           </View>
         </View>
@@ -1005,14 +1079,17 @@ const styles = StyleSheet.create({
   },
   infoAnsweredText: {
     fontSize: 13,
+    flexShrink: 1,
+    minWidth: 0,
   },
   infoAnsweredBold: {
     fontWeight: '600',
   },
   modeSwitch: {
     height: 32,
+    flexShrink: 0,
     borderRadius: 10,
-    borderWidth: 0.5,
+    borderWidth: 1,
     padding: 2,
     flexDirection: 'row',
   },
@@ -1021,11 +1098,13 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 4,
     height: '100%',
   },
   modeSegmentText: {
     fontSize: 12,
+    flexShrink: 1,
   },
   questionArea: {
     flex: 1,
@@ -1044,16 +1123,15 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
   },
   oneByOneNavControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 8,
+    marginTop: 12,
   },
   oneByOneNavBtn: {
     height: 44,
     borderRadius: 12,
-    borderWidth: 0.5,
-    minWidth: 100,
+    borderWidth: 1,
+    minWidth: 110,
+    flexShrink: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1063,14 +1141,16 @@ const styles = StyleSheet.create({
   oneByOneNavBtnText: {
     fontSize: 14,
     fontWeight: '500',
+    flexShrink: 1,
   },
   oneByOneCenterIndex: {
     fontSize: 13,
     fontWeight: '500',
+    flexShrink: 1,
+    textAlign: 'center',
   },
   modalOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
@@ -1107,6 +1187,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 44,
     borderRadius: 12,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 8,
@@ -1117,14 +1198,12 @@ const styles = StyleSheet.create({
   },
   iosPrivacyBlackoutShield: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0F172A',
     zIndex: 999999,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 32,
   },
   iosPrivacyShieldTitle: {
-    color: '#EF4444',
     fontSize: 20,
     fontWeight: '800',
     marginTop: 18,
@@ -1133,7 +1212,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   iosPrivacyShieldSubtitle: {
-    color: '#F8FAFC',
     fontSize: 15,
     fontWeight: '600',
     textAlign: 'center',
@@ -1141,14 +1219,12 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   iosPrivacyShieldInstruction: {
-    color: '#94A3B8',
     fontSize: 13,
     textAlign: 'center',
     lineHeight: 18,
   },
   pinRequiredBlockingShield: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15, 23, 42, 0.95)',
     zIndex: 99999,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1193,6 +1269,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 44,
     borderRadius: 12,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },

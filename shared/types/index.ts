@@ -68,6 +68,10 @@ export interface ExamSchedule {
   batchNumber?: string;
   venue?: string;
   roomId?: string;
+  offlineReady?: boolean;
+  packVersion?: number;
+  downloadedAt?: string;
+  status?: string;
 }
 
 export interface ExamSession {

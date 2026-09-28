@@ -6,17 +6,25 @@ export const FONT_SCALE_MIN = 0.85;
 export const FONT_SCALE_MAX = 1.35;
 export const FONT_SCALE_STEP = 0.1;
 
-export interface ThemeContextValue {
+export interface ThemeTokenContextValue {
   theme: ExamTheme;
   isDark: boolean;
   toggleTheme: () => void;
   setTheme: (mode: 'light' | 'dark') => void;
-  fontScale: number;
+}
+
+export interface FontScaleActions {
   setFontScale: (scale: number | ((prev: number) => number)) => void;
   stepFontScale: (delta: number) => void;
 }
 
-const ThemeContext = createContext<ThemeContextValue | null>(null);
+export interface ThemeContextValue extends ThemeTokenContextValue, FontScaleActions {
+  fontScale: number;
+}
+
+const ThemeContext = createContext<ThemeTokenContextValue | null>(null);
+const FontScaleContext = createContext<number | null>(null);
+const FontScaleActionsContext = createContext<FontScaleActions | null>(null);
 
 interface ThemeProviderProps {
   children: React.ReactNode;
@@ -92,35 +100,59 @@ export function ThemeProvider({
 
   const theme = useMemo(() => (isDark ? darkTheme : lightTheme), [isDark]);
 
-  const value = useMemo(
+  const themeValue = useMemo(
     () => ({
       theme,
       isDark,
       toggleTheme,
       setTheme,
-      fontScale,
-      setFontScale,
-      stepFontScale,
     }),
-    [theme, isDark, toggleTheme, setTheme, fontScale, setFontScale, stepFontScale],
+    [theme, isDark, toggleTheme, setTheme],
+  );
+  const fontScaleActions = useMemo(
+    () => ({ setFontScale, stepFontScale }),
+    [setFontScale, stepFontScale],
   );
 
-  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+  return (
+    <ThemeContext.Provider value={themeValue}>
+      <FontScaleContext.Provider value={fontScale}>
+        <FontScaleActionsContext.Provider value={fontScaleActions}>
+          {children}
+        </FontScaleActionsContext.Provider>
+      </FontScaleContext.Provider>
+    </ThemeContext.Provider>
+  );
 }
 
-export function useTheme(): ThemeContextValue {
+export function useThemeTokens(): ThemeTokenContextValue {
   const ctx = useContext(ThemeContext);
   if (!ctx) {
-    // Graceful fallback to default lightTheme outside provider
     return {
       theme: lightTheme,
       isDark: false,
       toggleTheme: () => {},
       setTheme: () => {},
-      fontScale: 1.0,
-      setFontScale: () => {},
-      stepFontScale: () => {},
     };
   }
   return ctx;
+}
+
+export function useFontScale(): number {
+  return useContext(FontScaleContext) ?? 1.0;
+}
+
+export function useFontScaleActions(): FontScaleActions {
+  return useContext(FontScaleActionsContext) ?? {
+    setFontScale: () => {},
+    stepFontScale: () => {},
+  };
+}
+
+/** Combined hook kept for components that need both theme tokens and scaling. */
+export function useTheme(): ThemeContextValue {
+  const theme = useThemeTokens();
+  const fontScale = useFontScale();
+  const actions = useFontScaleActions();
+  return { ...theme, fontScale, ...actions };
 }

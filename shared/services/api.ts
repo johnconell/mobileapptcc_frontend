@@ -104,6 +104,7 @@ type RequestOptions = {
   headers?: Record<string, string>;
   /** Override base URL (e.g. cloud for login). */
   baseUrl?: string;
+  timeoutMs?: number;
 };
 
 async function readToken(): Promise<string | null> {
@@ -135,12 +136,17 @@ export async function apiRequest<T = unknown>(
   }
 
   let response: Response;
+  let text: string;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 5000);
   try {
     response = await fetch(url, {
       method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
       headers,
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
     });
+    text = await response.text();
   } catch {
     const hint = lanApiOverride
       ? ' / campus Wi‑Fi and LAN IP'
@@ -148,12 +154,13 @@ export async function apiRequest<T = unknown>(
         ? ' — on a phone use your PC Wi‑Fi IP, not 127.0.0.1'
         : '';
     throw new ApiError(
-      `Network error. Cannot reach server at ${base}. Check your connection${hint}.`,
+      `Network error or request timed out. Cannot reach server at ${base}. Check your connection${hint}.`,
       0,
     );
+  } finally {
+    clearTimeout(timeout);
   }
 
-  const text = await response.text();
   let json: any = null;
   try {
     json = text ? JSON.parse(text) : null;

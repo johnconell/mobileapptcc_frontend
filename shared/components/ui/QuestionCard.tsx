@@ -1,10 +1,11 @@
 import React, { memo, useCallback } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { Flag } from 'lucide-react-native';
 import type { ChoiceKey, Question } from '@/shared/types';
 import { choiceKeys } from '@/shared/utils';
 import { OptionRow } from './OptionRow';
-import { useTheme } from '@/shared/contexts/ThemeContext';
+import { AppButton, Row } from './primitives';
+import { useFontScale, useThemeTokens } from '@/shared/contexts/ThemeContext';
 
 export interface QuestionCardProps {
   question: Question;
@@ -67,7 +68,8 @@ function QuestionCardComponent({
   onToggleFlag,
   disabled = false,
 }: QuestionCardProps) {
-  const { theme, fontScale } = useTheme();
+  const { theme } = useThemeTokens();
+  const fontScale = useFontScale();
   const keys = choiceKeys();
   const category = (question.category || question.subjectId || 'General').trim();
 
@@ -89,8 +91,10 @@ function QuestionCardComponent({
       ]}
     >
       {/* Header: Question N of Total on left, Category badge on right */}
-      <View style={styles.header}>
+      <Row style={styles.header}>
         <Text
+          numberOfLines={1}
+          ellipsizeMode="tail"
           style={[
             styles.questionNumberText,
             {
@@ -109,6 +113,8 @@ function QuestionCardComponent({
           ]}
         >
           <Text
+            numberOfLines={1}
+            ellipsizeMode="tail"
             style={[
               styles.badgeText,
               {
@@ -119,7 +125,7 @@ function QuestionCardComponent({
             {category}
           </Text>
         </View>
-      </View>
+      </Row>
 
       {/* Question Prompt */}
       <Text
@@ -139,7 +145,6 @@ function QuestionCardComponent({
       <View style={styles.optionsList}>
         {keys.map((key) => {
           const body = getChoiceLabel(question, key);
-          if (!body) return null;
           return (
             <OptionRow
               key={key}
@@ -156,37 +161,16 @@ function QuestionCardComponent({
       </View>
 
       {/* Full-width 44px Mark as Not Sure Button */}
-      <Pressable
+      <AppButton
         onPress={onToggleFlag}
         disabled={disabled}
-        accessibilityRole="button"
         accessibilityLabel={isFlagged ? 'Marked as not sure. Tap to unmark.' : 'Mark as not sure'}
-        style={({ pressed }) => [
-          styles.notSureBtn,
-          {
-            backgroundColor: isFlagged ? theme.notSure.button : theme.surfaceAlt,
-            borderColor: isFlagged ? theme.notSure.border : theme.border,
-            opacity: pressed ? 0.85 : 1,
-          },
-        ]}
+        variant={isFlagged ? 'flag' : 'outline'}
+        label={isFlagged ? 'Marked as not sure' : 'Mark as not sure'}
+        icon={(color) => <Flag size={18} color={color} strokeWidth={2} fill={isFlagged ? theme.notSure.dot : 'transparent'} />}
+        style={styles.notSureBtn}
       >
-        <Flag
-          size={18}
-          color={isFlagged ? theme.notSure.text : theme.accentText}
-          strokeWidth={2}
-          fill={isFlagged ? theme.notSure.dot : 'transparent'}
-        />
-        <Text
-          style={[
-            styles.notSureBtnText,
-            {
-              color: isFlagged ? theme.notSure.text : theme.accentText,
-            },
-          ]}
-        >
-          {isFlagged ? 'Marked as not sure' : 'Mark as not sure'}
-        </Text>
-      </Pressable>
+      </AppButton>
     </View>
   );
 }
@@ -194,6 +178,10 @@ function QuestionCardComponent({
 function areQuestionCardPropsEqual(prev: QuestionCardProps, next: QuestionCardProps) {
   return (
     prev.question.id === next.question.id &&
+    prev.question.question === next.question.question &&
+    prev.question.category === next.question.category &&
+    prev.question.subjectId === next.question.subjectId &&
+    prev.question.choices === next.question.choices &&
     prev.questionNumber === next.questionNumber &&
     prev.totalQuestions === next.totalQuestions &&
     prev.selectedAnswer === next.selectedAnswer &&
@@ -209,7 +197,7 @@ export const QuestionCard = memo(QuestionCardComponent, areQuestionCardPropsEqua
 const styles = StyleSheet.create({
   card: {
     borderRadius: 16,
-    borderWidth: 0.5,
+    borderWidth: 1,
     padding: 14,
     marginBottom: 12,
   },
@@ -222,11 +210,14 @@ const styles = StyleSheet.create({
   questionNumberText: {
     fontSize: 13,
     fontWeight: '500',
+    flexShrink: 1,
+    minWidth: 0,
   },
   badge: {
     borderRadius: 10,
     paddingVertical: 3,
     paddingHorizontal: 10,
+    maxWidth: '46%',
   },
   badgeText: {
     fontSize: 11,
@@ -241,18 +232,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   notSureBtn: {
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 0.5,
+    width: '100%',
     marginTop: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-  },
-  notSureBtnText: {
-    fontSize: 14,
-    fontWeight: '500',
   },
 });

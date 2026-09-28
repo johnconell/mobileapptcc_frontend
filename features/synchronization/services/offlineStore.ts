@@ -25,6 +25,7 @@ const PACK_KEY_STORAGE = 'tcc.offline.pack.aes.key';
 export type OfflinePack = {
   pack_version: number;
   exported_at?: string;
+  downloaded_at?: string;
   schedules: Array<{
     id: number;
     title: string;
@@ -35,6 +36,7 @@ export type OfflinePack = {
     venue?: string;
     batch_code?: string;
     course?: string;
+    status?: string;
     rooms?: Array<{ id: number; room_name: string; capacity: number }>;
   }>;
   applicants: Array<{
@@ -407,15 +409,21 @@ export const OfflineStore = {
   },
 
   async savePack(pack: OfflinePack): Promise<void> {
-    const safe = sanitizePackToActiveBanks(pack);
+    const downloadedAt = new Date().toISOString();
+    const safe = sanitizePackToActiveBanks({
+      ...pack,
+      downloaded_at: downloadedAt,
+      schedules: (pack.schedules ?? []).map((schedule) => ({
+        ...schedule,
+        status: schedule.status || 'ready',
+      })),
+    });
     this._packCache = safe;
     await writeEncrypted(PACK_ENC_FILE, WEB_PACK_ENC_KEY, safe);
     // Remove legacy plaintext after successful encrypt.
     await deleteIfExists(PACK_FILE, WEB_PACK_KEY);
     await appStorage.setItem(STORAGE_KEYS.offlinePackReady, '1');
-    await appStorage.setItem(STORAGE_KEYS.offlinePackAt, new Date().toISOString());
-    const nowIso = new Date().toISOString();
-    await appStorage.setItem(STORAGE_KEYS.offlinePackAt, nowIso);
+    await appStorage.setItem(STORAGE_KEYS.offlinePackAt, downloadedAt);
     try {
       const sha256 = await computePackHashAsync(safe);
       await appStorage.setItem('tcc.offline.pack.sha256', sha256);

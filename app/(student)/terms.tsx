@@ -25,16 +25,19 @@ import { examProcess } from '@/shared/theme/examProcess';
  *
  * Flow: passkey → confirmation → terms (this screen) → lobby
  *
- * Displays the examination rules and requires the student to check "I agree"
- * before proceeding to the waiting lobby.
+ * This screen is reached AFTER the exam package has been downloaded in the
+ * Confirm step. It is responsible for:
+ *   1. Showing the exam rules and collecting agreement.
+ *   2. Triggering Android App Pinning (kiosk mode) — must succeed before joining.
+ *   3. Calling LobbyRepository.join* to register the student in the proctor's list.
+ *   4. Navigating to lobby ONLY after all of the above succeed.
  *
- * agreedAt is stored locally in studentStore. A fire-and-forget API call also
- * records it on the server (if online). If offline, the local timestamp is
- * used as the source of truth and synced with the final submission pack.
+ * The student is NOT counted as "inside the lobby" until step 3 completes.
  */
 export default function TermsScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const selectedStudent = useStudentStore((s) => s.selectedStudent);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
   const examPasskey = useStudentStore((s) => s.examPasskey);
@@ -55,13 +58,14 @@ export default function TermsScreen() {
     return () => sub.remove();
   }, [navigation]);
 
-  // Guard: must have a verified student to reach this screen.
+  // Guard: must have a selected student + session to reach this screen.
   React.useEffect(() => {
-    if (!verifiedStudent || !scannedSessionId) {
+    if ((!selectedStudent && !verifiedStudent) || !scannedSessionId) {
       router.replace('/(student)/passkey');
     }
-  }, [verifiedStudent, scannedSessionId, router]);
+  }, [selectedStudent, verifiedStudent, scannedSessionId, router]);
 
+  // Derive exam metadata for display (from lobby snapshot if already available)
   const schedName = lobbySnapshot?.schedule?.name ?? 'Entrance Examination';
   const duration = lobbySnapshot?.session?.durationMinutes
     ? `${lobbySnapshot.session.durationMinutes} minutes`
@@ -73,7 +77,7 @@ export default function TermsScreen() {
     if (!agreed || proceeding) return;
     setProceeding(true);
     setPinStatusText(null);
-    setPinDeclined(false); // clear any previous decline notice
+    setPinDeclined(false);
 
     // On Android: Gate entering the lobby behind mandatory App Pinning
     if (Platform.OS === 'android') {
@@ -98,7 +102,8 @@ export default function TermsScreen() {
           if (!locked) {
             // Student tapped "No Thanks" — show inline blocking notice
             setProceeding(false);
-            setPinStatusText('App Pinning is required to proceed.');
+            setPinStatusText(null);
+            setPinDeclined(true);
             Alert.alert(
               'App Pinning Required',
               'Screen Pinning is required to proceed to the examination lobby. Please tap "GOT IT" on the system dialog to lock the application into kiosk mode.',
@@ -113,8 +118,6 @@ export default function TermsScreen() {
                 },
               ],
             );
-            setPinStatusText(null);
-            setPinDeclined(true);
             return;
           }
         }
@@ -123,22 +126,25 @@ export default function TermsScreen() {
       }
     }
 
+    // Now register the student in the proctor's lobby list
     setPinStatusText('Registering with examination lobby...');
     try {
       const { LobbyRepository } = await import('@/features/lobby/repositories/LobbyRepository');
       const { appStorage } = await import('@/shared/services/storage');
       const { ExamLifecycle } = await import('@/features/examinations/services/examLifecycle');
-      const { userFacingError } = await import('@/shared/utils/userFacingError');
 
       const effectivePasskey =
         examPasskey || (await appStorage.getItem('tcc.student.exam.passkey')) || '';
 
+      // Use verifiedStudent if already set (resume path), otherwise selectedStudent (first time)
+      const studentForJoin = verifiedStudent ?? selectedStudent!;
+
       const lobby = effectivePasskey
-        ? await LobbyRepository.joinWithPasskey(verifiedStudent!, scannedSessionId!, effectivePasskey)
-        : await LobbyRepository.joinStudent(verifiedStudent!, scannedSessionId!);
+        ? await LobbyRepository.joinWithPasskey(studentForJoin, scannedSessionId!, effectivePasskey)
+        : await LobbyRepository.joinStudent(studentForJoin, scannedSessionId!);
 
       const regId = lobby.registration_id;
-      const updatedVerified = { ...verifiedStudent! };
+      const updatedVerified = { ...studentForJoin };
       if (regId) {
         updatedVerified.registration_id = Number(regId);
       } else {
@@ -152,7 +158,7 @@ export default function TermsScreen() {
       const ts = new Date().toISOString();
       setAgreedAt(ts);
 
-      // Record agreement on server
+      // Record agreement on server (fire-and-forget)
       try {
         void LobbyRepository.recordAgreement();
       } catch {
@@ -175,9 +181,9 @@ export default function TermsScreen() {
 
   return (
     <ExamProcessChrome
-      step={3}
+      step={2}
       title="Terms & Agreement"
-      stepLabel="Step 4 of 6 · Terms"
+      stepLabel="Step 3 of 6 · Confirm"
     >
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -250,10 +256,10 @@ export default function TermsScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.pinDeclinedTitle}>App Pinning Required</Text>
               <Text style={styles.pinDeclinedBody}>
-                You tapped "No Thanks" on the App Pinning prompt. Screen Pinning
+                You tapped &ldquo;No Thanks&rdquo; on the App Pinning prompt. Screen Pinning
                 is mandatory to enter the examination lobby. Tap the button
                 below and then tap{' '}
-                <Text style={styles.pinDeclinedEmphasis}>"Got It"</Text> on the
+                <Text style={styles.pinDeclinedEmphasis}>&ldquo;Got It&rdquo;</Text> on the
                 system dialog to continue.
               </Text>
             </View>
@@ -444,4 +450,3 @@ const styles = StyleSheet.create({
     color: '#78350f',
   },
 });
-

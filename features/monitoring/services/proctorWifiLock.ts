@@ -5,7 +5,6 @@
  */
 import * as Network from 'expo-network';
 import { PeerExamServer } from '@/features/examinations/services/peerExamServer';
-import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { resolveWifiLanIp } from '@/features/monitoring/services/wifiLanIp';
 import { appStorage } from '@/shared/services/storage';
 
@@ -231,18 +230,6 @@ export async function evaluateProctorWifiLock(): Promise<WifiLockState> {
       const info = PeerExamServer.info();
       if (info.running && info.host !== identity.localIp) {
         await PeerExamServer.refreshHostIp();
-        if (options.examSessionId) {
-          try {
-            await LobbyRepository.updateSessionNetwork(options.examSessionId, {
-              localServerIp: identity.localIp,
-              wifiSsid: lockedSsid ?? identity.ssid,
-              wifiBssid: lockedBssid ?? identity.bssid,
-              regenerateIfEmpty: false,
-            });
-          } catch {
-            // Best-effort; lock still holds.
-          }
-        }
       }
     }
 

@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useMemo, useState } from 'react';
+import React, { memo, useCallback, useLayoutEffect, useMemo, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -9,7 +9,8 @@ import {
   View,
 } from 'react-native';
 import { ChevronDown, ChevronUp, Flag, X } from 'lucide-react-native';
-import { useTheme } from '@/shared/contexts/ThemeContext';
+import { useThemeTokens } from '@/shared/contexts/ThemeContext';
+import { Row } from './primitives';
 import type { ChoiceKey, ExamAnswer, Question } from '@/shared/types';
 
 export interface QuestionNavigatorSheetProps {
@@ -19,10 +20,11 @@ export interface QuestionNavigatorSheetProps {
   answers: Record<string, ExamAnswer>;
   flags: Record<string, boolean>;
   currentIndex: number;
+  initialFilter?: QuestionNavigatorFilter;
   onJumpToQuestion: (index: number) => void;
 }
 
-type FilterType = 'all' | 'not_sure' | 'unanswered';
+export type QuestionNavigatorFilter = 'all' | 'not_sure' | 'unanswered' | 'review';
 
 function categoryKeyOf(question: Question): string {
   return (question.category || question.subjectId || 'General').trim() || 'General';
@@ -35,13 +37,18 @@ function QuestionNavigatorSheetComponent({
   answers,
   flags,
   currentIndex,
+  initialFilter = 'all',
   onJumpToQuestion,
 }: QuestionNavigatorSheetProps) {
-  const { theme } = useTheme();
+  const { theme, isDark } = useThemeTokens();
   const { width: windowWidth } = useWindowDimensions();
 
-  const [activeFilter, setActiveFilter] = useState<FilterType>('all');
+  const [activeFilter, setActiveFilter] = useState<QuestionNavigatorFilter>('all');
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
+
+  useLayoutEffect(() => {
+    if (visible) setActiveFilter(initialFilter);
+  }, [visible, initialFilter]);
 
   // Group questions by category
   const categoriesData = useMemo(() => {
@@ -130,7 +137,7 @@ function QuestionNavigatorSheetComponent({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <View style={styles.overlay}>
+      <View style={[styles.overlay, { backgroundColor: `${isDark ? theme.bg : theme.text}73` }]}>
         <Pressable
           style={StyleSheet.absoluteFill}
           onPress={onClose}
@@ -150,7 +157,7 @@ function QuestionNavigatorSheetComponent({
           <View style={[styles.dragHandle, { backgroundColor: theme.border }]} />
 
           {/* Title row */}
-          <View style={styles.titleRow}>
+          <Row style={styles.titleRow}>
             <Text style={[styles.sheetTitle, { color: theme.text }]}>
               Jump to question
             </Text>
@@ -158,18 +165,17 @@ function QuestionNavigatorSheetComponent({
               onPress={onClose}
               accessibilityRole="button"
               accessibilityLabel="Close sheet"
-              style={({ pressed }) => [
+              style={[
                 styles.closeBtn,
                 {
                   backgroundColor: theme.surfaceAlt,
                   borderColor: theme.border,
-                  opacity: pressed ? 0.8 : 1,
                 },
               ]}
             >
               <X size={18} color={theme.textSecondary} strokeWidth={2.2} />
             </Pressable>
-          </View>
+          </Row>
 
           {/* Legend */}
           <View style={styles.legendRow}>
@@ -321,6 +327,12 @@ function QuestionNavigatorSheetComponent({
             </Pressable>
           </View>
 
+          {activeFilter === 'review' ? (
+            <Text style={[styles.reviewFilterHint, { color: theme.textSecondary }]}>
+              Showing unanswered and not-sure questions
+            </Text>
+          ) : null}
+
           {/* Categories and Question Grids */}
           <ScrollView style={styles.gridScroll} contentContainerStyle={styles.gridContent}>
             {categoriesData.map((cat) => {
@@ -330,6 +342,9 @@ function QuestionNavigatorSheetComponent({
               const filteredItems = cat.items.filter(({ question }) => {
                 if (activeFilter === 'not_sure') return !!flags[question.id];
                 if (activeFilter === 'unanswered') return !answers[question.id]?.selectedAnswer;
+                if (activeFilter === 'review') {
+                  return !!flags[question.id] || !answers[question.id]?.selectedAnswer;
+                }
                 return true;
               });
 
@@ -340,12 +355,11 @@ function QuestionNavigatorSheetComponent({
                     onPress={() => toggleCategory(cat.name)}
                     accessibilityRole="button"
                     accessibilityLabel={`${cat.name}, ${cat.answeredCount} of ${cat.total} answered. Tap to ${expanded ? 'collapse' : 'expand'}`}
-                    style={({ pressed }) => [
+                    style={[
                       styles.categoryHeader,
                       {
                         backgroundColor: theme.surfaceAlt,
                         borderColor: theme.border,
-                        opacity: pressed ? 0.85 : 1,
                       },
                     ]}
                   >
@@ -404,14 +418,13 @@ function QuestionNavigatorSheetComponent({
                               onPress={() => handleSelectQuestion(index)}
                               accessibilityRole="button"
                               accessibilityLabel={`Question ${qNumber}${isFlagged ? ', marked as not sure' : ''}${isAnswered ? ', answered' : ', unanswered'}${isCurrent ? ', current question' : ''}`}
-                              style={({ pressed }) => [
+                              style={[
                                 styles.gridButton,
                                 {
                                   width: itemWidth,
                                   backgroundColor: btnBg,
                                   borderColor: btnBorder,
-                                  borderWidth: btnBorderWidth,
-                                  opacity: pressed ? 0.8 : 1,
+                                  borderWidth: Math.max(1, btnBorderWidth),
                                 },
                               ]}
                             >
@@ -455,26 +468,25 @@ function QuestionNavigatorSheetComponent({
               disabled={flaggedIndices.length === 0}
               accessibilityRole="button"
               accessibilityLabel={`Review not sure questions, ${flaggedIndices.length} total`}
-              style={({ pressed }) => [
+              style={[
                 styles.reviewBtn,
                 {
-                  backgroundColor: flaggedIndices.length > 0 ? theme.accentSoft : theme.surfaceAlt,
+                  backgroundColor: flaggedIndices.length > 0 ? theme.accent : theme.surfaceAlt,
                   borderColor: flaggedIndices.length > 0 ? theme.accent : theme.border,
-                  opacity: flaggedIndices.length === 0 ? 0.5 : pressed ? 0.85 : 1,
                 },
               ]}
             >
               <Flag
                 size={18}
-                color={flaggedIndices.length > 0 ? theme.accentText : theme.textMuted}
+                color={flaggedIndices.length > 0 ? theme.onAccent : theme.textMuted}
                 strokeWidth={2}
-                fill={flaggedIndices.length > 0 ? theme.accentText : 'transparent'}
+                fill={flaggedIndices.length > 0 ? theme.onAccent : 'transparent'}
               />
               <Text
                 style={[
                   styles.reviewBtnText,
                   {
-                    color: flaggedIndices.length > 0 ? theme.accentText : theme.textMuted,
+                    color: flaggedIndices.length > 0 ? theme.onAccent : theme.textMuted,
                   },
                 ]}
               >
@@ -493,15 +505,14 @@ export const QuestionNavigatorSheet = memo(QuestionNavigatorSheetComponent);
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
     justifyContent: 'flex-end',
   },
   sheet: {
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
-    borderTopWidth: 0.5,
-    borderLeftWidth: 0.5,
-    borderRightWidth: 0.5,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
     paddingHorizontal: 16,
     paddingTop: 10,
     paddingBottom: 24,
@@ -528,7 +539,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    borderWidth: 0.5,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -562,7 +573,7 @@ const styles = StyleSheet.create({
   filterSwitch: {
     height: 40,
     borderRadius: 12,
-    borderWidth: 0.5,
+    borderWidth: 1,
     padding: 2,
     flexDirection: 'row',
     marginBottom: 14,
@@ -575,6 +586,12 @@ const styles = StyleSheet.create({
   },
   filterText: {
     fontSize: 13,
+  },
+  reviewFilterHint: {
+    fontSize: 12,
+    marginTop: -4,
+    marginBottom: 10,
+    paddingHorizontal: 4,
   },
   gridScroll: {
     flexGrow: 0,
@@ -589,7 +606,7 @@ const styles = StyleSheet.create({
   categoryHeader: {
     height: 44,
     borderRadius: 12,
-    borderWidth: 0.5,
+    borderWidth: 1,
     paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
@@ -614,6 +631,7 @@ const styles = StyleSheet.create({
   gridButton: {
     height: 44,
     borderRadius: 10,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',

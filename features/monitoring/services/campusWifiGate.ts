@@ -73,7 +73,7 @@ export async function assertCampusWifiForJoin(options?: {
   isProctor?: boolean;
 }): Promise<CampusWifiGateResult> {
   const netState = await Network.getNetworkStateAsync();
-  const wifiConnected = netState.type === Network.NetworkStateType.WIFI;
+  const wifiConnected = netState.isConnected === true && netState.type === Network.NetworkStateType.WIFI;
 
   const mismatchMessage =
     'You are connected to a different examination network. Please connect to the same Wi‑Fi network as the proctor and scan again.';

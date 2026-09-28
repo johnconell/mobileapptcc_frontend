@@ -25,9 +25,7 @@ export default function SubmittingScreen() {
   const terminationReason = useExamStore((s) => s.terminationReason);
   const markSubmitting = useExamStore((s) => s.markSubmitting);
   const markSubmitted = useExamStore((s) => s.markSubmitted);
-  const resetExam = useExamStore((s) => s.reset);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
-  const resetStudent = useStudentStore((s) => s.reset);
 
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -37,19 +35,6 @@ export default function SubmittingScreen() {
     terminationReason === 'time_expired' ||
     terminationReason === 'policy_violation' ||
     terminationReason === 'proctor_terminated';
-
-  const goHome = useCallback(() => {
-    void (async () => {
-      try {
-        await clearApplicantExamMaterial();
-      } catch {
-        /* ignore */
-      }
-      resetExam();
-      resetStudent();
-      router.replace('/');
-    })();
-  }, [resetExam, resetStudent, router]);
 
   const submit = useCallback(async () => {
     if (submittingRef.current) return;
@@ -100,13 +85,6 @@ export default function SubmittingScreen() {
     submittingRef.current = false;
     markSubmitting(false);
 
-    if (isForcedEnd) {
-      await clearApplicantExamMaterial();
-      markSubmitted(reason);
-      router.replace('/(student)/completed');
-      return;
-    }
-
     setError(
       userFacingError(
         lastError,
@@ -118,7 +96,6 @@ export default function SubmittingScreen() {
     sessionId,
     verifiedStudent?.id,
     terminationReason,
-    isForcedEnd,
     markSubmitting,
     markSubmitted,
     router,
@@ -133,8 +110,13 @@ export default function SubmittingScreen() {
       <ExamProcessChrome step={5} title="Could not submit" stepLabel="Step 6 of 6 · Done">
         <Text style={styles.body}>{error}</Text>
         <Text style={styles.body}>
-          Your answers are saved on this phone. Stay on the exam Wi‑Fi and try again.
+          Your answers are saved on this phone. Stay on the exam Wi-Fi and try again.
         </Text>
+        {isForcedEnd ? (
+          <Text style={styles.body}>
+            The phone is unpinned. Keep it on this screen until the submission is confirmed.
+          </Text>
+        ) : null}
         <View style={styles.gap}>
           <ExamProcessButton
             title="Try Again"
@@ -144,9 +126,6 @@ export default function SubmittingScreen() {
               setAttempt((n) => n + 1);
             }}
           />
-        </View>
-        <View style={styles.gap}>
-          <ExamProcessButton title="Return Home" variant="back" onPress={goHome} />
         </View>
       </ExamProcessChrome>
     );

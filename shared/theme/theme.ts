@@ -1,15 +1,15 @@
 export const lightTheme = {
-  bg: '#F5F6FB', surface: '#FFFFFF', surfaceAlt: '#FFFFFF',
-  border: '#D9DCEC', divider: '#E3E5F1',
-  text: '#1B1D2B', textSecondary: '#5B6078', textMuted: '#7A7F96',
-  accent: '#3B3F8F', accentSoft: '#F1F2FD', accentText: '#3B3F8F',
-  optionLetterBg: '#EEF0FB', ring: '#3B3F8F', onAccent: '#FFFFFF',
-  badgeBg: '#E1F4F8', badgeText: '#0B5D6E',
-  notSure: { bg: '#FBE7B8', border: '#E0A91F', text: '#5C3D00', dot: '#C98A00', button: '#FDF1D3' },
+  bg: '#E8EAF2', surface: '#F4F5F9', surfaceAlt: '#EDEEF4',
+  border: '#C4C9DE', divider: '#D9DCEA',
+  text: '#1B1D2B', textSecondary: '#474C63', textMuted: '#545970',
+  accent: '#3B3F8F', accentSoft: '#E1E4F7', accentText: '#3B3F8F',
+  optionLetterBg: '#D9DDF2', ring: '#3B3F8F', onAccent: '#FFFFFF',
+  badgeBg: '#D8EEF3', badgeText: '#0B5D6E',
+  notSure: { bg: '#F8EBC4', border: '#DDA51E', text: '#5C3D00', dot: '#C98A00', button: '#F8EBC4' },
   timer: {
-    green:  { bg: '#EEF8F1', border: '#B9E0C4', text: '#237A45', track: '#CFE9D8', fill: '#2E9D5A' },
-    orange: { bg: '#FFF4E5', border: '#F5D0A0', text: '#B45F06', track: '#F8E1BF', fill: '#E08A1E' },
-    red:    { bg: '#FDECEC', border: '#F3B8B8', text: '#B42318', track: '#F6CFCB', fill: '#D92D20' },
+    green:  { bg: '#E7F2E9', border: '#9FD4AF', text: '#1D6A3A', track: '#C7E3D0', fill: '#2E9D5A' },
+    orange: { bg: '#FBEEDB', border: '#F0C88F', text: '#8D4903', track: '#F1DDBE', fill: '#E08A1E' },
+    red:    { bg: '#F9E6E6', border: '#EDB1B1', text: '#B42318', track: '#F0CFCC', fill: '#D92D20' },
   },
 };
 

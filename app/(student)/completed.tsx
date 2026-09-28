@@ -25,6 +25,7 @@ export default function CompletedScreen() {
 
   const terminated =
     terminationReason === 'policy_violation' || terminationReason === 'proctor_terminated';
+  const mustAcknowledgeTermination = terminationReason === 'policy_violation';
   const timeExpired = terminationReason === 'time_expired';
   const gmailHint =
     verifiedStudent?.email?.includes('@')
@@ -41,15 +42,16 @@ export default function CompletedScreen() {
   const [countdown, setCountdown] = React.useState(AUTO_HOME_SECONDS);
 
   React.useEffect(() => {
-    // Keep terminated students on this notice longer — they must read it.
-    if (terminated) return undefined;
+    // Policy violations require an explicit acknowledgement. Other endings
+    // display the result notice briefly, then return to the landing page.
+    if (mustAcknowledgeTermination) return undefined;
     if (countdown <= 0) {
       goHome();
       return undefined;
     }
     const id = setTimeout(() => setCountdown((n) => n - 1), 1000);
     return () => clearTimeout(id);
-  }, [terminated, countdown, goHome]);
+  }, [mustAcknowledgeTermination, countdown, goHome]);
 
   return (
     <ExamProcessChrome
@@ -102,7 +104,7 @@ export default function CompletedScreen() {
           </View>
         </View>
 
-        <ExamProcessOk visible={!terminated}>
+        <ExamProcessOk visible={!mustAcknowledgeTermination}>
           Returning to the start in {countdown}s…
         </ExamProcessOk>
       </Animated.View>

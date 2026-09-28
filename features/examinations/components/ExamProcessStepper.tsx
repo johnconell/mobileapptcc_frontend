@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Check, ChevronDown, ChevronRight } from 'lucide-react-native';
+import { Check } from 'lucide-react-native';
 import {
   EXAM_PROCESS_STEPS,
   examProcess,
@@ -9,62 +9,76 @@ import {
 
 type ExamProcessStepperProps = {
   step: ExamProcessStepIndex;
-  /** Optionally hide labels on very tight layouts */
+  /** @deprecated compact has no effect — labels are always shown */
   compact?: boolean;
 };
 
 /**
- * Horizontal exam-flow stepper: completed = check, current = down chevron,
- * upcoming = right chevron — matches the soft maroon progress reference.
+ * Clean horizontal stepper for the 6-step exam flow.
+ *
+ * Layout: circle + connecting line, labels below each circle.
+ *  - Done:     filled maroon circle, white checkmark
+ *  - Current:  white circle, maroon border (2px), maroon step number
+ *  - Upcoming: white circle, muted border, muted step number
+ *
+ * Labels sit below each circle and are constrained so they never overflow.
+ * Uses `adjustsFontSizeToFit` so they shrink before wrapping.
  */
-export function ExamProcessStepper({ step, compact = false }: ExamProcessStepperProps) {
+export function ExamProcessStepper({ step }: ExamProcessStepperProps) {
   return (
-    <View style={styles.row} accessibilityRole="progressbar">
+    <View style={styles.container} accessibilityRole="progressbar">
       {EXAM_PROCESS_STEPS.map((label, index) => {
         const done = index < step;
         const current = index === step;
-        const upcoming = index > step;
-        const lineDone = index < step;
 
         return (
           <React.Fragment key={label}>
+            {/* Connector line between steps */}
             {index > 0 ? (
               <View
                 style={[
                   styles.line,
-                  { backgroundColor: lineDone ? examProcess.progressActive : examProcess.progressTrack },
+                  { backgroundColor: index <= step ? examProcess.progressActive : examProcess.progressTrack },
                 ]}
               />
             ) : null}
+
             <View style={styles.stepWrap}>
               <View
                 style={[
                   styles.circle,
                   done && styles.circleDone,
                   current && styles.circleCurrent,
-                  upcoming && styles.circleUpcoming,
+                  !done && !current && styles.circleUpcoming,
                 ]}
               >
                 {done ? (
-                  <Check size={14} color={examProcess.white} strokeWidth={2.5} />
-                ) : current ? (
-                  <ChevronDown size={14} color={examProcess.progressActive} strokeWidth={2.5} />
+                  <Check size={13} color={examProcess.white} strokeWidth={3} />
                 ) : (
-                  <ChevronRight size={14} color={examProcess.progressInactive} strokeWidth={2.2} />
+                  <Text
+                    style={[
+                      styles.circleNum,
+                      current && styles.circleNumCurrent,
+                      !current && styles.circleNumUpcoming,
+                    ]}
+                  >
+                    {index + 1}
+                  </Text>
                 )}
               </View>
-              {!compact ? (
-                <Text
-                  style={[
-                    styles.label,
-                    current && styles.labelCurrent,
-                    (done || upcoming) && styles.labelMuted,
-                  ]}
-                  numberOfLines={1}
-                >
-                  {label}
-                </Text>
-              ) : null}
+
+              <Text
+                style={[
+                  styles.label,
+                  current && styles.labelCurrent,
+                  done && styles.labelDone,
+                ]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+              >
+                {label}
+              </Text>
             </View>
           </React.Fragment>
         );
@@ -73,20 +87,20 @@ export function ExamProcessStepper({ step, compact = false }: ExamProcessStepper
   );
 }
 
-const CIRCLE = 28;
+const CIRCLE = 26;
 
 const styles = StyleSheet.create({
-  row: {
+  container: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    justifyContent: 'space-between',
     width: '100%',
-    marginBottom: 10,
+    marginBottom: 12,
   },
   stepWrap: {
     alignItems: 'center',
-    width: CIRCLE + 8,
-    zIndex: 1,
+    // Fixed width ensures all 6 steps fit evenly. 26 circle + some padding for label.
+    width: CIRCLE + 16,
+    flexShrink: 0,
   },
   circle: {
     width: CIRCLE,
@@ -108,24 +122,36 @@ const styles = StyleSheet.create({
     backgroundColor: examProcess.white,
     borderColor: examProcess.progressInactive,
   },
+  circleNum: {
+    fontSize: 11,
+    fontFamily: examProcess.fontSemiBold,
+  },
+  circleNumCurrent: {
+    color: examProcess.progressActive,
+  },
+  circleNumUpcoming: {
+    color: examProcess.progressInactive,
+  },
   line: {
     flex: 1,
     height: 2,
     marginTop: CIRCLE / 2 - 1,
-    marginHorizontal: -2,
+    // Slightly overlap the circles so the line meets the circle edge
+    marginHorizontal: -1,
   },
   label: {
-    marginTop: 6,
-    fontSize: 10,
+    marginTop: 5,
+    fontSize: 9,
     fontFamily: examProcess.fontRegular,
     textAlign: 'center',
-    color: examProcess.muted,
+    color: examProcess.progressInactive,
+    width: '100%',
   },
   labelCurrent: {
     fontFamily: examProcess.fontSemiBold,
     color: examProcess.progressActive,
   },
-  labelMuted: {
-    color: examProcess.progressInactive,
+  labelDone: {
+    color: examProcess.progressActive,
   },
 });

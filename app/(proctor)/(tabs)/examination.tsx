@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Network from 'expo-network';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -27,6 +28,7 @@ import {
 import { Card, Button, EmptyState, Breadcrumbs, StatusChip } from '@/shared/components/ui';
 import { ScheduleCard } from '@/features/schedules/components/ScheduleCard';
 import { useSchedules } from '@/features/schedules/hooks/useSchedules';
+import { ScheduleRepository } from '@/features/schedules/repositories/ScheduleRepository';
 import { AuthRepository } from '@/features/authentication/repositories/AuthRepository';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { QUERY_KEYS } from '@/shared/constants';
@@ -103,6 +105,7 @@ export default function ProctorExaminationTabScreen() {
   const setSelectedSession = useProctorStore((s) => s.setSelectedSession);
   const schedulesQuery = useSchedules(Boolean(profile));
   const [refreshing, setRefreshing] = useState(false);
+  const [internetAvailable, setInternetAvailable] = useState<boolean | null>(null);
   const [pack, setPack] = useState<PackSummary | null>(null);
   const [openedRooms, setOpenedRooms] = useState<
     Record<string, { code: string; openedAt: string; status: 'lobby_open' | 'in_progress' | 'ended' }>
@@ -170,7 +173,7 @@ export default function ProctorExaminationTabScreen() {
 
   useEffect(() => {
     if (!profile) {
-      void AuthRepository.getSession().then((session) => {
+      void AuthRepository.getCachedSessionFast().then((session) => {
         if (session) setProfile(session);
         else router.replace('/(proctor)/login' as any);
       });
@@ -180,6 +183,20 @@ export default function ProctorExaminationTabScreen() {
   useEffect(() => {
     void refreshPackData();
   }, [refreshPackData]);
+
+  useEffect(() => {
+    let active = true;
+    const refreshConnection = async () => {
+      const state = await Network.getNetworkStateAsync().catch(() => null);
+      if (active) setInternetAvailable(state?.isInternetReachable === true);
+    };
+    void refreshConnection();
+    const interval = setInterval(() => void refreshConnection(), 5000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -355,26 +372,6 @@ export default function ProctorExaminationTabScreen() {
           String(selectedSlot.roomId),
         );
 
-        // Register / open cloud session for deterministic student resolution
-        try {
-          const { resolveWifiLanIp } = await import('@/features/monitoring/services/wifiLanIp');
-          const lan = await resolveWifiLanIp();
-          const hostIp = lan.ip || '127.0.0.1';
-          const proctorId = profile?.id || 1;
-          const cloudSession = await LobbyRepository.openCloudSession({
-            proctorId,
-            localIp: hostIp,
-            localPort: 9777,
-            scheduleId: selectedSlot.sidNum,
-            roomId: selectedSlot.roomId,
-          });
-          if (cloudSession?.session_code) {
-            queryParams.roomCode = cloudSession.session_code;
-          }
-        } catch (cloudErr) {
-          if (__DEV__) console.warn('[examination] Failed to open cloud session:', cloudErr);
-        }
-
         // 4. Update opened rooms
         const updatedOpened = await OfflineStore.getOpenedRooms();
         setOpenedRooms(updatedOpened);
@@ -538,6 +535,30 @@ export default function ProctorExaminationTabScreen() {
                   : pack?.ready
                     ? "Update Required for Today's Exam"
                     : 'Download Pack Required'}
+              </Text>
+            </View>
+
+            <View
+              style={[
+                styles.connectionChip,
+                { backgroundColor: internetAvailable ? colors.successMuted : colors.cardMuted },
+              ]}
+            >
+              <View
+                style={[
+                  styles.connectionDot,
+                  { backgroundColor: internetAvailable ? colors.success : colors.textMuted },
+                ]}
+              />
+              <Text
+                style={[
+                  styles.connectionText,
+                  { color: internetAvailable ? colors.success : colors.textSecondary },
+                ]}
+              >
+                {internetAvailable
+                  ? 'Online'
+                  : 'Offline mode: showing downloaded schedules'}
               </Text>
             </View>
 
@@ -717,9 +738,35 @@ export default function ProctorExaminationTabScreen() {
           </View>
         }
         ListEmptyComponent={
-          <EmptyState
-            title={searchQuery ? 'No matching schedules found' : 'No examination schedules available'}
-          />
+          schedulesQuery.isLoading ? null : searchQuery ? (
+            <EmptyState title="No matching schedules found" />
+          ) : !internetAvailable ? (
+            <View style={styles.offlineEmptyState}>
+              <Text style={[styles.offlineEmptyText, { color: colors.textSecondary }]}>
+                No schedules downloaded. Connect to the internet and download today&apos;s exam pack.
+              </Text>
+              <Button
+                title="Retry"
+                variant="outline"
+                onPress={() => void (async () => {
+                  const state = await Network.getNetworkStateAsync().catch(() => null);
+                  const online = state?.isInternetReachable === true;
+                  setInternetAvailable(online);
+                  if (online) {
+                    try {
+                      const schedules = await ScheduleRepository.refreshSchedulesFromCloud();
+                      queryClient.setQueryData(QUERY_KEYS.schedules, schedules);
+                    } catch {
+                      // Keep the local list after a failed retry.
+                    }
+                  }
+                  await schedulesQuery.refetch();
+                })()}
+              />
+            </View>
+          ) : (
+            <EmptyState title="No examination schedules available" />
+          )
         }
         renderItem={({ item, index }) => (
           <ScheduleCard
@@ -926,6 +973,35 @@ const styles = StyleSheet.create({
   },
   screenTitleRow: {
     marginBottom: 2,
+  },
+  connectionChip: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  connectionDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  connectionText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  offlineEmptyState: {
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 30,
+  },
+  offlineEmptyText: {
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: 'center',
   },
   screenHeading: {
     fontSize: 26,

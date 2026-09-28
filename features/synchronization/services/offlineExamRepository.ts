@@ -13,6 +13,7 @@ import {
 import { assertCloudInternetReachable } from '@/features/monitoring/services/wifiLanIp';
 import type { ChoiceKey, Question, StudentRecord } from '@/shared/types';
 import * as Crypto from 'expo-crypto';
+import * as Network from 'expo-network';
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
 
@@ -59,9 +60,10 @@ async function cloudFetch<T>(
   // Without this the request sits on the OS TCP timeout (~30–60s) when the phone
   // is on a different Wi‑Fi, so the student sees a frozen screen instead of a reason.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 8000);
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 5000);
 
   let res: Response;
+  let json: unknown;
   try {
     res = await fetch(url, {
       method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
@@ -69,6 +71,7 @@ async function cloudFetch<T>(
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
     });
+    json = await res.json().catch(() => ({}));
   } catch {
     throw new Error(
       studentPackDownloadFailureMessage(
@@ -80,7 +83,6 @@ async function cloudFetch<T>(
     clearTimeout(timer);
   }
 
-  const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     console.error(`[CLOUD FETCH] ${options.method ?? 'GET'} ${path} → HTTP ${res.status}`, json);
     const serverMsg = (json as { message?: string })?.message || '';
@@ -460,7 +462,7 @@ export const OfflineExamRepository = {
     const json = await cloudFetch<{
       success: boolean;
       data: OfflinePack & { proctors?: unknown };
-    }>(`/sync/exam-day-pack${q}`, { token: syncToken, timeoutMs: 120000 });
+    }>(`/sync/exam-day-pack${q}`, { token: syncToken, timeoutMs: 5000 });
     if (!json.data) throw new Error('Cloud returned an empty exam pack.');
 
     report(55, 'Processing students and questions…');
@@ -550,6 +552,20 @@ export const OfflineExamRepository = {
       };
     }
 
+    const network = await Network.getNetworkStateAsync().catch(() => null);
+    if (network?.isInternetReachable !== true) {
+      return {
+        updateRequired: false,
+        rescheduledSince: 0,
+        rescheduledToday: 0,
+        questionsChangedSince: 0,
+        questionsChangedToday: 0,
+        registrationCount: 0,
+        reason: null,
+        message: 'Offline mode: using the downloaded exam pack.',
+      };
+    }
+
     const syncToken = getSyncToken();
     if (!syncToken) {
       return {
@@ -589,7 +605,7 @@ export const OfflineExamRepository = {
         };
       }>(`/sync/exam-day-pack-status${q}`, {
         token: syncToken,
-        timeoutMs: 12000,
+          timeoutMs: 5000,
       });
 
       const data = json.data ?? {};
@@ -667,6 +683,7 @@ export const OfflineExamRepository = {
   async getCachedSchedules() {
     const pack = await OfflineStore.getPack();
     if (!pack) return [];
+    const downloadedAt = pack.downloaded_at ?? (await OfflineStore.getPackMeta()).at ?? undefined;
     // Group by date + title so different exams on the same day are distinct.
     const map = new Map<string, any>();
     for (const s of pack.schedules) {
@@ -685,6 +702,10 @@ export const OfflineExamRepository = {
           timeLabel: s.time_slot,
           batchNumber: s.batch_code,
           venue: s.venue,
+          offlineReady: true,
+          packVersion: pack.pack_version,
+          downloadedAt,
+          status: 'ready',
         });
       }
       const item = map.get(key)!;
@@ -812,7 +833,7 @@ export const OfflineExamRepository = {
     }
 
     const reg = matches.find(
-      (r) => Number(r.examination_schedule_id) === scheduleId,
+      (registration) => Number(registration.examination_schedule_id) === scheduleId,
     );
     if (!reg) return null;
 

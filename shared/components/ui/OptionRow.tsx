@@ -29,13 +29,12 @@ function OptionRowComponent({
       accessibilityRole="radio"
       accessibilityState={{ selected: isSelected, disabled }}
       accessibilityLabel={`Option ${optionKey}: ${text}`}
-      style={({ pressed }) => [
+      style={[
         styles.container,
         {
           backgroundColor: isSelected ? theme.accentSoft : theme.surfaceAlt,
           borderColor: isSelected ? theme.ring : theme.border,
-          borderWidth: isSelected ? 1.5 : 0.5,
-          opacity: pressed ? 0.85 : 1,
+          borderWidth: isSelected ? 1.5 : 1,
         },
       ]}
     >
@@ -80,6 +79,7 @@ function areOptionRowPropsEqual(prev: OptionRowProps, next: OptionRowProps) {
     prev.text === next.text &&
     prev.disabled === next.disabled &&
     prev.fontScale === next.fontScale &&
+    prev.onSelect === next.onSelect &&
     prev.theme === next.theme
   );
 }
@@ -93,7 +93,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 9,
     gap: 12,
     width: '100%',
   },

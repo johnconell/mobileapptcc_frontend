@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
-import { useTheme } from '@/shared/contexts/ThemeContext';
+import { useThemeTokens } from '@/shared/contexts/ThemeContext';
 import { getTimerColors } from '@/shared/theme/theme';
 
 interface TimerCardProps {
@@ -12,7 +12,7 @@ function TimerCardComponent({
   remainingSeconds,
   totalDurationSeconds = 3600,
 }: TimerCardProps) {
-  const { theme } = useTheme();
+  const { theme } = useThemeTokens();
 
   const total = totalDurationSeconds > 0 ? totalDurationSeconds : 3600;
   const percentLeft = Math.max(0, Math.min(100, (remainingSeconds / total) * 100));
@@ -72,7 +72,7 @@ export const TimerCard = memo(TimerCardComponent);
 const styles = StyleSheet.create({
   card: {
     borderRadius: 14,
-    borderWidth: 0.5,
+    borderWidth: 1,
     paddingVertical: 8,
     paddingHorizontal: 14,
     alignItems: 'center',
@@ -84,7 +84,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     letterSpacing: 1,
     lineHeight: 38,
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
     fontVariant: ['tabular-nums'],
     textAlign: 'center',
   },

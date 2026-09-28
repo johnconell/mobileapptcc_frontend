@@ -8,7 +8,8 @@ import {
   View,
 } from 'react-native';
 import { Check, ChevronDown, LayoutGrid, X } from 'lucide-react-native';
-import { useTheme } from '@/shared/contexts/ThemeContext';
+import { useThemeTokens } from '@/shared/contexts/ThemeContext';
+import { Row } from './primitives';
 
 export interface CategoryItem {
   key: string;
@@ -30,12 +31,12 @@ function CategoryDropdownComponent({
   onSelectCategory,
   disabled = false,
 }: CategoryDropdownProps) {
-  const { theme } = useTheme();
+  const { theme, isDark } = useThemeTokens();
   const [isOpen, setIsOpen] = useState(false);
 
   const activeCategory = categories.find((c) => c.key === selectedCategory);
   const currentLabel = selectedCategory === null || selectedCategory === 'all'
-    ? 'All Categories'
+    ? 'All'
     : (activeCategory?.name ?? selectedCategory);
 
   const totalAnswered = categories.reduce((sum, c) => sum + c.answered, 0);
@@ -56,16 +57,15 @@ function CategoryDropdownComponent({
         disabled={disabled}
         accessibilityRole="button"
         accessibilityLabel={`Category selector, current category is ${currentLabel}`}
-        style={({ pressed }) => [
+        style={[
           styles.triggerBtn,
           {
             backgroundColor: theme.surfaceAlt,
             borderColor: theme.border,
-            opacity: pressed ? 0.85 : 1,
           },
         ]}
       >
-        <View style={styles.triggerLeft}>
+        <Row style={styles.triggerLeft}>
           <LayoutGrid size={18} color={theme.accentText} strokeWidth={2} />
           <Text
             numberOfLines={1}
@@ -78,7 +78,7 @@ function CategoryDropdownComponent({
           >
             {currentLabel}
           </Text>
-        </View>
+        </Row>
         <ChevronDown size={18} color={theme.accentText} strokeWidth={2} />
       </Pressable>
 
@@ -88,7 +88,7 @@ function CategoryDropdownComponent({
         animationType="fade"
         onRequestClose={() => setIsOpen(false)}
       >
-        <View style={styles.modalOverlay}>
+          <View style={[styles.modalOverlay, { backgroundColor: `${isDark ? theme.bg : theme.text}73` }]}>
           <Pressable
             style={StyleSheet.absoluteFill}
             onPress={() => setIsOpen(false)}
@@ -123,12 +123,11 @@ function CategoryDropdownComponent({
                 onPress={() => setIsOpen(false)}
                 accessibilityRole="button"
                 accessibilityLabel="Close category dropdown"
-                style={({ pressed }) => [
+                  style={[
                   styles.closeBtn,
                   {
                     backgroundColor: theme.surfaceAlt,
                     borderColor: theme.border,
-                    opacity: pressed ? 0.8 : 1,
                   },
                 ]}
               >
@@ -144,13 +143,12 @@ function CategoryDropdownComponent({
                   <Pressable
                     key="all"
                     onPress={() => handleSelect(null)}
-                    style={({ pressed }) => [
+                    style={[
                       styles.row,
                       {
                         backgroundColor: isAllSelected ? theme.accentSoft : theme.surfaceAlt,
                         borderColor: isAllSelected ? theme.ring : theme.border,
-                        borderWidth: isAllSelected ? 1.5 : 0.5,
-                        opacity: pressed ? 0.85 : 1,
+                        borderWidth: isAllSelected ? 1.5 : 1,
                       },
                     ]}
                   >
@@ -164,7 +162,7 @@ function CategoryDropdownComponent({
                           },
                         ]}
                       >
-                        All Categories
+                        All
                       </Text>
                     </View>
                     <View style={styles.rowRight}>
@@ -193,13 +191,12 @@ function CategoryDropdownComponent({
                   <Pressable
                     key={cat.key}
                     onPress={() => handleSelect(cat.key)}
-                    style={({ pressed }) => [
+                    style={[
                       styles.row,
                       {
                         backgroundColor: isSelected ? theme.accentSoft : theme.surfaceAlt,
                         borderColor: isSelected ? theme.ring : theme.border,
-                        borderWidth: isSelected ? 1.5 : 0.5,
-                        opacity: pressed ? 0.85 : 1,
+                        borderWidth: isSelected ? 1.5 : 1,
                       },
                     ]}
                   >
@@ -248,7 +245,7 @@ const styles = StyleSheet.create({
   triggerBtn: {
     height: 44,
     borderRadius: 12,
-    borderWidth: 0.5,
+    borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -266,18 +263,18 @@ const styles = StyleSheet.create({
   triggerText: {
     fontSize: 14,
     fontWeight: '500',
+    flexShrink: 1,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
     justifyContent: 'flex-end',
   },
   sheet: {
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
-    borderTopWidth: 0.5,
-    borderLeftWidth: 0.5,
-    borderRightWidth: 0.5,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
     paddingHorizontal: 16,
     paddingTop: 10,
     paddingBottom: 32,
@@ -304,7 +301,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    borderWidth: 0.5,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -314,6 +311,7 @@ const styles = StyleSheet.create({
   row: {
     minHeight: 48,
     borderRadius: 12,
+    borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

@@ -2,6 +2,7 @@ import { apiRequest } from '@/shared/services/api';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { OfflineExamRepository } from '@/features/synchronization/services/offlineExamRepository';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
+import { appStorage } from '@/shared/services/storage';
 import type { ExamCodeValidation, ExamRoom, ExamSchedule, ExamSession } from '@/shared/types';
 
 type BackendSchedule = {
@@ -18,6 +19,8 @@ type BackendSchedule = {
   expected_examinees?: number;
   registrations_count?: number;
 };
+
+const SCHEDULE_CATALOG_KEY = 'tcc.offline.schedule.catalog';
 
 type BackendRoom = {
   id: number;
@@ -131,21 +134,49 @@ function toMobileSchedules(rows: BackendSchedule[]): ExamSchedule[] {
  */
 export const ScheduleRepository = {
   async getSchedules(): Promise<ExamSchedule[]> {
-    if (await OfflineStore.isOfflineMode()) {
-      return OfflineExamRepository.getCachedSchedules();
-    }
+    const [cachedPackSchedules, catalog] = await Promise.all([
+      OfflineExamRepository.getCachedSchedules(),
+      this.getSavedScheduleCatalog(),
+    ]);
+    const local = mergeSchedules(catalog, cachedPackSchedules);
+    if (await OfflineStore.isOfflineMode()) return local;
     try {
-      const json = await apiRequest<{ success: boolean; data: BackendSchedule[] }>(
-        '/proctor/schedules?per_page=200',
-      );
-      return toMobileSchedules(json.data || []);
+      const cloud = await this.refreshSchedulesFromCloud();
+      return mergeSchedules(local, cloud);
     } catch {
-      if (await OfflineStore.hasPack()) {
-        await OfflineStore.setOfflineMode(true);
-        return OfflineExamRepository.getCachedSchedules();
-      }
-      throw new Error('Unable to load schedules. Download the offline pack while online first.');
+      return local;
     }
+  },
+
+  async getLocalSchedules(): Promise<ExamSchedule[]> {
+    const [cachedPackSchedules, catalog] = await Promise.all([
+      OfflineExamRepository.getCachedSchedules(),
+      this.getSavedScheduleCatalog(),
+    ]);
+    return mergeSchedules(
+      catalog.filter((schedule) => schedule.offlineReady),
+      cachedPackSchedules,
+    );
+  },
+
+  async getSavedScheduleCatalog(): Promise<ExamSchedule[]> {
+    try {
+      const raw = await appStorage.getItem(SCHEDULE_CATALOG_KEY);
+      return raw ? (JSON.parse(raw) as ExamSchedule[]) : [];
+    } catch {
+      return [];
+    }
+  },
+
+  async refreshSchedulesFromCloud(): Promise<ExamSchedule[]> {
+    const json = await apiRequest<{ success: boolean; data: BackendSchedule[] }>(
+      '/proctor/schedules?per_page=200',
+    );
+    const cloud = toMobileSchedules(json.data || []);
+    const local = await this.getLocalSchedules();
+    const merged = mergeSchedules(cloud, local);
+    await appStorage.setItem(SCHEDULE_CATALOG_KEY, JSON.stringify(merged));
+    return merged;
   },
 
   async getScheduleById(id: string): Promise<ExamSchedule | null> {
@@ -193,7 +224,7 @@ export const ScheduleRepository = {
         .sort((a, b) => a.startTime.localeCompare(b.startTime));
     };
 
-    if (await OfflineStore.isOfflineMode()) {
+    if (await OfflineStore.hasPack()) {
       return fromPack();
     }
 
@@ -258,7 +289,7 @@ export const ScheduleRepository = {
       });
     };
 
-    if (await OfflineStore.isOfflineMode()) {
+    if (await OfflineStore.hasPack()) {
       return fromPack();
     }
 
@@ -306,3 +337,24 @@ export const ScheduleRepository = {
     return LobbyRepository.verifyExaminationCode(raw.trim());
   },
 };
+
+function mergeSchedules(
+  preferred: ExamSchedule[],
+  preserved: ExamSchedule[],
+): ExamSchedule[] {
+  const merged = new Map<string, ExamSchedule>();
+  for (const schedule of preferred) merged.set(schedule.id, schedule);
+  for (const schedule of preserved) {
+    const existing = merged.get(schedule.id);
+    merged.set(schedule.id, {
+      ...existing,
+      ...schedule,
+      offlineReady: Boolean(schedule.offlineReady || existing?.offlineReady),
+      packVersion: schedule.packVersion ?? existing?.packVersion,
+      downloadedAt: schedule.downloadedAt ?? existing?.downloadedAt,
+    });
+  }
+  return Array.from(merged.values()).sort((a, b) =>
+    String(b.examinationDateIso).localeCompare(String(a.examinationDateIso)),
+  );
+}

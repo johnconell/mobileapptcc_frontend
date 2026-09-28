@@ -45,21 +45,12 @@ function useLobbyController() {
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const selectedStudent = useStudentStore((s) => s.selectedStudent);
-  const examPasskey = useStudentStore((s) => s.examPasskey);
-  const agreedAt = useStudentStore((s) => s.agreedAt);
-  const setVerifiedStudent = useStudentStore((s) => s.setVerifiedStudent);
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
   const storedSnapshot = useLobbyStore((s) => s.snapshot);
   const setQuestions = useExamStore((s) => s.setQuestions);
   const setSessionId = useExamStore((s) => s.setSessionId);
   const startExam = useExamStore((s) => s.startExam);
 
-  // Security gate: students must agree to terms before entering lobby
-  useEffect(() => {
-    if (verifiedStudent && !agreedAt) {
-      router.replace('/(student)/terms' as any);
-    }
-  }, [verifiedStudent, agreedAt, router]);
 
   const [state, setState] = useState<LobbyState>('DASHBOARD');
   const [error, setError] = useState<string | null>(null);
@@ -368,41 +359,13 @@ function useLobbyController() {
     void enterExamination();
   }, [authority, progress.moduleReady, progress.hashVerified, progress.percent, enterExamination]);
 
-  // -- BACKGROUND HANDSHAKE --
-  const initializeAndJoin = useCallback(async () => {
-    if (!scannedSessionId || (!verifiedStudent && !selectedStudent)) {
-        router.replace('/');
-        return;
+  // Guard: if somehow the student reaches the lobby without being verified,
+  // redirect them home. Lobby join is handled by terms.tsx — not here.
+  useEffect(() => {
+    if (!scannedSessionId) {
+      router.replace('/');
     }
-
-    if (!verifiedStudent && !hasJoined.current) {
-        hasJoined.current = true;
-        try {
-            const verified = { ...selectedStudent! };
-            const lobby = examPasskey
-                ? await LobbyRepository.joinWithPasskey(verified, scannedSessionId!, examPasskey)
-                : await LobbyRepository.joinStudent(verified, scannedSessionId!);
-
-            const regId = lobby.registration_id || lobby.students?.find(s => s.studentId === verified.studentId)?.id;
-            if (regId) verified.registration_id = Number(regId);
-
-            setVerifiedStudent(verified);
-            setSnapshot(lobby);
-            if (lobby.status === 'lobby_open') {
-              await applyLiveStatus('lobby_open');
-            } else if (lobby.status === 'in_progress' || lobby.status === 'ended') {
-              await applyLiveStatus(lobby.status);
-            }
-
-            void ensurePackDownload();
-        } catch (e) {
-            console.warn("Lobby handshake delay...", e);
-            hasJoined.current = false;
-        }
-    }
-  }, [scannedSessionId, verifiedStudent, selectedStudent, examPasskey, router, setVerifiedStudent, setSnapshot, ensurePackDownload, applyLiveStatus]);
-
-  useEffect(() => { void initializeAndJoin(); }, [initializeAndJoin]);
+  }, [scannedSessionId, router]);
 
   return {
     state,
@@ -539,44 +502,6 @@ export default function StudentLobbyScreen() {
            </View>
         </Card>
 
-        <Card style={styles.readinessCard}>
-          <Text style={styles.readinessCardTitle}>Exam Readiness</Text>
-          <ReadinessRow label="Module Download" value={`${Math.round(progress.percent)}%`} ok={progress.percent >= 100} />
-          <ReadinessRow
-            label="Questions"
-            value={`${progress.questionsDownloaded}/${progress.questionsExpected || progress.questionsDownloaded || 0}`}
-            ok={progress.questionsDownloaded > 0}
-          />
-          <ReadinessRow label="Verification" value={progress.hashVerified ? 'Passed' : 'Pending'} ok={progress.hashVerified} />
-          <ReadinessRow label="Session" value={sessionLabel} ok={sessionLabel === 'Active' || sessionLabel === 'Waiting'} />
-          <ReadinessRow label="Network" value={networkConnected ? 'Connected' : 'Interrupted'} ok={networkConnected} />
-          <ReadinessRow label="Ready" value={examReady ? 'YES' : 'NO'} ok={examReady} />
-        </Card>
-
-        <Card style={styles.readinessCard}>
-          <Text style={styles.readinessCardTitle}>Downloaded Files</Text>
-          <ReadinessRow
-            label="Questions"
-            value={`${progress.questionsDownloaded}/${progress.questionsExpected || progress.questionsDownloaded || 0}`}
-            ok={progress.questionsDownloaded > 0}
-          />
-          <ReadinessRow
-            label="Assets"
-            value={`${progress.assetsDownloaded}/${progress.assetsExpected || progress.assetsDownloaded || 0}`}
-            ok={progress.assetsDownloaded >= (progress.assetsExpected || 0)}
-          />
-          <ReadinessRow
-            label="Configuration"
-            value={progress.configurationComplete ? 'Complete' : 'Missing'}
-            ok={progress.configurationComplete}
-          />
-          <ReadinessRow label="Hash" value={progress.hashVerified ? 'Verified' : 'Pending'} ok={progress.hashVerified} />
-          <ReadinessRow
-            label="Status"
-            value={examReady ? 'Ready' : progress.phase === 'error' ? 'Incomplete' : 'Downloading'}
-            ok={examReady}
-          />
-        </Card>
 
         {/* SECTION 2: EXAM DETAILS */}
         <Card style={styles.infoCard}>

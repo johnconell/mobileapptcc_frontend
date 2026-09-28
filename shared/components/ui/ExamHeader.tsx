@@ -1,9 +1,10 @@
 import React, { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Moon, Sun } from 'lucide-react-native';
-import { useTheme } from '@/shared/contexts/ThemeContext';
+import { useFontScaleActions, useThemeTokens } from '@/shared/contexts/ThemeContext';
 import { TimerCard } from './TimerCard';
 import { CategoryDropdown, type CategoryItem } from './CategoryDropdown';
+import { Row } from './primitives';
 
 export interface ExamHeaderProps {
   remainingSeconds: number;
@@ -22,7 +23,8 @@ function ExamHeaderComponent({
   onSelectCategory,
   disabled = false,
 }: ExamHeaderProps) {
-  const { theme, isDark, setTheme, stepFontScale } = useTheme();
+  const { theme, isDark, setTheme } = useThemeTokens();
+  const { stepFontScale } = useFontScaleActions();
 
   return (
     <View
@@ -35,12 +37,12 @@ function ExamHeaderComponent({
       ]}
     >
       {/* Row 1: Title + Subtitle on left; Segmented Light | Dark Switch on right */}
-      <View style={styles.row1}>
+      <Row style={styles.row1}>
         <View style={styles.titleColumn}>
-          <Text style={[styles.mainTitle, { color: theme.text }]}>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.mainTitle, { color: theme.text }]}>
             Final Examination
           </Text>
-          <Text style={[styles.subTitle, { color: theme.textMuted }]}>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.subTitle, { color: theme.textMuted }]}>
             College Entrance Test
           </Text>
         </View>
@@ -61,12 +63,11 @@ function ExamHeaderComponent({
             disabled={disabled}
             accessibilityRole="button"
             accessibilityLabel="Switch to Light theme"
-            style={({ pressed }) => [
+            style={[
               styles.segmentItem,
               !isDark && {
                 backgroundColor: theme.accent,
               },
-              pressed && { opacity: 0.85 },
             ]}
           >
             <Sun
@@ -75,6 +76,7 @@ function ExamHeaderComponent({
               strokeWidth={2}
             />
             <Text
+              numberOfLines={1}
               style={[
                 styles.segmentText,
                 {
@@ -93,12 +95,11 @@ function ExamHeaderComponent({
             disabled={disabled}
             accessibilityRole="button"
             accessibilityLabel="Switch to Dark theme"
-            style={({ pressed }) => [
+            style={[
               styles.segmentItem,
               isDark && {
                 backgroundColor: theme.accent,
               },
-              pressed && { opacity: 0.85 },
             ]}
           >
             <Moon
@@ -106,7 +107,8 @@ function ExamHeaderComponent({
               color={isDark ? theme.onAccent : theme.textSecondary}
               strokeWidth={2}
             />
-            <Text
+              <Text
+                numberOfLines={1}
               style={[
                 styles.segmentText,
                 {
@@ -119,7 +121,7 @@ function ExamHeaderComponent({
             </Text>
           </Pressable>
         </View>
-      </View>
+      </Row>
 
       {/* Row 2: Timer Card (full width, centered) */}
       <View style={styles.timerWrapper}>
@@ -153,12 +155,9 @@ function ExamHeaderComponent({
             disabled={disabled}
             accessibilityRole="button"
             accessibilityLabel="Decrease question font size"
-            style={({ pressed }) => [
-              styles.fontButton,
-              pressed && { opacity: 0.75 },
-            ]}
+            style={styles.fontButton}
           >
-            <Text style={[styles.fontLabel, { color: theme.textSecondary, fontSize: 14 }]}>
+            <Text style={[styles.fontLabel, { color: theme.accentText, fontSize: 14 }]}>
               A-
             </Text>
           </Pressable>
@@ -177,12 +176,9 @@ function ExamHeaderComponent({
             disabled={disabled}
             accessibilityRole="button"
             accessibilityLabel="Increase question font size"
-            style={({ pressed }) => [
-              styles.fontButton,
-              pressed && { opacity: 0.75 },
-            ]}
+            style={styles.fontButton}
           >
-            <Text style={[styles.fontLabel, { color: theme.textSecondary, fontSize: 16 }]}>
+            <Text style={[styles.fontLabel, { color: theme.accentText, fontSize: 16 }]}>
               A+
             </Text>
           </Pressable>
@@ -199,7 +195,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 12,
-    borderBottomWidth: 0.5,
+    borderBottomWidth: 1,
   },
   row1: {
     flexDirection: 'row',
@@ -221,10 +217,10 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   themeSegment: {
-    width: 132,
+    width: 156,
     height: 44,
     borderRadius: 12,
-    borderWidth: 0.5,
+    borderWidth: 1,
     padding: 3,
     flexDirection: 'row',
   },
@@ -238,6 +234,7 @@ const styles = StyleSheet.create({
   },
   segmentText: {
     fontSize: 13,
+    flexShrink: 1,
   },
   timerWrapper: {
     marginTop: 12,
@@ -252,7 +249,7 @@ const styles = StyleSheet.create({
     width: 96,
     height: 44,
     borderRadius: 12,
-    borderWidth: 0.5,
+    borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -263,7 +260,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   fontDivider: {
-    width: 0.5,
+    width: 1,
     height: 24,
   },
   fontLabel: {

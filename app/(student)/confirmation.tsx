@@ -17,17 +17,14 @@ import {
   ExamProcessChrome,
   ExamProcessOk,
 } from '@/features/examinations/components/ExamProcessChrome';
-import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
 import { ExamPreloader } from '@/features/examinations/services/examPreloader';
-import { ExamLifecycle } from '@/features/examinations/services/examLifecycle';
 import {
   INITIAL_PACK_PROGRESS,
   type ExamPackProgress,
 } from '@/features/examinations/services/examReadiness';
 import { appStorage } from '@/shared/services/storage';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
-import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { examProcess } from '@/shared/theme/examProcess';
 import { userFacingError } from '@/shared/utils/userFacingError';
 
@@ -51,9 +48,9 @@ export default function StudentConfirmationScreen() {
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const examPasskey = useStudentStore((s) => s.examPasskey);
-  const setVerifiedStudent = useStudentStore((s) => s.setVerifiedStudent);
+  const agreedAt = useStudentStore((s) => s.agreedAt);
   const setSelectedStudent = useStudentStore((s) => s.setSelectedStudent);
-  const setSnapshot = useLobbyStore((s) => s.setSnapshot);
+
   const [joinError, setJoinError] = React.useState<string | null>(null);
   const [joining, setJoining] = React.useState(false);
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
@@ -73,17 +70,22 @@ export default function StudentConfirmationScreen() {
 
   React.useEffect(() => ExamPreloader.subscribe(setDownloadProgress), []);
 
+  // If the student already agreed to terms and is verified, they are already in the lobby flow.
+  // Send them directly to lobby (resume from Terms was already completed).
   React.useEffect(() => {
-    if (verifiedStudent && scannedSessionId) {
+    if (verifiedStudent && agreedAt) {
       router.replace('/(student)/lobby');
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return;
+    }
+    // If verified but hasn't agreed yet → send to terms to complete agreement + join
+    if (verifiedStudent && !agreedAt) {
       router.replace('/(student)/terms' as any);
       return;
     }
     if (!selectedStudent || !scannedSessionId) {
       router.replace('/(student)/passkey');
     }
-  }, [selectedStudent, scannedSessionId, verifiedStudent, router]);
+  }, [selectedStudent, scannedSessionId, verifiedStudent, agreedAt, router]);
 
   const goBack = React.useCallback(() => {
     setSelectedStudent(null);
@@ -98,11 +100,18 @@ export default function StudentConfirmationScreen() {
     );
   }
 
-  const joinWithEmail = async (email: string) => {
+  /**
+   * Confirm step only does:
+   *  1. Wi-Fi gate check
+   *  2. Download + verify the exam package
+   *  3. Store the email on selectedStudent (does NOT join the lobby)
+   *  4. Navigate to Terms (which does app pinning + lobby join)
+   */
+  const confirmWithEmail = async (email: string) => {
     setJoinError(null);
     setJoining(true);
     try {
-      setStatusMessage('Validating Wi-Fi isolation...');
+      setStatusMessage('Validating Wi-Fi connection...');
       const gate = await assertCampusWifiForJoin({
         requireServer: !String(scannedSessionId).startsWith('offline-'),
       });
@@ -129,32 +138,17 @@ export default function StudentConfirmationScreen() {
         return;
       }
 
-      setStatusMessage('Registering ready status with proctor...');
+      // Persist the email into selectedStudent so Terms screen can pick it up
       setStatusMessage('Preparing examination profile...');
-      const verified = {
+      useStudentStore.getState().setSelectedStudent({
         ...selectedStudent,
         email: email.trim().toLowerCase(),
-      };
+      });
 
-      const lobby = effectivePasskey
-        ? await LobbyRepository.joinWithPasskey(verified, scannedSessionId, effectivePasskey)
-        : await LobbyRepository.joinStudent(verified, scannedSessionId);
-
-      const regId = lobby.registration_id;
-      if (regId) {
-        verified.registration_id = Number(regId);
-      } else {
-        const match = lobby.students?.find((s) => s.studentId === verified.studentId);
-        if (match) verified.registration_id = Number(match.id);
-      }
-      setVerifiedStudent(verified);
-      setSnapshot(lobby);
-      await ExamLifecycle.applyFromServer(lobby.status, { sessionId: String(scannedSessionId) });
-      router.replace('/(student)/lobby');
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // Navigate to Terms — that screen does the lobby join + app pinning
       router.replace('/(student)/terms' as any);
     } catch (error) {
-      setJoinError(userFacingError(error, 'Unable to join examination. Please try again.'));
+      setJoinError(userFacingError(error, 'Unable to confirm. Please try again.'));
     } finally {
       setJoining(false);
       setStatusMessage(null);
@@ -162,11 +156,11 @@ export default function StudentConfirmationScreen() {
   };
 
   const onConfirmWithForm = handleSubmit(async (values) => {
-    await joinWithEmail(values.email);
+    await confirmWithEmail(values.email);
   });
 
   const onConfirmExisting = async () => {
-    await joinWithEmail(selectedStudent.email);
+    await confirmWithEmail(selectedStudent.email);
   };
 
   return (
@@ -235,7 +229,7 @@ export default function StudentConfirmationScreen() {
             disabled={joining || isSubmitting}
           />
           <ExamProcessButton
-            title="Confirm & Join"
+            title="Confirm & Continue"
             variant="submit"
             loading={joining || isSubmitting}
             onPress={hasGmail ? onConfirmExisting : onConfirmWithForm}

@@ -1,18 +1,13 @@
 import * as Network from 'expo-network';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
-import { probeExamServerReachable } from '@/features/monitoring/services/campusWifiGate';
+import { PeerExamServer } from '@/features/examinations/services/peerExamServer';
 
 let listenerSubscription: { remove: () => void } | null = null;
 let isChecking = false;
 
 /**
- * Evaluates current connectivity and automatically toggles between Online and LAN/Offline Mode.
- *
- * Rules:
- * 1. If Wi-Fi is connected BUT Cloud API is unreachable AND an offline pack exists:
- *    -> AUTOMATICALLY switch to Offline/LAN Mode without requiring app restart.
- * 2. If Cloud API becomes reachable again:
- *    -> AUTOMATICALLY switch back to Online Mode for syncing/downloads.
+ * Change modes from the OS network signal only; never probe the cloud here.
+ * A running local exam must not change mode when internet reachability changes.
  */
 export async function evaluateAndSwitchNetworkMode(): Promise<boolean> {
   if (isChecking) return false;
@@ -21,7 +16,7 @@ export async function evaluateAndSwitchNetworkMode(): Promise<boolean> {
   try {
     const netState = await Network.getNetworkStateAsync();
     const isWifi = netState.type === Network.NetworkStateType.WIFI;
-    const isConnected = Boolean(netState.isConnected);
+    const isConnected = netState.isConnected === true;
 
     const { PeerExamClient } = await import('@/features/examinations/services/peerExamClient');
     if (await PeerExamClient.isActive()) {
@@ -29,36 +24,14 @@ export async function evaluateAndSwitchNetworkMode(): Promise<boolean> {
       return false;
     }
 
-    if (!isConnected) {
-      if (await OfflineStore.hasPack()) {
-        await OfflineStore.setOfflineMode(true);
-        if (__DEV__) console.log('[NETWORK MONITOR] No connection -> Switched to AUTOMATIC OFFLINE MODE');
-        return true;
-      }
-      return false;
+    if (PeerExamServer.info().running) return false;
+
+    if (!isConnected || (isWifi && netState.isInternetReachable === false)) {
+      if (await OfflineStore.hasPack()) await OfflineStore.setOfflineMode(true);
+      return true;
     }
 
-    if (isWifi) {
-      // Wi-Fi connected: probe cloud API with fast 2.5s timeout
-      const cloudReachable = await probeExamServerReachable(2500);
-      const hasPack = await OfflineStore.hasPack();
-
-      if (!cloudReachable && hasPack) {
-        await OfflineStore.setOfflineMode(true);
-        if (__DEV__) console.log('[NETWORK MONITOR] Wi-Fi without internet -> Switched to AUTOMATIC LAN/OFFLINE MODE');
-        return true;
-      } else if (cloudReachable) {
-        await OfflineStore.setOfflineMode(false);
-        if (__DEV__) console.log('[NETWORK MONITOR] Cloud API reachable -> Switched to AUTOMATIC ONLINE MODE');
-        return false;
-      }
-    } else {
-      // Cellular or non-Wi-Fi interface
-      const cloudReachable = await probeExamServerReachable(2500);
-      if (cloudReachable) {
-        await OfflineStore.setOfflineMode(false);
-      }
-    }
+    if (netState.isInternetReachable === true) await OfflineStore.setOfflineMode(false);
   } catch (err) {
     if (__DEV__) console.warn('[NETWORK MONITOR] Evaluation failed:', err);
   } finally {
@@ -82,7 +55,7 @@ export function startNetworkMonitoring(): () => void {
     // ignore
   }
 
-  // Periodic fallback check every 8 seconds
+  // Periodic fallback check for devices without network-state events
   const interval = setInterval(() => {
     void evaluateAndSwitchNetworkMode();
   }, 8000);

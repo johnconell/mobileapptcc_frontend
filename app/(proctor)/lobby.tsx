@@ -311,31 +311,6 @@ function ProctorLobbyContent() {
         setSnapshot(snapshot);
         setPeerHost(PeerExamServer.info().host);
 
-        // Open/sync unique cloud session for deterministic examinee LAN resolution
-        try {
-          const { resolveWifiLanIp } = await import('@/features/monitoring/services/wifiLanIp');
-          const lan = await resolveWifiLanIp();
-          const hostIp = lan.ip || '127.0.0.1';
-          const proctorId = profile?.id || 1;
-          const cloud = await LobbyRepository.openCloudSession({
-            proctorId,
-            localIp: hostIp,
-            localPort: 9777,
-            scheduleId: scheduleId ? Number(scheduleId) : undefined,
-            roomId: roomId ? Number(roomId) : undefined,
-          });
-          if (cloud && !cancelled) {
-            setCloudCode(cloud.session_code);
-            setCloudQrValue(cloud.qr_payload || cloud.qr_token || cloud.session_code);
-            setCloudSessionId(cloud.session_id);
-            if (cloud.session_code) {
-              await PeerExamServer.adoptExamCode(cloud.session_code);
-            }
-          }
-        } catch (cloudErr) {
-          if (__DEV__) console.warn('[Lobby] openCloudSession sync failed (continuing):', cloudErr);
-        }
-
         try {
           const pack = await OfflineStore.getPack();
           const roomsList: Array<{ id: number; name: string; capacity: number }> = [];
@@ -1588,9 +1563,6 @@ function ProctorLobbyContent() {
             setBusy(true);
             try {
               const snapshot = await LobbyRepository.startExamination(sessionId, roomId);
-              void LobbyRepository.startCloudSession(cloudSessionId ?? undefined).catch((err) => {
-                if (__DEV__) console.warn('[Lobby] startCloudSession error:', err);
-              });
               setSnapshot(snapshot);
               await refresh();
               setStartOpen(false);
@@ -1626,15 +1598,9 @@ function ProctorLobbyContent() {
             const wasLobbyOnly = lobby?.status === 'lobby_open';
             if (wasLobbyOnly) {
               await LobbyRepository.closeLobby(sessionId, roomId);
-              void LobbyRepository.closeCloudSession(cloudSessionId ?? undefined).catch((err) => {
-                if (__DEV__) console.warn('[Lobby] closeCloudSession error:', err);
-              });
               setSnapshot(null);
             } else {
               const snapshot = await LobbyRepository.endExamination(sessionId, roomId);
-              void LobbyRepository.closeCloudSession(cloudSessionId ?? undefined).catch((err) => {
-                if (__DEV__) console.warn('[Lobby] closeCloudSession error:', err);
-              });
               setSnapshot(snapshot);
               // Ensure this session is marked ended in offline store (numeric schedule id).
               if (roomId) {

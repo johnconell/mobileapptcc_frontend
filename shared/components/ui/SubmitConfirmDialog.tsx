@@ -6,8 +6,9 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useTheme } from '@/shared/contexts/ThemeContext';
+import { useThemeTokens } from '@/shared/contexts/ThemeContext';
 import { CheckCircle2, AlertCircle, Flag } from 'lucide-react-native';
+import { Row } from './primitives';
 
 export interface SubmitConfirmDialogProps {
   visible: boolean;
@@ -30,7 +31,7 @@ function SubmitConfirmDialogComponent({
   onSubmit,
   onClose,
 }: SubmitConfirmDialogProps) {
-  const { theme } = useTheme();
+  const { theme, isDark } = useThemeTokens();
 
   return (
     <Modal
@@ -39,7 +40,7 @@ function SubmitConfirmDialogComponent({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <View style={styles.overlay}>
+      <View style={[styles.overlay, { backgroundColor: `${isDark ? theme.bg : theme.text}73` }]}>
         <Pressable
           style={StyleSheet.absoluteFill}
           onPress={onClose}
@@ -156,17 +157,16 @@ function SubmitConfirmDialogComponent({
           </View>
 
           {/* Action Buttons: Review on left, Submit on right */}
-          <View style={styles.actionsRow}>
+          <Row style={styles.actionsRow}>
             <Pressable
               onPress={onReview}
               accessibilityRole="button"
               accessibilityLabel="Review questions"
-              style={({ pressed }) => [
+              style={[
                 styles.reviewButton,
                 {
                   backgroundColor: theme.surfaceAlt,
                   borderColor: theme.border,
-                  opacity: pressed ? 0.85 : 1,
                 },
               ]}
             >
@@ -179,11 +179,11 @@ function SubmitConfirmDialogComponent({
               onPress={onSubmit}
               accessibilityRole="button"
               accessibilityLabel="Confirm exam submission"
-              style={({ pressed }) => [
+              style={[
                 styles.submitButton,
                 {
                   backgroundColor: theme.accent,
-                  opacity: pressed ? 0.9 : 1,
+                  borderColor: theme.accent,
                 },
               ]}
             >
@@ -191,7 +191,7 @@ function SubmitConfirmDialogComponent({
                 Submit
               </Text>
             </Pressable>
-          </View>
+          </Row>
         </View>
       </View>
     </Modal>
@@ -203,7 +203,6 @@ export const SubmitConfirmDialog = memo(SubmitConfirmDialogComponent);
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
@@ -212,7 +211,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 380,
     borderRadius: 16,
-    borderWidth: 0.5,
+    borderWidth: 1,
     padding: 20,
     gap: 14,
   },
@@ -232,7 +231,7 @@ const styles = StyleSheet.create({
   countRow: {
     minHeight: 44,
     borderRadius: 12,
-    borderWidth: 0.5,
+    borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -260,7 +259,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 44,
     borderRadius: 12,
-    borderWidth: 0.5,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -272,6 +271,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 44,
     borderRadius: 12,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },

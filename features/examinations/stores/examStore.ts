@@ -77,7 +77,8 @@ export const useExamStore = create<ExamState>((set, get) => ({
     set({ questions, answers, flags, currentIndex: 0 });
   },
 
-  setCurrentIndex: (currentIndex) => set({ currentIndex }),
+  setCurrentIndex: (currentIndex) =>
+    set((state) => (state.currentIndex === currentIndex ? state : { currentIndex })),
 
   selectAnswer: (questionId, answer) => {
     const now = new Date().toISOString();

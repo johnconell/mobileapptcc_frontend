@@ -17,6 +17,7 @@ export type ExamCheckpoint = {
 
 const CHECKPOINT_FILE = `${FileSystem.documentDirectory ?? ''}metcc-exam-checkpoint.json`;
 const WEB_KEY = STORAGE_KEYS.examCheckpoint;
+let saveQueue: Promise<void> = Promise.resolve();
 
 /**
  * Local exam checkpoint (FileSystem / web storage — not SecureStore).
@@ -24,16 +25,20 @@ const WEB_KEY = STORAGE_KEYS.examCheckpoint;
  */
 export const ExamProgressStore = {
   async save(checkpoint: Omit<ExamCheckpoint, 'savedAt'>): Promise<void> {
-    const row: ExamCheckpoint = {
-      ...checkpoint,
-      savedAt: new Date().toISOString(),
+    const row: ExamCheckpoint = { ...checkpoint, savedAt: new Date().toISOString() };
+    const write = async () => {
+      const text = JSON.stringify(row);
+      if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
+        await appStorage.setItem(WEB_KEY, text);
+        return;
+      }
+      await FileSystem.writeAsStringAsync(CHECKPOINT_FILE, text);
     };
-    const text = JSON.stringify(row);
-    if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
-      await appStorage.setItem(WEB_KEY, text);
-      return;
-    }
-    await FileSystem.writeAsStringAsync(CHECKPOINT_FILE, text);
+
+    // Keep rapid answer and flag changes ordered so an older disk write cannot
+    // finish after a newer checkpoint and restore stale progress.
+    saveQueue = saveQueue.catch(() => undefined).then(write);
+    await saveQueue;
   },
 
   async load(): Promise<ExamCheckpoint | null> {
@@ -53,6 +58,7 @@ export const ExamProgressStore = {
 
   async clear(): Promise<void> {
     try {
+      await saveQueue.catch(() => undefined);
       if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
         await appStorage.deleteItem(WEB_KEY);
         return;

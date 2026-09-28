@@ -48,7 +48,7 @@ export async function resolveWifiLanIp(): Promise<{
   try {
     const net = await Network.getNetworkStateAsync();
     const type = net.type ?? null;
-    const isWifi = type === Network.NetworkStateType.WIFI;
+    const isWifi = net.isConnected === true && type === Network.NetworkStateType.WIFI;
     const isCellular = type === Network.NetworkStateType.CELLULAR;
 
     // Prefer explicit Wi‑Fi detail IP when expo-network exposes it.

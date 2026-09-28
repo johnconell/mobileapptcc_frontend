@@ -229,6 +229,11 @@ export function ScheduleCard({
             </View>
             <View style={styles.statusRow}>
               <ScheduleStatusBadge status={headerStatus} />
+              {schedule.offlineReady ? (
+                <View style={[styles.offlineReadyBadge, { backgroundColor: themeColors.successMuted }]}>
+                  <Text style={[styles.offlineReadyText, { color: themeColors.success }]}>Ready for offline</Text>
+                </View>
+              ) : null}
               {windowHint && headerStatus === 'not_opened' ? (
                 <Text style={[styles.windowHint, { color: themeColors.textMuted }]}>{windowHint}</Text>
               ) : null}
@@ -592,6 +597,15 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     marginTop: 2,
+  },
+  offlineReadyBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  offlineReadyText: {
+    fontSize: 10,
+    fontWeight: '700',
   },
   windowHint: {
     fontSize: 11,
