@@ -1,5 +1,4 @@
-import React from 'react';
-import ExamScreenOriginal from '@/app/(student)/exam';
+import ExamScreen from '@/app/(student)/exam';
 
 export interface OptionItem {
   key: string;
@@ -25,6 +24,4 @@ export interface ExamScreenProps {
   onSubmit?: (answers: Record<number, string>) => void;
 }
 
-export default function ExamScreen(_props: ExamScreenProps) {
-  return <ExamScreenOriginal />;
-}
+export default ExamScreen;

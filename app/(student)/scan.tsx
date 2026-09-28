@@ -139,12 +139,12 @@ export default function JoinExaminationScreen() {
           }
         }
 
+        await LobbyRepository.persistExaminationCode(examCode || trimmed.toUpperCase());
         await clearPriorSession();
         setScannedSession(
           String(scheduleId ?? '1'),
           String(roomId ?? '1'),
         );
-        await appStorage.setItem('tcc.student.exam.code', examCode);
         await OfflineStore.setOfflineMode(true);
         router.replace('/(student)/passkey');
         return;
@@ -216,6 +216,8 @@ export default function JoinExaminationScreen() {
           useStudentStore.getState().setExamPasskey(cloudResolved.passkey);
         }
 
+        await LobbyRepository.persistExaminationCode(cloudResolved.session_code || code);
+
         await clearPriorSession();
         setScannedSession(
           String(cloudResolved.schedule_id ?? cloudResolved.session_id),
@@ -254,18 +256,20 @@ export default function JoinExaminationScreen() {
             // keep discovered
           }
 
+          await LobbyRepository.persistExaminationCode(examCode || code);
+
           await clearPriorSession();
           setScannedSession(
             String(scheduleId ?? '1'),
             String(roomId ?? '1'),
           );
-          await appStorage.setItem('tcc.student.exam.code', examCode);
           await OfflineStore.setOfflineMode(true);
           router.replace('/(student)/passkey');
           return;
         }
       }
 
+      await LobbyRepository.persistExaminationCode(code);
       throw new Error(
         'Could not locate the Proctor examination session on the local Wi-Fi.\n\nPlease scan the Proctor\'s QR code displayed on screen to join directly.',
       );

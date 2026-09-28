@@ -59,6 +59,15 @@ async function setStoredCode(code: string | null | undefined) {
   else await appStorage.deleteItem(STORAGE_KEYS.examinationCode);
 }
 
+export async function persistExaminationCode(code: string | null | undefined): Promise<string | null> {
+  const normalized = String(code ?? '').trim();
+  if (!normalized) return null;
+
+  const canonical = extractExaminationCode(normalized) || normalized.toUpperCase();
+  await setStoredCode(canonical);
+  return canonical;
+}
+
 function lobbyQueryKey(sessionId: string, roomId?: string) {
   return roomId ? `${sessionId}:room:${roomId}` : sessionId;
 }
@@ -92,6 +101,10 @@ function peerMatchesRequest(
  * `sessionId` = examination_schedules.id; `roomId` = examination_rooms.id.
  */
 export const LobbyRepository = {
+  async persistExaminationCode(code: string | null | undefined): Promise<string | null> {
+    return persistExaminationCode(code);
+  },
+
   async openLobby(
     sessionId: string,
     questionBankId?: number,
