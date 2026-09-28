@@ -155,6 +155,9 @@ export interface LobbyStudent {
   hashVerified?: boolean;
   moduleReady?: boolean;
   startPhase?: 'waiting' | 'received' | 'entered';
+  applicantCode?: string | null;
+  submittedAt?: string | null;
+  score?: number | null;
 }
 
 export interface LobbySnapshot {

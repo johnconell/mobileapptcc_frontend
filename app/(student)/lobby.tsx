@@ -74,6 +74,7 @@ function useLobbyController() {
   const downloading = useRef(false);
   const entering = useRef(false);
   const ackedReceived = useRef(false);
+  const isRemovedRef = useRef(false);
 
   // Room details come from the join snapshot. Do not poll GET /lobby — that path
   // fails on expo-http-server and starves the start signal.
@@ -141,13 +142,74 @@ function useLobbyController() {
     let inFlight = false;
 
     const checkSignal = async () => {
-      if (inFlight || cancelled || hasEntered.current) return;
+      if (inFlight || cancelled || hasEntered.current || isRemovedRef.current) return;
       inFlight = true;
       try {
         let beat = await LobbyRepository.sendHeartbeat();
+
+        // REAL-TIME REMOVAL EVENT: proctor kicked or terminated examinee
+        if (
+          beat.removed ||
+          beat.myStatus === 'terminated' ||
+          beat.status === 'terminated' ||
+          beat.roomStatus === 'terminated'
+        ) {
+          if (isRemovedRef.current) return;
+          isRemovedRef.current = true;
+          cancelled = true;
+          await appStorage.deleteItem(STORAGE_KEYS.participationToken);
+          Alert.alert(
+            'Session Removed',
+            'You have been removed from this session.',
+            [
+              {
+                text: 'OK',
+                onPress: () => {
+                  router.replace('/' as any);
+                },
+              },
+            ],
+            { cancelable: false },
+          );
+          return;
+        }
+
         let pulse = parseStartPulse(beat);
         if (!beat.ok || !pulse) {
+          // If explicit removal was returned, do not let global status overwrite
+          if (
+            beat.message?.toLowerCase().includes('removed') ||
+            beat.message?.toLowerCase().includes('terminated') ||
+            beat.message?.toLowerCase().includes('no longer joined')
+          ) {
+            if (isRemovedRef.current) return;
+            isRemovedRef.current = true;
+            cancelled = true;
+            await appStorage.deleteItem(STORAGE_KEYS.participationToken);
+            Alert.alert(
+              'Session Removed',
+              'You have been removed from this session.',
+              [{ text: 'OK', onPress: () => router.replace('/' as any) }],
+              { cancelable: false },
+            );
+            return;
+          }
+
           const global = await PeerExamClient.getGlobalStatus();
+          if ((global as any)?.removed || (global as any)?.myStatus === 'terminated') {
+            if (isRemovedRef.current) return;
+            isRemovedRef.current = true;
+            cancelled = true;
+            await appStorage.deleteItem(STORAGE_KEYS.participationToken);
+            Alert.alert(
+              'Session Removed',
+              'You have been removed from this session.',
+              [{ text: 'OK', onPress: () => router.replace('/' as any) }],
+              { cancelable: false },
+            );
+            return;
+          }
+
           if (global?.roomStatus) {
             beat = {
               ok: true,
@@ -159,7 +221,7 @@ function useLobbyController() {
             pulse = parseStartPulse(beat);
           }
         }
-        if (cancelled) return;
+        if (cancelled || isRemovedRef.current) return;
         if (beat.ok && pulse) {
           setPulseOk(true);
           setLastPulseAt(Date.now());
@@ -201,7 +263,7 @@ function useLobbyController() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [applyLiveStatus]);
+  }, [applyLiveStatus, router]);
 
   const enterExamination = useCallback(async () => {
     if (hasEntered.current || entering.current || !scannedSessionId) return;

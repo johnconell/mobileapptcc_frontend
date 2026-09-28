@@ -114,6 +114,7 @@ type PeerSessionState = {
   violationLimit: number;
   students: Record<number, PeerStudentState>; // Keyed by registrationId (unique)
   tokenMap: Record<string, number>; // Maps token -> registrationId for fast lookup
+  removedStudents?: Record<string, { registrationId: number; reason: string; removedAt: string }>;
   violations: PeerViolation[];
   violationSeq: number;
   wifiSsid?: string | null;
@@ -302,6 +303,9 @@ function toLobbyStudent(state: PeerStudentState): LobbyStudent {
     terminationReason: state.terminationReason,
     reconnectCode: state.reconnectCode,
     reconnectCodeExpiresAt: state.reconnectCodeExpiresAt,
+    applicantCode: state.applicantCode,
+    submittedAt: state.submittedAt,
+    score: state.score,
     isReady: Boolean(state.isReady),
     downloadPercent: Number(state.downloadPercent ?? (state.isReady ? 100 : 0)),
     hashVerified: Boolean(state.hashVerified ?? state.isReady),
@@ -316,7 +320,7 @@ function authorityOf(status: PeerSessionState['status']): 'WAITING' | 'ACTIVE' |
   return 'WAITING';
 }
 
-function statusPayload(student: PeerStudentState | null) {
+function statusPayload(student: PeerStudentState | null, token?: string) {
   if (!session) {
     return {
       examStarted: false,
@@ -325,6 +329,20 @@ function statusPayload(student: PeerStudentState | null) {
       myStatus: 'anonymous',
       startPhase: 'waiting' as const,
       startSeq: 0,
+      serverTime: Date.now(),
+      v: 0,
+    };
+  }
+  if (token && session.removedStudents?.[token]) {
+    return {
+      examStarted: false,
+      roomStatus: 'terminated',
+      authorityStatus: 'WAITING' as const,
+      myStatus: 'terminated',
+      removed: true,
+      removalReason: session.removedStudents[token].reason,
+      startPhase: 'waiting' as const,
+      startSeq: session.startSeq ?? 0,
       serverTime: Date.now(),
       v: 0,
     };
@@ -678,7 +696,7 @@ function registerRoutes(mod: HttpServerModule) {
     if (student) {
       student.lastActivityAt = new Date().toISOString();
     }
-    return ok(statusPayload(student));
+    return ok(statusPayload(student, token));
   };
   mod.route(p('/status'), 'GET', handleStatus);
   mod.route(p('/status'), 'POST', handleStatus);
@@ -1069,11 +1087,14 @@ function registerRoutes(mod: HttpServerModule) {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const params = parseParams(request);
     const token = params.participation_token ?? '';
+    if (token && session.removedStudents?.[token]) {
+      return fail(403, 'You have been removed from this examination session.');
+    }
     const student = studentByToken(token);
 
     if (!student) {
       console.warn(`[SERVER] Token not found: ${token.slice(0, 10)}...`);
-      return fail(404, 'You are no longer joined to this examination. Please scan the QR again.');
+      return fail(403, 'You are no longer joined to this examination.');
     }
 
     student.lastActivityAt = new Date().toISOString();
@@ -1298,8 +1319,15 @@ function registerRoutes(mod: HttpServerModule) {
   mod.route(p('/heartbeat'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
-    const student = studentByToken(String(body.participation_token ?? ''));
-    if (!student) return fail(404, 'You are no longer joined to this examination.');
+    const token = String(body.participation_token ?? '');
+    if (token && session.removedStudents?.[token]) {
+      return fail(403, 'You have been removed from this examination session.');
+    }
+    const student = studentByToken(token);
+    if (!student) return fail(403, 'You are no longer joined to this examination.');
+    if (student.status === 'terminated') {
+      return fail(403, 'You have been removed from this examination session.');
+    }
     student.lastActivityAt = new Date().toISOString();
 
     const nextPercent = body.download_percent != null
@@ -1797,18 +1825,8 @@ export const PeerExamServer = {
     }
   },
 
-  async terminateStudent(registrationId: string | number): Promise<LobbySnapshot | null> {
-    if (!session) return null;
-    const currentSession = session;
-    const target = currentSession.students[Number(registrationId)];
-    if (target) {
-      target.status = 'terminated';
-      target.terminationReason = 'proctor_terminated';
-      invalidateSnapshot();
-      await persist();
-      notify();
-    }
-    return buildSnapshot(currentSession);
+  async terminateStudent(registrationId: string | number, reason: string = 'Terminated by proctor'): Promise<LobbySnapshot | null> {
+    return this.removeStudent(registrationId, reason);
   },
 
   async allowReconnect(registrationId: string | number): Promise<{ reconnectCode: string; expiresAt: string; studentName?: string } | null> {
@@ -1832,16 +1850,35 @@ export const PeerExamServer = {
     };
   },
 
-  async removeStudent(registrationId: string | number): Promise<LobbySnapshot | null> {
+  async removeStudent(registrationId: string | number, reason: string = 'Removed by proctor'): Promise<LobbySnapshot | null> {
     if (!session) return null;
     const currentSession = session;
     const id = Number(registrationId);
-    if (currentSession.students[id]) {
+    if (!currentSession.removedStudents) currentSession.removedStudents = {};
+
+    const target = currentSession.students[id];
+    if (target) {
+      if (target.token) {
+        currentSession.removedStudents[target.token] = {
+          registrationId: id,
+          reason,
+          removedAt: new Date().toISOString(),
+        };
+        if (currentSession.tokenMap) {
+          delete currentSession.tokenMap[target.token];
+        }
+      }
       delete currentSession.students[id];
-      invalidateSnapshot();
-      await persist();
-      notify();
     }
+    currentSession.removedStudents[String(id)] = {
+      registrationId: id,
+      reason,
+      removedAt: new Date().toISOString(),
+    };
+
+    invalidateSnapshot();
+    await persist();
+    notify();
     return buildSnapshot(currentSession);
   },
 
@@ -1889,6 +1926,36 @@ export const PeerExamServer = {
   },
 
   /**
+   * Regenerate a new unique 8-character access code for the active session.
+   * Immediately invalidates previous code so old scans/joins are rejected.
+   */
+  async regenerateCode(): Promise<LobbySnapshot> {
+    if (!session) throw new Error('No examination is open on the proctor phone.');
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let nextCode = '';
+    do {
+      nextCode = '';
+      for (let i = 0; i < 8; i++) {
+        nextCode += alphabet[Math.floor(Math.random() * alphabet.length)];
+      }
+    } while (nextCode === session.examCode);
+
+    session.examCode = nextCode;
+    if (session.roomId != null) {
+      await OfflineStore.setOpenedRoom(
+        session.scheduleId,
+        session.roomId,
+        session.examCode,
+        session.status,
+      );
+    }
+    invalidateSnapshot();
+    await persist();
+    notify();
+    return buildSnapshot(session);
+  },
+
+  /**
    * When the cloud mints a new exam code for an empty lobby after a network
    * change, keep the local peer server in sync so the QR matches.
    */
@@ -1896,8 +1963,15 @@ export const PeerExamServer = {
     if (!session) return;
     const next = code.trim().toUpperCase();
     if (!next || next === session.examCode) return;
-    if (Object.keys(session.students).length > 0) return;
     session.examCode = next;
+    if (session.roomId != null) {
+      await OfflineStore.setOpenedRoom(
+        session.scheduleId,
+        session.roomId,
+        session.examCode,
+        session.status,
+      );
+    }
     invalidateSnapshot();
     await persist();
     notify();

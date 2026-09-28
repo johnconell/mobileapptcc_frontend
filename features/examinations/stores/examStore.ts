@@ -12,6 +12,7 @@ interface ExamState {
   flags: Record<string, boolean>;
   navMode: ExamNavMode;
   remainingSeconds: number;
+  totalDurationSeconds: number;
   autoSavedAt: string | null;
   startedAt: string | null;
   submittedAt: string | null;
@@ -24,6 +25,7 @@ interface ExamState {
   selectAnswer: (questionId: string, answer: ChoiceKey) => void;
   toggleFlag: (questionId: string) => void;
   setNavMode: (mode: ExamNavMode) => void;
+  setRemainingSeconds: (seconds: number) => void;
   tick: () => void;
   startExam: (durationMinutes?: number) => void;
   setPaused: (value: boolean) => void;
@@ -51,6 +53,7 @@ const initialState = {
   flags: {} as Record<string, boolean>,
   navMode: 'scroll' as ExamNavMode,
   remainingSeconds: EXAM_DURATION_MINUTES * 60,
+  totalDurationSeconds: EXAM_DURATION_MINUTES * 60,
   autoSavedAt: null as string | null,
   startedAt: null as string | null,
   submittedAt: null as string | null,
@@ -97,6 +100,8 @@ export const useExamStore = create<ExamState>((set, get) => ({
 
   setNavMode: (navMode) => set({ navMode }),
 
+  setRemainingSeconds: (remainingSeconds: number) => set({ remainingSeconds }),
+
   markAutoSaved: (at?: string) =>
     set({ autoSavedAt: at ?? new Date().toISOString() }),
 
@@ -124,6 +129,7 @@ export const useExamStore = create<ExamState>((set, get) => ({
     set({
       startedAt: new Date().toISOString(),
       remainingSeconds: durationMinutes * 60,
+      totalDurationSeconds: durationMinutes * 60,
       submittedAt: null,
       isSubmitting: false,
       isPaused: false,

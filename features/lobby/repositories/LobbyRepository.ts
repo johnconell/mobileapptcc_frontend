@@ -496,6 +496,17 @@ export const LobbyRepository = {
   },
 
   async regenerateQr(sessionId: string, roomId?: string): Promise<LobbySnapshot> {
+    const peer = await PeerExamServer.snapshot();
+    if (peer) {
+      const nextSnapshot = await PeerExamServer.regenerateCode();
+      await setStoredCode(nextSnapshot.examinationCode);
+      const examSessionId = nextSnapshot?.session?.examSessionId;
+      if (examSessionId && typeof examSessionId === 'number') {
+        apiRequest(`/proctor/sessions/${examSessionId}/regenerate-code`, { method: 'POST' }).catch(() => {});
+      }
+      return nextSnapshot;
+    }
+
     const current = await this.ensureLobby(sessionId, undefined, roomId);
     const examSessionId = current?.session?.examSessionId;
     if (!examSessionId) {
@@ -1262,25 +1273,19 @@ export const LobbyRepository = {
     return null;
   },
 
-  async terminateStudent(studentId: string): Promise<LobbySnapshot | null> {
-    if (await PeerExamServer.snapshot()) {
-      return PeerExamServer.terminateStudent(studentId);
-    }
-    // studentId in lobby cards is registration id string.
-    await apiRequest(`/proctor/registrations/${studentId}/terminate`, {
-      method: 'POST',
-    });
-    return null;
+  async terminateStudent(studentId: string, reason = 'Terminated by proctor'): Promise<LobbySnapshot | null> {
+    return this.removeStudent(studentId, reason);
   },
 
-  async removeStudent(studentId: string): Promise<LobbySnapshot | null> {
+  async removeStudent(studentId: string, reason = 'Removed by proctor'): Promise<LobbySnapshot | null> {
     const peer = await PeerExamServer.snapshot();
     if (peer) {
-      return PeerExamServer.removeStudent(studentId);
+      return PeerExamServer.removeStudent(studentId, reason);
     }
     // studentId in lobby cards is registration id string.
     await apiRequest(`/proctor/registrations/${studentId}/remove`, {
       method: 'POST',
+      body: { reason },
     });
     return null;
   },
@@ -1395,6 +1400,9 @@ export const LobbyRepository = {
     roomStatus?: string;
     authorityStatus?: string;
     startSeq?: number;
+    remainingSeconds?: number;
+    removed?: boolean;
+    myStatus?: string;
   }> {
     // Peer LAN is the exam network. Never skip it because cloud is offline.
     if (await PeerExamClient.isActive()) {
@@ -1408,6 +1416,9 @@ export const LobbyRepository = {
           status?: string;
           authorityStatus?: string;
           startSeq?: number;
+          remainingSeconds?: number;
+          removed?: boolean;
+          myStatus?: string;
         }>('/heartbeat', {
           method: 'POST',
           body: {
@@ -1425,11 +1436,21 @@ export const LobbyRepository = {
           roomStatus: pulse?.status,
           authorityStatus: pulse?.authorityStatus,
           startSeq: pulse?.startSeq,
+          remainingSeconds: pulse?.remainingSeconds,
+          removed: pulse?.removed,
+          myStatus: pulse?.myStatus,
         };
       } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Lost the proctor phone.';
+        const isRemoved =
+          msg.toLowerCase().includes('removed') ||
+          msg.toLowerCase().includes('terminated') ||
+          msg.toLowerCase().includes('no longer joined');
         return {
           ok: false,
-          message: e instanceof Error ? e.message : 'Lost the proctor phone.',
+          removed: isRemoved,
+          myStatus: isRemoved ? 'terminated' : undefined,
+          message: msg,
         };
       }
     }
@@ -1449,9 +1470,16 @@ export const LobbyRepository = {
       });
       return { ok: true };
     } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Heartbeat failed.';
+      const isRemoved =
+        msg.toLowerCase().includes('terminated') ||
+        msg.toLowerCase().includes('removed') ||
+        msg.toLowerCase().includes('invalid participation token');
       return {
         ok: false,
-        message: e instanceof Error ? e.message : 'Heartbeat failed.',
+        removed: isRemoved,
+        myStatus: isRemoved ? 'terminated' : undefined,
+        message: msg,
       };
     }
   },

@@ -7,10 +7,11 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
+  Modal,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { QrCode, Shield } from 'lucide-react-native';
+import { QrCode, Shield, Mail } from 'lucide-react-native';
 import { APP_NAME, SCHOOL_NAME } from '@/shared/constants';
 import { colors, shadows, typography } from '@/shared/theme';
 import { Card } from '@/shared/components/ui/Card';
@@ -31,9 +32,16 @@ let isAppColdBoot = true;
 export default function HomeScreen() {
   const { colors: themeColors } = useAppTheme();
   const router = useRouter();
-  const params = useLocalSearchParams<{ stay?: string; from?: string }>();
+  const params = useLocalSearchParams<{ stay?: string; from?: string; completed?: string }>();
   const insets = useSafeAreaInsets();
   const [checkingAuth, setCheckingAuth] = useState(true);
+  const [showCompletedModal, setShowCompletedModal] = useState(false);
+
+  useEffect(() => {
+    if (params.completed === '1') {
+      setShowCompletedModal(true);
+    }
+  }, [params.completed]);
 
   // If a proctor session exists on this phone on initial cold launch, go straight to proctor dashboard.
   // When a user deliberately navigates here (e.g. after logout, back from login, or mode toggle),
@@ -265,6 +273,43 @@ export default function HomeScreen() {
           style={styles.fab}
         />
       </View>
+
+      {/* Completion Modal: Device Unpinned + Check Gmail notification */}
+      {showCompletedModal ? (
+        <Modal transparent animationType="fade" visible={showCompletedModal}>
+          <View style={styles.completedModalOverlay}>
+            <View
+              style={[
+                styles.completedModalCard,
+                { backgroundColor: themeColors.card, borderColor: themeColors.cardBorder },
+              ]}
+            >
+              <View style={styles.completedModalIconWrap}>
+                <Mail size={32} color="#15803D" />
+              </View>
+              <Text style={[styles.completedModalTitle, { color: themeColors.textPrimary }]}>
+                Examination Submitted
+              </Text>
+              <Text style={[styles.completedModalBody, { color: themeColors.textSecondary }]}>
+                Your examination answers have been submitted successfully and your phone has been
+                unpinned.
+                {'\n\n'}
+                Please check your registered Gmail account for your official examination results and score
+                breakdown.
+              </Text>
+              <Pressable
+                style={styles.completedModalBtn}
+                onPress={() => {
+                  setShowCompletedModal(false);
+                  router.setParams({ completed: undefined });
+                }}
+              >
+                <Text style={styles.completedModalBtnText}>Got It</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
     </View>
   );
 }
@@ -365,5 +410,63 @@ const styles = StyleSheet.create({
   fab: {
     width: '100%',
     maxWidth: 320,
+  },
+  completedModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  completedModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 24,
+    alignItems: 'center',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+  },
+  completedModalIconWrap: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#DCFCE7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  completedModalTitle: {
+    fontSize: 18,
+    fontFamily: typography.subtitle.fontFamily,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  completedModalBody: {
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: 'center',
+    marginBottom: 20,
+    fontFamily: typography.body.fontFamily,
+  },
+  completedModalBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  completedModalBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '600',
+    fontFamily: typography.subtitle.fontFamily,
   },
 });
