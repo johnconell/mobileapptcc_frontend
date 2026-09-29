@@ -38,6 +38,7 @@ export default function StudentPasskeyScreen() {
   const router = useRouter();
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
+  const agreedAt = useStudentStore((s) => s.agreedAt);
   const setSelectedStudent = useStudentStore((s) => s.setSelectedStudent);
   const setExamPasskey = useStudentStore((s) => s.setExamPasskey);
   const [error, setError] = useState<string | null>(null);
@@ -68,11 +69,10 @@ export default function StudentPasskeyScreen() {
 
   React.useEffect(() => {
     if (verifiedStudent && scannedSessionId) {
-      router.replace('/(student)/lobby');
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      router.replace('/(student)/terms' as any);
+      const nextRoute = agreedAt ? '/(student)/lobby' : '/(student)/confirmation';
+      router.replace(nextRoute as any);
     }
-  }, [verifiedStudent, scannedSessionId, router]);
+  }, [verifiedStudent, scannedSessionId, agreedAt, router]);
 
   if (!scannedSessionId) {
     return (
@@ -158,7 +158,14 @@ export default function StudentPasskeyScreen() {
         // ignore store errors — allow join and rely on server-side checks if uncertain
       }
       setSelectedStudent(result.student);
-      router.push('/(student)/confirmation');
+      router.push({
+        pathname: '/(student)/confirmation',
+        params: {
+          scheduleTitle: result.schedule?.title || '',
+          examDate: result.schedule?.exam_date || '',
+          timeSlot: result.schedule?.time_slot || '',
+        },
+      } as any);
     } catch (err) {
       setError(userFacingError(err, 'Invalid examination key. Please check and try again.'));
     }

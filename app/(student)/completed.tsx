@@ -1,6 +1,7 @@
 import React from 'react';
 import { Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useKeepAwake } from 'expo-keep-awake';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { ShieldAlert, Mail } from 'lucide-react-native';
 import {
@@ -17,6 +18,7 @@ import { examProcess } from '@/shared/theme/examProcess';
 const AUTO_HOME_SECONDS = 12;
 
 export default function CompletedScreen() {
+  useKeepAwake();
   const router = useRouter();
   const resetExam = useExamStore((s) => s.reset);
   const terminationReason = useExamStore((s) => s.terminationReason);

@@ -13,7 +13,7 @@ interface StudentState {
   setSelectedStudent: (student: StudentRecord | null) => void;
   setVerifiedStudent: (student: StudentRecord | null) => void;
   setExamPasskey: (passkey: string | null) => void;
-  setAgreedAt: (timestamp: string) => void;
+  setAgreedAt: (timestamp: string | null) => void;
   reset: () => void;
 }
 

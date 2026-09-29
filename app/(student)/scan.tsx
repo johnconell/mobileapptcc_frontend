@@ -79,6 +79,7 @@ export default function JoinExaminationScreen() {
     useStudentStore.getState().setVerifiedStudent(null);
     useStudentStore.getState().setSelectedStudent(null);
     useStudentStore.getState().setExamPasskey(null);
+    useStudentStore.getState().setAgreedAt(null);
     useLobbyStore.getState().setSnapshot(null);
     await appStorage.deleteItem(STORAGE_KEYS.participationToken);
     await appStorage.deleteItem(STORAGE_KEYS.studentProgress);

@@ -9,76 +9,55 @@ import {
 
 type ExamProcessStepperProps = {
   step: ExamProcessStepIndex;
-  /** @deprecated compact has no effect — labels are always shown */
+  /** Optionally hide labels on very tight layouts */
   compact?: boolean;
 };
 
 /**
- * Clean horizontal stepper for the 6-step exam flow.
- *
- * Layout: circle + connecting line, labels below each circle.
- *  - Done:     filled maroon circle, white checkmark
- *  - Current:  white circle, maroon border (2px), maroon step number
- *  - Upcoming: white circle, muted border, muted step number
- *
- * Labels sit below each circle and are constrained so they never overflow.
- * Uses `adjustsFontSizeToFit` so they shrink before wrapping.
+ * Horizontal six-step exam flow: completed = check, current = highlighted,
+ * upcoming = muted.
  */
-export function ExamProcessStepper({ step }: ExamProcessStepperProps) {
+export function ExamProcessStepper({ step, compact = false }: ExamProcessStepperProps) {
   return (
-    <View style={styles.container} accessibilityRole="progressbar">
+    <View style={styles.row} accessibilityRole="progressbar">
       {EXAM_PROCESS_STEPS.map((label, index) => {
         const done = index < step;
         const current = index === step;
+        const upcoming = index > step;
+        const lineDone = index < step;
 
         return (
           <React.Fragment key={label}>
-            {/* Connector line between steps */}
             {index > 0 ? (
               <View
-                style={[
-                  styles.line,
-                  { backgroundColor: index <= step ? examProcess.progressActive : examProcess.progressTrack },
-                ]}
+                  style={[styles.line, { backgroundColor: lineDone ? examProcess.progressActive : examProcess.progressTrack }]}
               />
             ) : null}
-
             <View style={styles.stepWrap}>
               <View
                 style={[
                   styles.circle,
                   done && styles.circleDone,
                   current && styles.circleCurrent,
-                  !done && !current && styles.circleUpcoming,
+                  upcoming && styles.circleUpcoming,
                 ]}
               >
-                {done ? (
-                  <Check size={13} color={examProcess.white} strokeWidth={3} />
-                ) : (
-                  <Text
-                    style={[
-                      styles.circleNum,
-                      current && styles.circleNumCurrent,
-                      !current && styles.circleNumUpcoming,
-                    ]}
-                  >
-                    {index + 1}
-                  </Text>
-                )}
+                {done ? <Check size={14} color={examProcess.white} strokeWidth={2.5} /> : <Text style={[styles.number, current && styles.numberCurrent, upcoming && styles.numberUpcoming]}>{index + 1}</Text>}
               </View>
-
-              <Text
-                style={[
-                  styles.label,
-                  current && styles.labelCurrent,
-                  done && styles.labelDone,
-                ]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.7}
-              >
-                {label}
-              </Text>
+              {!compact ? (
+                <Text
+                  style={[
+                    styles.label,
+                    current && styles.labelCurrent,
+                    (done || upcoming) && styles.labelMuted,
+                  ]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.8}
+                >
+                  {label}
+                </Text>
+              ) : null}
             </View>
           </React.Fragment>
         );
@@ -87,20 +66,19 @@ export function ExamProcessStepper({ step }: ExamProcessStepperProps) {
   );
 }
 
-const CIRCLE = 26;
+const CIRCLE = 28;
 
 const styles = StyleSheet.create({
-  container: {
+  row: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     width: '100%',
-    marginBottom: 12,
+    marginBottom: 10,
   },
   stepWrap: {
+    flex: 1,
     alignItems: 'center',
-    // Fixed width ensures all 6 steps fit evenly. 26 circle + some padding for label.
-    width: CIRCLE + 16,
-    flexShrink: 0,
+    zIndex: 1,
   },
   circle: {
     width: CIRCLE,
@@ -115,43 +93,39 @@ const styles = StyleSheet.create({
     borderColor: examProcess.progressActive,
   },
   circleCurrent: {
-    backgroundColor: examProcess.white,
+    backgroundColor: examProcess.accentSoft,
     borderColor: examProcess.progressActive,
   },
   circleUpcoming: {
     backgroundColor: examProcess.white,
     borderColor: examProcess.progressInactive,
   },
-  circleNum: {
-    fontSize: 11,
-    fontFamily: examProcess.fontSemiBold,
-  },
-  circleNumCurrent: {
-    color: examProcess.progressActive,
-  },
-  circleNumUpcoming: {
-    color: examProcess.progressInactive,
-  },
   line: {
     flex: 1,
     height: 2,
     marginTop: CIRCLE / 2 - 1,
-    // Slightly overlap the circles so the line meets the circle edge
-    marginHorizontal: -1,
+    marginHorizontal: 3,
   },
   label: {
-    marginTop: 5,
-    fontSize: 9,
+    marginTop: 6,
+    fontSize: 10,
     fontFamily: examProcess.fontRegular,
     textAlign: 'center',
-    color: examProcess.progressInactive,
     width: '100%',
+    color: examProcess.muted,
   },
   labelCurrent: {
     fontFamily: examProcess.fontSemiBold,
     color: examProcess.progressActive,
   },
-  labelDone: {
-    color: examProcess.progressActive,
+  labelMuted: {
+    color: examProcess.progressInactive,
   },
+  number: {
+    fontSize: 12,
+    fontFamily: examProcess.fontSemiBold,
+    color: examProcess.progressInactive,
+  },
+  numberCurrent: { color: examProcess.progressActive },
+  numberUpcoming: { color: examProcess.progressInactive },
 });

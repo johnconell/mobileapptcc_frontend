@@ -3,7 +3,7 @@ import {
   Alert,
   AppState,
   FlatList,
-  Modal,
+  Keyboard,
   Platform,
   Pressable,
   ScrollView,
@@ -19,7 +19,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ChevronLeft,
   ChevronRight,
-  Clock,
   Layers,
   List,
   ShieldAlert,
@@ -49,17 +48,24 @@ import { useWifiExamGate } from '@/features/monitoring/hooks/useWifiExamGate';
 import { resolveDisconnectGraceSeconds } from '@/shared/utils/gracePeriod';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { QuestionRepository } from '@/features/examinations/repositories/QuestionRepository';
+import { clearApplicantExamMaterial } from '@/features/applicants/services/applicantExamCleanup';
 import { ExamProgressStore } from '@/features/examinations/services/examProgressStore';
 import { ExamLifecycle } from '@/features/examinations/services/examLifecycle';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { parseStartPulse } from '@/features/examinations/services/examStartCoordinator';
 import { playExamTimeWarning } from '@/features/examinations/services/examTimeWarning';
 import { startExamLock, isExamLocked } from '@/features/examinations/services/ExamSecurityService';
+import {
+  createSubmitController,
+  type SubmitReason,
+} from '@/features/examinations/services/submitGate';
 import type { ChoiceKey, Question } from '@/shared/types';
 
 function categoryKeyOf(question: Question): string {
   return (question.category || question.subjectId || 'General').trim() || 'General';
 }
+
+const SHOW_BUILD_STAMP = __DEV__ || process.env.EXPO_PUBLIC_DEBUG_BUILD_STAMP === '1';
 
 interface ExamQuestionItemProps {
   question: Question;
@@ -136,8 +142,6 @@ function ExamScreenInner() {
   const [reconnectError, setReconnectError] = useState<string | null>(null);
   const [reconnectPinRequired, setReconnectPinRequired] = useState(false);
   const [roomEnded, setRoomEnded] = useState(false);
-  const [proctorEndedModalOpen, setProctorEndedModalOpen] = useState(false);
-  const [timeExpiredModalOpen, setTimeExpiredModalOpen] = useState(false);
 
   // Store state & selectors
   const questions = useExamStore((s) => s.questions);
@@ -157,6 +161,7 @@ function ExamScreenInner() {
   const unansweredCount = useExamStore((s) => s.unansweredCount);
   const answeredCount = useExamStore((s) => s.answeredCount);
   const setPaused = useExamStore((s) => s.setPaused);
+  const markSubmitting = useExamStore((s) => s.markSubmitting);
   const markSubmitted = useExamStore((s) => s.markSubmitted);
   const restoreProgress = useExamStore((s) => s.restoreProgress);
 
@@ -407,22 +412,110 @@ function ExamScreenInner() {
     };
   }, [securityEnabled, router]);
 
-  const leaveEndedExam = useCallback(() => {
-    markSubmitted('proctor_terminated');
-    router.replace('/(student)/submitting');
-  }, [markSubmitted, router]);
+  const finalizeSubmission = useCallback(
+    async (reason: SubmitReason) => {
+      const finalReason =
+        reason === 'manual'
+          ? 'submitted'
+          : reason === 'timeout'
+            ? 'time_expired'
+            : 'proctor_terminated';
+      const payload = Object.fromEntries(
+        Object.values(answers).map((answer) => [answer.questionId, answer.selectedAnswer]),
+      );
 
-  const goSubmit = useCallback(
-    (reason: 'submitted' | 'policy_violation' | 'time_expired' | 'proctor_terminated' = 'submitted') => {
-      markSubmitted(reason);
+      markSubmitting(true);
       router.replace('/(student)/submitting');
+      await ExamProgressStore.save({
+        sessionId: sessionId ?? 'unknown',
+        studentId: verifiedStudent?.id ?? 'unknown',
+        answers,
+        flags,
+        navMode,
+        remainingSeconds: useExamStore.getState().remainingSeconds,
+        startedAt,
+      });
+
+      let lastError: unknown = null;
+      for (let tries = 1; tries <= 3; tries++) {
+        try {
+          await QuestionRepository.submitAnswers({
+            sessionId: sessionId ?? 'unknown',
+            studentId: verifiedStudent?.id ?? 'unknown',
+            answers: payload,
+          });
+          if (verifiedStudent?.id) {
+            await LobbyRepository.finishStudent(verifiedStudent.id, finalReason);
+          }
+          await ExamProgressStore.clear();
+          await clearApplicantExamMaterial();
+          markSubmitted(finalReason);
+          try {
+            const appCode = verifiedStudent?.studentId || verifiedStudent?.id;
+            if (appCode && sessionId) {
+              const sid = String(sessionId).replace(/^offline-/, '').split('-')[0];
+              await appStorage.setItem(`tcc.student.completed.${sid}.${appCode}`, '1');
+            }
+          } catch {
+            // Completion marker is best effort.
+          }
+          markSubmitting(false);
+          router.replace('/(student)/completed');
+          return;
+        } catch (error) {
+          lastError = error;
+          if (tries < 3) await new Promise((resolve) => setTimeout(resolve, 1200 * tries));
+        }
+      }
+
+      markSubmitting(false);
+      throw lastError instanceof Error
+        ? lastError
+        : new Error('Submission failed. Please stay on the exam Wi-Fi and try again.');
     },
-    [markSubmitted, router],
+    [answers, flags, navMode, sessionId, startedAt, verifiedStudent, markSubmitting, markSubmitted, router],
   );
-  const confirmSubmit = useCallback(() => {
-    setSubmitConfirmOpen(false);
-    goSubmit('submitted');
-  }, [goSubmit]);
+  const finalizeSubmissionRef = useRef(finalizeSubmission);
+  finalizeSubmissionRef.current = finalizeSubmission;
+
+  const submitController = useMemo(
+    () =>
+      createSubmitController({
+        finalizeSubmission: (reason) => finalizeSubmissionRef.current(reason),
+        onFailure: (error) => {
+          Alert.alert(
+            'Submission failed',
+            error instanceof Error
+              ? error.message
+              : 'Submission failed. Please stay on the exam Wi-Fi and try again.',
+          );
+        },
+      }),
+    [],
+  );
+  const requestSubmit = useCallback(
+    (reason: SubmitReason, typedPhrase?: string) => {
+      const result = submitController.requestSubmit(reason, typedPhrase);
+      if (result.ok) {
+        setSubmitConfirmOpen(false);
+        setNavigatorOpen(false);
+        Keyboard.dismiss();
+      }
+      return result;
+    },
+    [submitController],
+  );
+
+  const leaveEndedExam = useCallback(() => {
+    requestSubmit('proctor_ended');
+  }, [requestSubmit]);
+
+  const confirmSubmit = useCallback(
+    (typedPhrase: string) => {
+      requestSubmit('manual', typedPhrase);
+    },
+    [requestSubmit],
+  );
   const reviewUnansweredAndFlagged = useCallback(() => {
     setSubmitConfirmOpen(false);
     setNavigatorFilter('review');
@@ -432,11 +525,7 @@ function ExamScreenInner() {
   graceExpiredCallbackRef.current = () => {
     if (!autoSubmittedRef.current) {
       autoSubmittedRef.current = true;
-      goSubmit('time_expired');
-      setTimeExpiredModalOpen(true);
-      setTimeout(() => {
-        goSubmit('time_expired');
-      }, 2500);
+      requestSubmit('timeout');
     }
   };
 
@@ -577,18 +666,14 @@ function ExamScreenInner() {
     if (autoSubmittedRef.current) return;
     if (roomEnded) {
       autoSubmittedRef.current = true;
-      setProctorEndedModalOpen(true);
+      requestSubmit('proctor_ended');
       return;
     }
     if (questions.length > 0 && remainingSeconds <= 0) {
       autoSubmittedRef.current = true;
-      setTimeExpiredModalOpen(true);
-      const timer = setTimeout(() => {
-        goSubmit('time_expired');
-      }, 3000);
-      return () => clearTimeout(timer);
+      requestSubmit('timeout');
     }
-  }, [remainingSeconds, questions.length, roomEnded, goSubmit]);
+  }, [remainingSeconds, questions.length, roomEnded, requestSubmit]);
 
   // Answer selection & instant local persistence
   const handleSelectChoice = useCallback(
@@ -712,6 +797,10 @@ function ExamScreenInner() {
   return (
     <View style={[styles.screen, { backgroundColor: theme.bg }]}>
       <StatusBar hidden={true} />
+
+      {SHOW_BUILD_STAMP ? (
+        <Text style={[styles.buildStamp, { color: theme.textMuted }]}>build 2026-09-28-A</Text>
+      ) : null}
 
       {/* iOS Privacy Blackout Shield */}
       {Platform.OS === 'ios' && isInactiveOrBackground ? (
@@ -989,56 +1078,6 @@ function ExamScreenInner() {
         onSubmit={confirmSubmit}
       />
 
-      {/* Time Expired Modal */}
-      {timeExpiredModalOpen ? (
-        <View style={[styles.modalOverlay, { backgroundColor: `${isDark ? theme.bg : theme.text}73` }]}>
-          <View style={[styles.modalSheet, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-            <View style={[styles.modalIconCircle, { backgroundColor: theme.timer.red.bg }]}>
-              <Clock size={36} color={theme.timer.red.text} strokeWidth={2.2} />
-            </View>
-            <Text style={[styles.modalTitle, { color: theme.text }]}>
-              Time&apos;s Up!
-            </Text>
-            <Text style={[styles.modalDescription, { color: theme.textSecondary }]}>
-              The examination time has expired. Your answers have been recorded and your exam is submitting now...
-            </Text>
-            <Pressable
-              style={[styles.modalActionBtn, { backgroundColor: theme.accent, borderColor: theme.accent }]}
-              onPress={() => goSubmit('time_expired')}
-              accessibilityRole="button"
-              accessibilityLabel="Submit now"
-            >
-              <Text style={[styles.modalActionBtnText, { color: theme.onAccent }]}>Submit Now</Text>
-            </Pressable>
-          </View>
-        </View>
-      ) : null}
-
-      {/* Proctor Ended Examination Modal */}
-      {proctorEndedModalOpen ? (
-        <View style={[styles.modalOverlay, { backgroundColor: `${isDark ? theme.bg : theme.text}73` }]}>
-          <View style={[styles.modalSheet, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-            <View style={[styles.modalIconCircle, { backgroundColor: theme.accentSoft }]}>
-              <ShieldAlert size={36} color={theme.accent} strokeWidth={2.2} />
-            </View>
-            <Text style={[styles.modalTitle, { color: theme.text }]}>
-              The Proctor Has Ended the Exam
-            </Text>
-            <Text style={[styles.modalDescription, { color: theme.textSecondary }]}>
-              The examination session was concluded by the proctor. Your recorded answers are being submitted. Please wait for your results via Gmail.
-            </Text>
-            <Pressable
-              style={[styles.modalActionBtn, { backgroundColor: theme.accent, borderColor: theme.accent }]}
-              onPress={() => void leaveEndedExam()}
-              accessibilityRole="button"
-              accessibilityLabel="Submit and return home"
-            >
-              <Text style={[styles.modalActionBtnText, { color: theme.onAccent }]}>Submit &amp; Return Home</Text>
-            </Pressable>
-          </View>
-        </View>
-      ) : null}
-
       {/* WiFi Disconnect Overlay */}
       <ExamWifiDisconnectOverlay
         visible={wifiLocked && !roomEnded}
@@ -1068,6 +1107,14 @@ export default function ExamScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
+  },
+  buildStamp: {
+    position: 'absolute',
+    top: 4,
+    right: 8,
+    zIndex: 1000000,
+    fontSize: 9,
+    opacity: 0.7,
   },
   infoRow: {
     flexDirection: 'row',
@@ -1148,53 +1195,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     flexShrink: 1,
     textAlign: 'center',
-  },
-  modalOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-    zIndex: 9999,
-  },
-  modalSheet: {
-    width: '100%',
-    maxWidth: 380,
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 24,
-    alignItems: 'center',
-    gap: 12,
-  },
-  modalIconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  modalDescription: {
-    fontSize: 14,
-    lineHeight: 20,
-    textAlign: 'center',
-  },
-  modalActionBtn: {
-    width: '100%',
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-  },
-  modalActionBtnText: {
-    fontSize: 15,
-    fontWeight: '600',
   },
   iosPrivacyBlackoutShield: {
     ...StyleSheet.absoluteFillObject,

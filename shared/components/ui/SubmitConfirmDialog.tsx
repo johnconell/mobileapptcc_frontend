@@ -1,13 +1,17 @@
-import React, { memo } from 'react';
+import React, { memo, useEffect, useState } from 'react';
 import {
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { useThemeTokens } from '@/shared/contexts/ThemeContext';
-import { CheckCircle2, AlertCircle, Flag } from 'lucide-react-native';
+import { CheckCircle2, AlertCircle, Flag, Send } from 'lucide-react-native';
+import { isConfirmPhrase } from '@/features/examinations/services/submitGate';
 import { Row } from './primitives';
 
 export interface SubmitConfirmDialogProps {
@@ -17,7 +21,7 @@ export interface SubmitConfirmDialogProps {
   flaggedCount: number;
   totalQuestions: number;
   onReview: () => void;
-  onSubmit: () => void;
+  onSubmit: (typedPhrase: string) => void;
   onClose: () => void;
 }
 
@@ -32,6 +36,12 @@ function SubmitConfirmDialogComponent({
   onClose,
 }: SubmitConfirmDialogProps) {
   const { theme, isDark } = useThemeTokens();
+  const [text, setText] = useState('');
+  const matches = isConfirmPhrase(text);
+
+  useEffect(() => {
+    setText('');
+  }, [visible]);
 
   return (
     <Modal
@@ -40,7 +50,10 @@ function SubmitConfirmDialogComponent({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <View style={[styles.overlay, { backgroundColor: `${isDark ? theme.bg : theme.text}73` }]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={[styles.overlay, { backgroundColor: `${isDark ? theme.bg : theme.text}73` }]}
+      >
         <Pressable
           style={StyleSheet.absoluteFill}
           onPress={onClose}
@@ -156,6 +169,37 @@ function SubmitConfirmDialogComponent({
             </View>
           </View>
 
+          <Text style={[styles.phrasePrompt, { color: theme.text }]}>
+            To confirm, type <Text style={{ color: theme.accentText, fontWeight: '500' }}>exam submit</Text>
+          </Text>
+          <TextInput
+            value={text}
+            onChangeText={setText}
+            placeholder="Type here"
+            placeholderTextColor={theme.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            autoComplete="off"
+            returnKeyType="done"
+            blurOnSubmit
+            onSubmitEditing={() => {
+              if (matches) onSubmit(text);
+            }}
+            style={[
+              styles.phraseInput,
+              {
+                borderColor: matches ? theme.timer.green.text : theme.border,
+                backgroundColor: theme.surfaceAlt,
+                color: theme.text,
+              },
+              matches && styles.phraseInputMatched,
+            ]}
+          />
+          {text.length > 0 && !matches ? (
+            <Text style={[styles.phraseHint, { color: theme.textMuted }]}>Type exactly: exam submit</Text>
+          ) : null}
+
           {/* Action Buttons: Review on left, Submit on right */}
           <Row style={styles.actionsRow}>
             <Pressable
@@ -176,24 +220,27 @@ function SubmitConfirmDialogComponent({
             </Pressable>
 
             <Pressable
-              onPress={onSubmit}
+              disabled={!matches}
+              onPress={() => {
+                if (matches) onSubmit(text);
+              }}
               accessibilityRole="button"
               accessibilityLabel="Confirm exam submission"
+              accessibilityState={{ disabled: !matches }}
               style={[
                 styles.submitButton,
                 {
-                  backgroundColor: theme.accent,
-                  borderColor: theme.accent,
+                  backgroundColor: matches ? theme.accent : theme.surfaceAlt,
+                  borderColor: matches ? theme.accent : theme.border,
                 },
               ]}
             >
-              <Text style={[styles.submitText, { color: theme.onAccent }]}>
-                Submit
-              </Text>
+              <Send size={16} color={matches ? theme.onAccent : theme.textMuted} />
+              <Text style={[styles.submitText, { color: matches ? theme.onAccent : theme.textMuted }]}>Submit exam</Text>
             </Pressable>
           </Row>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -223,6 +270,25 @@ const styles = StyleSheet.create({
   description: {
     fontSize: 14,
     lineHeight: 20,
+  },
+  phrasePrompt: {
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  phraseInput: {
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    fontSize: 15,
+    marginTop: 6,
+  },
+  phraseInputMatched: {
+    borderWidth: 1.5,
+  },
+  phraseHint: {
+    fontSize: 12,
+    marginTop: 4,
   },
   countsContainer: {
     gap: 8,

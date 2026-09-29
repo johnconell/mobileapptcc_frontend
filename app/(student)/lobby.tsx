@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState, useRef, useMemo } from 'react'
 import { Alert, BackHandler, ScrollView, Text, View, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
 import { useKeepAwake } from 'expo-keep-awake';
-import { Check, User, RefreshCw, AlertTriangle, ShieldCheck } from 'lucide-react-native';
+import { User, RefreshCw, AlertTriangle, ShieldCheck } from 'lucide-react-native';
 import { Header } from '@/shared/components/ui/Header';
 import { Card } from '@/shared/components/ui/Card';
 import { Button } from '@/shared/components/ui/Button';
@@ -44,13 +44,10 @@ function useLobbyController() {
   const router = useRouter();
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
-  const selectedStudent = useStudentStore((s) => s.selectedStudent);
-  const setSnapshot = useLobbyStore((s) => s.setSnapshot);
   const storedSnapshot = useLobbyStore((s) => s.snapshot);
   const setQuestions = useExamStore((s) => s.setQuestions);
   const setSessionId = useExamStore((s) => s.setSessionId);
   const startExam = useExamStore((s) => s.startExam);
-
 
   const [state, setState] = useState<LobbyState>('DASHBOARD');
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +57,6 @@ function useLobbyController() {
   const [lastPulseAt, setLastPulseAt] = useState<number>(Date.now());
   const [pulseOk, setPulseOk] = useState(true);
 
-  const hasJoined = useRef(false);
   const hasEntered = useRef(false);
   const downloading = useRef(false);
   const entering = useRef(false);
@@ -359,18 +355,17 @@ function useLobbyController() {
     void enterExamination();
   }, [authority, progress.moduleReady, progress.hashVerified, progress.percent, enterExamination]);
 
-  // Guard: if somehow the student reaches the lobby without being verified,
-  // redirect them home. Lobby join is handled by terms.tsx — not here.
+  // Registration is completed on Confirm after agreement and successful pinning.
   useEffect(() => {
-    if (!scannedSessionId) {
-      router.replace('/');
+    if (!scannedSessionId || !verifiedStudent || !storedSnapshot) {
+      router.replace('/(student)/confirmation' as any);
     }
-  }, [scannedSessionId, router]);
+  }, [scannedSessionId, verifiedStudent, storedSnapshot, router]);
 
   return {
     state,
     error,
-    currentStudent: verifiedStudent || selectedStudent,
+    currentStudent: verifiedStudent,
     lobbyData,
     lastSeen,
     isStale,
@@ -405,15 +400,6 @@ export default function StudentLobbyScreen() {
   }
 
   const { lobbyData, currentStudent, isStale, progress, authority, pulseOk } = controller;
-  const sessionLabel =
-    authority === 'ACTIVE' || authority === 'STARTING'
-      ? 'Active'
-      : authority === 'ENDED'
-        ? 'Ended'
-        : authority === 'PAUSED'
-          ? 'Paused'
-          : 'Waiting';
-  const networkConnected = pulseOk && !isStale;
   const examReady = Boolean(progress.moduleReady && progress.hashVerified && progress.percent >= 100);
 
   const handleExit = () => {
@@ -480,7 +466,7 @@ export default function StudentLobbyScreen() {
       />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
-        {/* SECTION 1: IDENTITY & READINESS */}
+        {/* SECTION 1: IDENTITY */}
         <Card style={styles.mainCard}>
            <View style={styles.studentSection}>
               <View style={styles.avatarCircle}>
@@ -492,16 +478,7 @@ export default function StudentLobbyScreen() {
               </View>
            </View>
 
-           <View style={[styles.readinessBanner, examReady ? styles.readyBg : styles.progressBg]}>
-              {examReady ? <Check size={18} color={examProcess.okText} /> : <ActivityIndicator size="small" color={examProcess.accent} />}
-              <Text style={[styles.readinessText, examReady ? styles.readyText : styles.progressText]}>
-                 {controller.state === 'FINISHING_DOWNLOAD'
-                   ? `Finishing Download...\n${Math.round(progress.percent)}%`
-                   : progress.phaseLabel}
-              </Text>
-           </View>
         </Card>
-
 
         {/* SECTION 2: EXAM DETAILS */}
         <Card style={styles.infoCard}>
@@ -652,15 +629,6 @@ export default function StudentLobbyScreen() {
   );
 }
 
-function ReadinessRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
-  return (
-    <View style={styles.readinessRow}>
-      <Text style={styles.readinessRowLabel}>{label}</Text>
-      <Text style={[styles.readinessRowValue, ok ? styles.readyText : styles.pendingText]}>{value}</Text>
-    </View>
-  );
-}
-
 function InfoItem({ label, value }: { label: string; value: string }) {
     return (
         <View style={styles.infoItem}>
@@ -708,52 +676,9 @@ const styles = StyleSheet.create({
     color: examProcess.muted,
     fontFamily: examProcess.fontRegular,
   },
-  readinessBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 10,
-    borderRadius: examProcess.radiusControl,
-    marginVertical: 8,
-  },
-  readyBg: { backgroundColor: examProcess.okBg },
-  progressBg: { backgroundColor: examProcess.accentSoft },
-  readinessText: {
-    fontSize: 13,
-    fontFamily: examProcess.fontMedium,
-    marginLeft: 8,
-    flex: 1,
-  },
   readyText: { color: examProcess.okText },
   progressText: { color: examProcess.accent },
   pendingText: { color: '#B45309' },
-  readinessCard: {
-    marginTop: 12,
-    padding: 14,
-    backgroundColor: examProcess.cardBg,
-    borderColor: examProcess.cardBorder,
-  },
-  readinessCardTitle: {
-    fontSize: 13,
-    fontFamily: examProcess.fontSemiBold,
-    color: examProcess.ink,
-    marginBottom: 8,
-  },
-  readinessRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 5,
-  },
-  readinessRowLabel: {
-    fontSize: 12,
-    fontFamily: examProcess.fontRegular,
-    color: examProcess.muted,
-  },
-  readinessRowValue: {
-    fontSize: 12,
-    fontFamily: examProcess.fontMedium,
-    color: examProcess.ink,
-  },
   infoCard: {
     marginTop: 12,
     padding: 0,
