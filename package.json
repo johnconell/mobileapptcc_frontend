@@ -8,7 +8,6 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "generate:mock": "npx ts-node --compiler-options \"{\\\"module\\\":\\\"commonjs\\\"}\" scripts/generate-mock-data.ts",
-    "test": "npx --yes tsx --test features/examinations/services/examStartCoordinator.test.ts features/examinations/services/passkeyClassification.test.ts features/schedules/utils/examScheduleStatus.test.ts tests/integration/exam-flow.test.ts tests/integration/sync-logic.test.ts",
     "test": "npx --yes tsx --test features/examinations/services/examStartCoordinator.test.ts features/examinations/services/passkeyClassification.test.ts features/examinations/services/submitGate.test.ts features/schedules/utils/examScheduleStatus.test.ts tests/integration/exam-flow.test.ts tests/integration/sync-logic.test.ts tests/unit/exam-features.test.ts",
     "typecheck": "tsc --noEmit",
     "postinstall": "patch-package"
@@ -20,6 +19,7 @@
     "@hookform/resolvers": "^5.0.1",
     "@noble/ciphers": "^2.2.0",
     "@tanstack/react-query": "^5.74.4",
+    "@types/react": "~19.1.10",
     "bcryptjs": "^3.0.3",
     "expo": "^54.0.0",
     "expo-asset": "~12.0.13",
@@ -55,6 +55,7 @@
     "react-native-svg": "15.12.1",
     "react-native-web": "^0.21.0",
     "react-native-worklets": "0.5.1",
+    "typescript": "~5.9.2",
     "zod": "^3.24.4",
     "zustand": "^5.0.5"
   },

@@ -30,6 +30,7 @@ export type OfflinePack = {
     id: number;
     title: string;
     exam_date?: string;
+    academic_year?: string;
     start_time?: string;
     end_time?: string;
     time_slot?: string;
@@ -52,6 +53,7 @@ export type OfflinePack = {
     examination_schedule_id: number;
     applicant_id: number;
     exam_passkey?: string | null;
+    exam_passkey_hash?: string | null;
   }>;
   question_banks: Array<{
     id: number;
@@ -408,8 +410,13 @@ export const OfflineStore = {
     this._packCache = null;
   },
 
-  async savePack(pack: OfflinePack): Promise<void> {
-    const downloadedAt = new Date().toISOString();
+  async savePack(
+    pack: OfflinePack,
+    options?: { preserveDownloadedAt?: boolean },
+  ): Promise<void> {
+    const downloadedAt = options?.preserveDownloadedAt
+      ? pack.downloaded_at || (await appStorage.getItem(STORAGE_KEYS.offlinePackAt)) || new Date().toISOString()
+      : new Date().toISOString();
     const safe = sanitizePackToActiveBanks({
       ...pack,
       downloaded_at: downloadedAt,
@@ -422,6 +429,9 @@ export const OfflineStore = {
     await writeEncrypted(PACK_ENC_FILE, WEB_PACK_ENC_KEY, safe);
     // Remove legacy plaintext after successful encrypt.
     await deleteIfExists(PACK_FILE, WEB_PACK_KEY);
+    // The pack is authoritative for schedules available offline. Drop any older
+    // cloud schedule catalog so archived entries cannot survive a successful sync.
+    await appStorage.deleteItem('tcc.offline.schedule.catalog');
     await appStorage.setItem(STORAGE_KEYS.offlinePackReady, '1');
     await appStorage.setItem(STORAGE_KEYS.offlinePackAt, downloadedAt);
     try {
@@ -435,6 +445,47 @@ export const OfflineStore = {
       await persistDisconnectGraceSeconds(safe.examination_settings?.disconnect_grace_seconds);
     } catch {
       // Non-fatal: devices fall back to default limit.
+    }
+  },
+
+  /** Remove locally cached schedules and their student data when cloud sync no longer allows them. */
+  async retainPackSchedules(allowedScheduleIds: Set<string>): Promise<void> {
+    const pack = await this.getPack();
+    if (!pack?.schedules?.length) return;
+
+    const schedules = pack.schedules.filter((schedule) => allowedScheduleIds.has(String(schedule.id)));
+    if (schedules.length === pack.schedules.length) return;
+
+    const retainedIds = new Set(schedules.map((schedule) => String(schedule.id)));
+    const registrations = (pack.registrations ?? []).filter((registration) =>
+      retainedIds.has(String(registration.examination_schedule_id)),
+    );
+    const applicantIds = new Set(registrations.map((registration) => String(registration.applicant_id)));
+    const applicants = (pack.applicants ?? []).filter((applicant) => applicantIds.has(String(applicant.id)));
+
+    if (schedules.length) {
+      await this.savePack(
+        { ...pack, schedules, registrations, applicants },
+        { preserveDownloadedAt: true },
+      );
+    } else {
+      await this.clearPackFiles({ preserveBundledProctorSession: true });
+    }
+
+    const openedRooms = await this.getOpenedRooms();
+    let roomsChanged = false;
+    for (const key of Object.keys(openedRooms)) {
+      const scheduleId = key.split(':', 1)[0];
+      if (retainedIds.has(scheduleId)) continue;
+      delete openedRooms[key];
+      roomsChanged = true;
+    }
+    if (roomsChanged) {
+      if (Object.keys(openedRooms).length) {
+        await appStorage.setItem(STORAGE_KEYS.offlineOpenedRooms, JSON.stringify(openedRooms));
+      } else {
+        await appStorage.deleteItem(STORAGE_KEYS.offlineOpenedRooms);
+      }
     }
   },
 
@@ -663,7 +714,9 @@ export const OfflineStore = {
       schedules: pack.schedules?.length ?? 0,
       students: pack.applicants?.length ?? 0,
       questions,
-      passkeys: (pack.registrations ?? []).filter((r) => Boolean(r.exam_passkey)).length,
+      passkeys: (pack.registrations ?? []).filter(
+        (r) => Boolean(r.exam_passkey || r.exam_passkey_hash),
+      ).length,
     };
   },
 
@@ -835,14 +888,16 @@ export const OfflineStore = {
   },
 
   /** Deletes cached exam pack files. Does not touch queued results. */
-  async clearPackFiles(): Promise<void> {
+  async clearPackFiles(options?: { preserveBundledProctorSession?: boolean }): Promise<void> {
     this.invalidatePackCache();
     await deleteIfExists(PACK_ENC_FILE, WEB_PACK_ENC_KEY);
     await deleteIfExists(PACK_FILE, WEB_PACK_KEY);
     await appStorage.deleteItem(STORAGE_KEYS.offlinePackReady);
     await appStorage.deleteItem(STORAGE_KEYS.offlinePackAt);
     await appStorage.deleteItem('tcc.offline.pack.sha256');
-    await this.clearBundledProctorSession();
+    if (!options?.preserveBundledProctorSession) {
+      await this.clearBundledProctorSession();
+    }
   },
 
   async bundleProctorSession(profile: {

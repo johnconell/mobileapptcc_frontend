@@ -64,6 +64,17 @@ export async function ensureExamPackCached(options?: {
       authAccountsCached: authCount,
     };
   } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes('This schedule is not in the current academic year')
+    ) {
+      return {
+        ok: false,
+        message: error.message,
+        fromCache: false,
+      };
+    }
+
     if (meta.ready) {
       return {
         ok: true,

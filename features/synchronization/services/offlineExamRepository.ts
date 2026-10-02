@@ -453,6 +453,14 @@ export const OfflineExamRepository = {
         'Missing EXPO_PUBLIC_SYNC_TOKEN in the app .env (must match ADMIN_SYNC_TOKEN on the server). Restart Expo after changing it.',
       );
     }
+    const currentYear = new Date().getFullYear();
+    if (examDate) {
+      const dateYear = parseInt(examDate.slice(0, 4), 10);
+      if (!isNaN(dateYear) && dateYear > currentYear) {
+        throw new Error('This schedule date is in a future calendar year and cannot be downloaded.');
+      }
+    }
+
     const params = new URLSearchParams();
     if (examDate) params.set('exam_date', examDate);
     if (options?.includeAuth) params.set('include_auth', '1');
@@ -694,7 +702,7 @@ export const OfflineExamRepository = {
         map.set(key, {
           id: key,
           name: title,
-          schoolYear: date.slice(0, 4) || String(new Date().getFullYear()),
+          schoolYear: s.academic_year || date.slice(0, 4) || String(new Date().getFullYear()),
           examinationDate: date,
           examinationDateIso: date,
           batchCount: 0,
@@ -797,8 +805,16 @@ export const OfflineExamRepository = {
     if (scheduleId == null) return null;
 
     const normalized = passkey.trim().toUpperCase();
+    const normalizedHash = await Crypto.digestStringAsync(
+      Crypto.CryptoDigestAlgorithm.SHA256,
+      normalized,
+    );
     const matches = pack.registrations.filter(
-      (r) => String(r.exam_passkey || '').toUpperCase() === normalized,
+      (r) => {
+        const storedHash = String(r.exam_passkey_hash || '').toLowerCase();
+        if (storedHash) return storedHash === normalizedHash.toLowerCase();
+        return String(r.exam_passkey || '').toUpperCase() === normalized;
+      },
     );
     if (!matches.length) return null;
 

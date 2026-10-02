@@ -1,4 +1,4 @@
-import { apiRequest } from '@/shared/services/api';
+import { ApiError, apiRequest } from '@/shared/services/api';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { OfflineExamRepository } from '@/features/synchronization/services/offlineExamRepository';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
@@ -141,8 +141,7 @@ export const ScheduleRepository = {
     const local = mergeSchedules(catalog, cachedPackSchedules);
     if (await OfflineStore.isOfflineMode()) return local;
     try {
-      const cloud = await this.refreshSchedulesFromCloud();
-      return mergeSchedules(local, cloud);
+      return await this.refreshSchedulesFromCloud();
     } catch {
       return local;
     }
@@ -173,8 +172,13 @@ export const ScheduleRepository = {
       '/proctor/schedules?per_page=200',
     );
     const cloud = toMobileSchedules(json.data || []);
-    const local = await this.getLocalSchedules();
-    const merged = mergeSchedules(cloud, local);
+    const cloudIds = new Set(cloud.map((schedule) => schedule.id));
+    await OfflineStore.retainPackSchedules(cloudIds);
+    const cachedPackSchedules = await OfflineExamRepository.getCachedSchedules();
+    const merged = mergeSchedules(
+      cloud,
+      cachedPackSchedules.filter((schedule) => cloudIds.has(schedule.id)),
+    );
     await appStorage.setItem(SCHEDULE_CATALOG_KEY, JSON.stringify(merged));
     return merged;
   },
@@ -248,7 +252,10 @@ export const ScheduleRepository = {
       return filtered
         .map(toMobileSession)
         .sort((a, b) => a.startTime.localeCompare(b.startTime));
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
+        throw new Error(error.message || 'This schedule is not in the current academic year and cannot be downloaded.');
+      }
       if (await OfflineStore.hasPack()) {
         await OfflineStore.setOfflineMode(true);
         return fromPack();
@@ -317,7 +324,10 @@ export const ScheduleRepository = {
         }
         return room;
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
+        throw new Error(error.message || 'This schedule is not in the current academic year and cannot be downloaded.');
+      }
       if (await OfflineStore.hasPack()) {
         await OfflineStore.setOfflineMode(true);
         return fromPack();
