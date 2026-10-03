@@ -117,16 +117,19 @@ export default function StudentConfirmationScreen() {
   const confirmIdentity = async (email: string) => {
     setJoinError(null);
     setJoining(true);
+    if (__DEV__) console.info('[PASSKEY FLOW] confirmation identity check started');
     try {
       setStatusMessage('Validating Wi-Fi isolation...');
       const gate = await assertCampusWifiForJoin({
         requireServer: !String(scannedSessionId).startsWith('offline-'),
       });
       if (!gate.ok) {
+        if (__DEV__) console.warn('[PASSKEY FLOW] Wi-Fi gate rejected confirmation');
         setJoinError(gate.message ?? 'Campus Wi‑Fi required to join.');
         return;
       }
 
+      if (__DEV__) console.info('[PASSKEY FLOW] Wi-Fi gate passed; package download started');
       setStatusMessage('Receiving questions from the examination room…');
       const effectivePasskey =
         examPasskey || (await appStorage.getItem('tcc.student.exam.passkey')) || '';
@@ -136,7 +139,13 @@ export default function StudentConfirmationScreen() {
           sessionId: String(scannedSessionId),
           passkey: effectivePasskey,
         });
+        if (__DEV__) console.info('[PASSKEY FLOW] package download completed');
       } catch (err) {
+        if (__DEV__) {
+          console.warn('[PASSKEY FLOW] package download failed', {
+            errorName: err instanceof Error ? err.name : typeof err,
+          });
+        }
         setJoinError(
           err instanceof Error
             ? err.message
@@ -152,6 +161,7 @@ export default function StudentConfirmationScreen() {
       };
       setVerifiedStudent(verified);
       setShowAgreement(true);
+      if (__DEV__) console.info('[PASSKEY FLOW] agreement screen shown');
     } catch (error) {
       setJoinError(userFacingError(error, 'Unable to join examination. Please try again.'));
     } finally {
@@ -162,6 +172,7 @@ export default function StudentConfirmationScreen() {
 
   const handleProceed = async () => {
     if (!agreed || joining || !scannedSessionId || !verifiedStudent) return;
+    if (__DEV__) console.info('[PASSKEY FLOW] agreement proceed started');
     setJoining(true);
     setJoinError(null);
     setPinDeclined(false);
@@ -208,6 +219,12 @@ export default function StudentConfirmationScreen() {
       const lobby = effectivePasskey
         ? await LobbyRepository.joinWithPasskey(verifiedStudent, scannedSessionId, effectivePasskey)
         : await LobbyRepository.joinStudent(verifiedStudent, scannedSessionId);
+      if (__DEV__) {
+        console.info('[PASSKEY FLOW] join succeeded', {
+          hasRegistrationId: Boolean(lobby.registration_id),
+          lobbyStatus: lobby.status,
+        });
+      }
       const updatedVerified = { ...verifiedStudent };
       const regId = lobby.registration_id || lobby.students?.find((s) => s.studentId === updatedVerified.studentId)?.id;
       if (regId) updatedVerified.registration_id = Number(regId);
@@ -216,8 +233,14 @@ export default function StudentConfirmationScreen() {
       await ExamLifecycle.applyFromServer(lobby.status, { sessionId: String(scannedSessionId) });
       setAgreedAt(new Date().toISOString());
       void LobbyRepository.recordAgreement();
+      if (__DEV__) console.info('[PASSKEY FLOW] lobby navigation started');
       router.replace('/(student)/lobby');
     } catch (error) {
+      if (__DEV__) {
+        console.warn('[PASSKEY FLOW] join failed', {
+          errorName: error instanceof Error ? error.name : typeof error,
+        });
+      }
       setJoinError(userFacingError(error, 'Unable to enter the examination lobby. Please try again.'));
     } finally {
       setJoining(false);

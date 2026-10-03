@@ -22,6 +22,7 @@ import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { appStorage } from '@/shared/services/storage';
 import { examProcess } from '@/shared/theme/examProcess';
 import { userFacingError } from '@/shared/utils/userFacingError';
+import { ApiError } from '@/shared/services/api';
 
 const schema = z.object({
   passkey: z
@@ -84,8 +85,18 @@ export default function StudentPasskeyScreen() {
 
   const onContinue = handleSubmit(async (values) => {
     setError(null);
+    if (__DEV__) {
+      console.info('[PASSKEY FLOW] submit started', { length: values.passkey.length });
+    }
     try {
       const result = await LobbyRepository.validatePasskey(values.passkey.trim());
+      if (__DEV__) {
+        console.info('[PASSKEY FLOW] validation completed', {
+          classification: result.classification,
+          hasStudent: Boolean(result.student),
+          hasSchedule: Boolean(result.schedule),
+        });
+      }
       if (result.classification === 'already_completed') {
         setError(
           result.message ||
@@ -158,6 +169,7 @@ export default function StudentPasskeyScreen() {
         // ignore store errors — allow join and rely on server-side checks if uncertain
       }
       setSelectedStudent(result.student);
+      if (__DEV__) console.info('[PASSKEY FLOW] navigating to confirmation');
       router.push({
         pathname: '/(student)/confirmation',
         params: {
@@ -167,6 +179,12 @@ export default function StudentPasskeyScreen() {
         },
       } as any);
     } catch (err) {
+      if (__DEV__) {
+        console.warn('[PASSKEY FLOW] validation failed', {
+          errorName: err instanceof Error ? err.name : typeof err,
+          httpStatus: err instanceof ApiError ? err.status : undefined,
+        });
+      }
       setError(userFacingError(err, 'Invalid examination key. Please check and try again.'));
     }
   });
