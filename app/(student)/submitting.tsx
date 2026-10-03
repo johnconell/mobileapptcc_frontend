@@ -21,7 +21,10 @@ export default function SubmittingScreen() {
               : 'Submitting your examination…'
         }
       />
-      <Text style={styles.note}>Please keep this screen open.</Text>
+      <Text style={styles.note}>
+        Submitting... do not close the app. Your answers are saved on this phone, and the app will
+        retry until the server confirms your submission.
+      </Text>
     </ExamProcessChrome>
   );
 }

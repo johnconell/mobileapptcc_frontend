@@ -172,13 +172,11 @@ export const ScheduleRepository = {
       '/proctor/schedules?per_page=200',
     );
     const cloud = toMobileSchedules(json.data || []);
-    const cloudIds = new Set(cloud.map((schedule) => schedule.id));
-    await OfflineStore.retainPackSchedules(cloudIds);
     const cachedPackSchedules = await OfflineExamRepository.getCachedSchedules();
-    const merged = mergeSchedules(
-      cloud,
-      cachedPackSchedules.filter((schedule) => cloudIds.has(schedule.id)),
-    );
+    // Keep a downloaded pack authoritative for offline use. The cloud catalog
+    // may omit previously downloaded schedules (for example, after its
+    // current-academic-year filter changes), and must not prune their local data.
+    const merged = mergeSchedules(cloud, cachedPackSchedules);
     await appStorage.setItem(SCHEDULE_CATALOG_KEY, JSON.stringify(merged));
     return merged;
   },

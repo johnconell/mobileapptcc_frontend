@@ -22,15 +22,13 @@ import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { appStorage } from '@/shared/services/storage';
 import { examProcess } from '@/shared/theme/examProcess';
 import { userFacingError } from '@/shared/utils/userFacingError';
-import { ApiError } from '@/shared/services/api';
 
 const schema = z.object({
   passkey: z
     .string()
     .trim()
-    .min(6, 'Enter your examination key')
-    .max(12, 'Examination key is too long')
-    .regex(/^[A-Za-z0-9]+$/, 'Letters and numbers only'),
+    .length(8, 'Examination key must be exactly 8 characters')
+    .regex(/^[A-Za-z0-9]{8}$/, 'Use the 8-letter or number examination key'),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -85,18 +83,8 @@ export default function StudentPasskeyScreen() {
 
   const onContinue = handleSubmit(async (values) => {
     setError(null);
-    if (__DEV__) {
-      console.info('[PASSKEY FLOW] submit started', { length: values.passkey.length });
-    }
     try {
       const result = await LobbyRepository.validatePasskey(values.passkey.trim());
-      if (__DEV__) {
-        console.info('[PASSKEY FLOW] validation completed', {
-          classification: result.classification,
-          hasStudent: Boolean(result.student),
-          hasSchedule: Boolean(result.schedule),
-        });
-      }
       if (result.classification === 'already_completed') {
         setError(
           result.message ||
@@ -169,7 +157,6 @@ export default function StudentPasskeyScreen() {
         // ignore store errors — allow join and rely on server-side checks if uncertain
       }
       setSelectedStudent(result.student);
-      if (__DEV__) console.info('[PASSKEY FLOW] navigating to confirmation');
       router.push({
         pathname: '/(student)/confirmation',
         params: {
@@ -179,12 +166,6 @@ export default function StudentPasskeyScreen() {
         },
       } as any);
     } catch (err) {
-      if (__DEV__) {
-        console.warn('[PASSKEY FLOW] validation failed', {
-          errorName: err instanceof Error ? err.name : typeof err,
-          httpStatus: err instanceof ApiError ? err.status : undefined,
-        });
-      }
       setError(userFacingError(err, 'Invalid examination key. Please check and try again.'));
     }
   });
@@ -222,7 +203,7 @@ export default function StudentPasskeyScreen() {
                 onChange(text.replace(/[^A-Za-z0-9]/g, '').toUpperCase())
               }
               onBlur={onBlur}
-              maxLength={12}
+              maxLength={8}
               onSubmitEditing={onContinue}
             />
           )}

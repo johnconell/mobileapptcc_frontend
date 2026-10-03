@@ -12,6 +12,7 @@ import {
 import { OfflineStore, computePackHash, computePackHashAsync, type OfflinePack } from '@/features/synchronization/services/offlineStore';
 import { resolveWifiLanIp } from '@/features/monitoring/services/wifiLanIp';
 import { clampViolationLimit } from '@/shared/utils/violationLimit';
+import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
 import type {
   ExamTerminationReason,
   LobbySnapshot,
@@ -59,6 +60,7 @@ export function isPeerHostingSupported(): boolean {
 
 type PeerStudentState = {
   token: string;
+  deviceId?: string;
   registrationId: number;
   applicantId: number;
   applicantCode: string;
@@ -79,6 +81,7 @@ type PeerStudentState = {
   /** display letter → original pack letter, per question id */
   choiceMaps?: Record<string, ChoiceDisplayMap>;
   submittedAt: string | null;
+  submissionConfirmed?: boolean;
   score: number | null;
   reconnectCode: string | null;
   reconnectCodeExpiresAt: string | null;
@@ -277,12 +280,11 @@ function studentByToken(token: string): PeerStudentState | null {
 function toLobbyStudent(state: PeerStudentState): LobbyStudent {
   let status = state.status;
 
-  // Real-time status: if no heartbeat for > 60s, they are disconnected.
-  // Increased from 20s to be more resilient to network lag during exam start.
+  // Keep a 90-second grace for brief phone sleep, host pause, or Wi-Fi recovery.
   if (status !== 'finished' && status !== 'terminated') {
     const lastSeen = new Date(state.lastActivityAt).getTime();
     const idleSeconds = (Date.now() - lastSeen) / 1000;
-    if (idleSeconds > 60) {
+    if (idleSeconds > 90) {
       status = 'disconnected';
     }
   }
@@ -957,6 +959,7 @@ function registerRoutes(mod: HttpServerModule) {
     const registrationId = Number(validated.student.registration_id ?? 0);
     const existing = session.students[registrationId];
     const providedToken = String(body.participation_token ?? '').trim();
+    const providedDeviceId = String(body.device_id ?? '').trim();
 
     if (existing?.submittedAt || existing?.status === 'finished') {
       return fail(
@@ -969,7 +972,9 @@ function registerRoutes(mod: HttpServerModule) {
     if (existing && existing.status !== 'disconnected') {
       const lastSeenMs = new Date(existing.lastActivityAt || existing.joinedAt).getTime();
       const recentlyActive = Number.isFinite(lastSeenMs) && Date.now() - lastSeenMs < 120_000;
-      const sameDevice = Boolean(providedToken) && providedToken === existing.token;
+      const sameDevice =
+        (Boolean(providedToken) && providedToken === existing.token) ||
+        (Boolean(providedDeviceId) && Boolean(existing.deviceId) && providedDeviceId === existing.deviceId);
       if (recentlyActive && !sameDevice) {
         return fail(
           409,
@@ -1024,6 +1029,7 @@ function registerRoutes(mod: HttpServerModule) {
         // Rejoin: refresh activity, readiness, and return the existing token
         student.lastActivityAt = now;
         student.isReady = isReady;
+        student.deviceId = providedDeviceId || student.deviceId;
         student.packageHash = studentPackHash || student.packageHash;
         student.downloadPercent = downloadPercent;
         student.hashVerified = hashVerified;
@@ -1033,6 +1039,7 @@ function registerRoutes(mod: HttpServerModule) {
         const paper = buildStudentExamPaper(pack);
         student = {
           token: makeToken(registrationId),
+          deviceId: providedDeviceId || undefined,
           registrationId,
           applicantId: Number(validated.student.id),
           applicantCode: validated.student.studentId,
@@ -1229,8 +1236,10 @@ function registerRoutes(mod: HttpServerModule) {
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
     if (!student) return fail(404, 'You are no longer joined to this examination.');
-    if (student.submittedAt || student.status === 'finished') {
-      return fail(409, 'Examination Already Completed: This examination has already been submitted.');
+    if (student.submissionConfirmed) {
+      // A previous submit may have reached the host even if its reply was lost.
+      // Return a receipt so the student can safely retry until it gets an ACK.
+      return ok({ submitted: true, alreadySubmitted: true });
     }
 
     const answers = body.answers;
@@ -1265,13 +1274,25 @@ function registerRoutes(mod: HttpServerModule) {
       return fail(422, 'Validation Error: Student code is required for submission.');
     }
 
+    const queuedResults = await OfflineStore.getResults();
+    const existingResult = queuedResults.find((result) =>
+      (result.applicant_code || '').trim().toUpperCase() === student.applicantCode.trim().toUpperCase() &&
+      Number(result.examination_schedule_id) === numericScheduleId,
+    );
+    if (existingResult) {
+      student.submittedAt = existingResult.submitted_at || new Date().toISOString();
+      student.lastActivityAt = student.submittedAt;
+      student.status = 'finished';
+      student.submissionConfirmed = true;
+      if (!student.terminationReason) student.terminationReason = 'submitted';
+      invalidateSnapshot();
+      await persist();
+      notify();
+      return ok({ submitted: true, alreadySubmitted: true });
+    }
+
     const graded = grade(pack, answersForGrading(student));
     const now = new Date().toISOString();
-    student.submittedAt = now;
-    student.lastActivityAt = now;
-    student.score = graded.score;
-    if (student.status !== 'terminated') student.status = 'finished';
-    if (!student.terminationReason) student.terminationReason = 'submitted';
 
     const queuedRow = {
       local_id: `${student.applicantCode.trim()}-${numericScheduleId}-${Date.now()}`,
@@ -1291,6 +1312,14 @@ function registerRoutes(mod: HttpServerModule) {
     }
 
     await OfflineStore.queueResult(queuedRow);
+
+    // Only mark the student complete after the durable result queue accepts it.
+    student.submittedAt = now;
+    student.lastActivityAt = now;
+    student.score = graded.score;
+    student.submissionConfirmed = true;
+    if (student.status !== 'terminated') student.status = 'finished';
+    if (!student.terminationReason) student.terminationReason = 'submitted';
 
     invalidateSnapshot();
     await persist();
@@ -1602,6 +1631,8 @@ export const PeerExamServer = {
       startExamWatchdog();
     }
 
+    await ExamSecurityService.startExamHostKeepAlive();
+
     await persist();
     notify();
     return true;
@@ -1716,6 +1747,8 @@ export const PeerExamServer = {
       }
     }
 
+    await ExamSecurityService.startExamHostKeepAlive();
+
     await persist();
     notify();
 
@@ -1790,6 +1823,7 @@ export const PeerExamServer = {
         };
         try {
           await OfflineStore.queueResult(queuedRow);
+          student.submissionConfirmed = true;
         } catch (err) {
           console.error('[SERVER] Failed to queue result on endExam:', err);
         }
@@ -1806,6 +1840,7 @@ export const PeerExamServer = {
     invalidateSnapshot();
     await persist();
     notify();
+    await ExamSecurityService.stopExamHostKeepAlive();
     return buildSnapshot(session);
   },
 
@@ -1891,6 +1926,7 @@ export const PeerExamServer = {
     }
     running = false;
     routesRegistered = false;
+    await ExamSecurityService.stopExamHostKeepAlive();
   },
 
   async reset(): Promise<void> {

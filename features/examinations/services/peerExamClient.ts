@@ -69,8 +69,6 @@ export const PeerExamClient = {
     if (!code) return false;
 
     try {
-      const { OfflineStore } = await import('@/features/synchronization/services/offlineStore');
-      if (await OfflineStore.isOfflineMode()) return false;
       const Network = await import('expo-network');
       const netState = await Network.getNetworkStateAsync().catch(() => null);
       if (netState?.isConnected === false || netState?.isInternetReachable === false) {

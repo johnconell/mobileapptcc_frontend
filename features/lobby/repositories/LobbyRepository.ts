@@ -9,6 +9,7 @@ import { OfflineStore, computePackHash, computePackHashAsync } from '@/features/
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { parsePeerQr, PeerExamServer, resolveNumericScheduleId } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
+import { DeviceService } from '@/shared/services/DeviceService';
 import type {
   ExamCodeValidation,
   LobbySnapshot,
@@ -772,7 +773,6 @@ export const LobbyRepository = {
     if (!code) throw new Error('Missing examination code. Scan QR again.');
 
     if (await PeerExamClient.isActive()) {
-      if (__DEV__) console.info('[PASSKEY FLOW] validating via peer LAN /passkey');
       const response = await PeerExamClient.request<{
         classification?: 'valid' | 'wrong_schedule' | 'already_completed' | 'already_in_lobby';
         message?: string;
@@ -827,7 +827,6 @@ export const LobbyRepository = {
     }
 
     if (await OfflineStore.isOfflineMode()) {
-      if (__DEV__) console.info('[PASSKEY FLOW] validating via offline pack');
       const offline = await OfflineExamRepository.validatePasskey(code, passkey);
       if (!offline) throw new Error('Invalid examination key for this offline session.');
       if (offline.classification === 'wrong_schedule') {
@@ -857,7 +856,6 @@ export const LobbyRepository = {
       };
     }
 
-    if (__DEV__) console.info('[PASSKEY FLOW] validating via cloud /exam/passkey/validate');
     try {
       const json = await apiRequest<{
         success: boolean;
@@ -938,6 +936,7 @@ export const LobbyRepository = {
   ): Promise<LobbySnapshot> {
     const code = (await getStoredCode()) || '';
     if (!code) throw new Error('Missing examination code. Scan QR again.');
+    const deviceId = await DeviceService.getDeviceId();
 
     if (await PeerExamClient.isActive()) {
       const preloadedHash = (await appStorage.getItem('tcc.student.preload.sha256')) || '';
@@ -959,6 +958,7 @@ export const LobbyRepository = {
           hash_verified: Boolean(preloadedHash),
           module_ready: Boolean(preloadedHash),
           participation_token: existingToken || undefined,
+          device_id: deviceId,
         },
       });
 
@@ -1012,6 +1012,7 @@ export const LobbyRepository = {
         code,
         passkey: passkey.trim().toUpperCase(),
         gmail: student.email || undefined,
+        device_id: deviceId,
       },
     });
 
@@ -1595,15 +1596,11 @@ export const LobbyRepository = {
   async recordAgreement(): Promise<void> {
     try {
       const { appStorage } = await import('@/shared/services/storage');
-      const token = await appStorage.getItem('tcc.exam.participation_token');
-      if (!token) {
-        if (__DEV__) console.warn('[PASSKEY FLOW] agreement skipped: token missing at lookup key');
-        return;
-      }
+      const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      if (!token) return;
 
       const isPeer = await PeerExamClient.isActive();
       if (isPeer) {
-        if (__DEV__) console.info('[PASSKEY FLOW] agreement skipped: peer LAN has no /agree route');
         // On LAN session: the local proctor server does not handle /agree — skip.
         return;
       }
@@ -1612,14 +1609,7 @@ export const LobbyRepository = {
         method: 'POST',
         body: { participation_token: token },
       });
-      if (__DEV__) console.info('[PASSKEY FLOW] agreement request succeeded');
-    } catch (error) {
-      if (__DEV__) {
-        console.warn('[PASSKEY FLOW] agreement request failed', {
-          errorName: error instanceof Error ? error.name : typeof error,
-          httpStatus: error instanceof ApiError ? error.status : undefined,
-        });
-      }
+    } catch {
       // Non-critical — local record is sufficient.
     }
   },

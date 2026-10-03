@@ -18,6 +18,10 @@ type NativeKioskBridge = {
   setImmersiveMode?: (enabled: boolean) => Promise<void>;
   blockMultiWindow?: (enabled: boolean) => Promise<void>;
   isLocked?: () => Promise<boolean>;
+  startExamHostService?: () => Promise<void>;
+  stopExamHostService?: () => Promise<void>;
+  isIgnoringBatteryOptimizations?: () => Promise<boolean>;
+  requestBatteryOptimizationExemption?: () => Promise<boolean>;
 };
 
 /**
@@ -83,6 +87,47 @@ export async function isExamLocked(): Promise<boolean> {
  * System-level kiosk (Recent Apps / status bar) still needs Device Owner.
  */
 export const ExamSecurityService = {
+  hasExamHostForegroundService(): boolean {
+    return Platform.OS === 'android' && Boolean(getNativeBridge()?.startExamHostService);
+  },
+
+  /** Keep the proctor-hosted LAN server in a foreground service on Android. */
+  async startExamHostKeepAlive(): Promise<void> {
+    if (Platform.OS !== 'android') return;
+    try {
+      await getNativeBridge()?.startExamHostService?.();
+    } catch (err) {
+      console.warn('[EXAM HOST] Foreground service could not start:', err);
+    }
+  },
+
+  async stopExamHostKeepAlive(): Promise<void> {
+    if (Platform.OS !== 'android') return;
+    try {
+      await getNativeBridge()?.stopExamHostService?.();
+    } catch {
+      // A service that did not start needs no cleanup.
+    }
+  },
+
+  async isIgnoringBatteryOptimizations(): Promise<boolean> {
+    if (Platform.OS !== 'android') return true;
+    try {
+      return (await getNativeBridge()?.isIgnoringBatteryOptimizations?.()) ?? false;
+    } catch {
+      return false;
+    }
+  },
+
+  async requestBatteryOptimizationExemption(): Promise<boolean> {
+    if (Platform.OS !== 'android') return false;
+    try {
+      return (await getNativeBridge()?.requestBatteryOptimizationExemption?.()) ?? false;
+    } catch {
+      return false;
+    }
+  },
+
   async getCapabilities(): Promise<ExamSecurityCapabilities> {
     const captureAvailable = await ScreenCapture.isAvailableAsync().catch(() => false);
     const native = getNativeBridge();

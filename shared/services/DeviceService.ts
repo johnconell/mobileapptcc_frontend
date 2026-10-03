@@ -35,7 +35,7 @@ export const DeviceService = {
       }
       return id;
     } catch {
-      return 'dev-' + Math.random().toString(36).substring(2, 10);
+      throw new Error('Unable to save this device identity. Check device storage, then try again.');
     }
   },
 };

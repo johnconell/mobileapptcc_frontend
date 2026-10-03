@@ -58,6 +58,7 @@ export default function JoinExaminationScreen() {
   const initialMode: JoinMode = params.mode === 'code' ? 'code' : 'scan';
   const [mode, setMode] = useState<JoinMode>(initialMode);
   const [permission, requestPermission] = useCameraPermissions();
+  const permissionRequestStarted = useRef(false);
   const [scanning, setScanning] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +66,20 @@ export default function JoinExaminationScreen() {
   const setScannedSession = useStudentStore((s) => s.setScannedSession);
   const wifiGate = useCampusWifiJoinGate({ requireServer: true });
   const lastScanAt = useRef(0);
+
+  React.useEffect(() => {
+    if (
+      mode !== 'scan' ||
+      !permission ||
+      permission.granted ||
+      !permission.canAskAgain ||
+      permissionRequestStarted.current
+    ) {
+      return;
+    }
+    permissionRequestStarted.current = true;
+    void requestPermission();
+  }, [mode, permission, requestPermission]);
 
   const {
     control,

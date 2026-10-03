@@ -103,17 +103,18 @@ export function ExamWifiDisconnectOverlay({
           ) : proctorNetworkChanged && !requiresPin ? (
             // Proctor's LAN IP changed — not the student's fault.
             <>
-              <Text style={[styles.title, { color: theme.text }]}>Proctor&apos;s connection changed</Text>
+              <Text style={[styles.title, { color: theme.text }]}>Proctor reconnecting...</Text>
               <Text style={[styles.message, { color: theme.textSecondary }]}>
-                The proctor phone moved to a different Wi‑Fi network or got a new address. Stay on
-                the exam Wi‑Fi, then tap Reconnect. This is not counted as a violation.
+                The proctor phone is temporarily unreachable. Stay on the exam Wi‑Fi while we
+                reconnect automatically. Your answers are saved on this phone, and this pause is
+                not counted as a violation.
               </Text>
               {error ? (
                 <Text style={[styles.error, { color: theme.timer.red.text }]}>
                   {userFacingError(error, 'Unable to reconnect. Please try again.')}
                 </Text>
               ) : null}
-              {renderAction('Reconnect', onRetry)}
+              {renderAction('Retry now', onRetry)}
               <Text style={[styles.disclaimer, { color: theme.textMuted }]}>Your answers remain saved locally on this phone.</Text>
             </>
           ) : (

@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ScrollView, Modal, Pressable, Text, View, StyleSheet, Alert, Share, useWindowDimensions } from 'react-native';
+import { ScrollView, Modal, Pressable, Text, View, StyleSheet, Alert, Share, useWindowDimensions, Platform } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQueryClient } from '@tanstack/react-query';
@@ -24,6 +24,7 @@ import { useLobby } from '@/features/lobby/hooks/useLobby';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { QUERY_KEYS } from '@/shared/constants';
 import { PeerExamServer } from '@/features/examinations/services/peerExamServer';
+import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { startProctorHostIpSync } from '@/features/monitoring/services/proctorHostIpSync';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
@@ -65,6 +66,38 @@ import {
 function formatTime(iso: string | null | undefined) {
   if (!iso) return '—';
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatScheduleDate(value: string | null | undefined) {
+  const raw = String(value ?? '').trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return raw || 'Date not set';
+  const [, year, month, day] = match;
+  return new Date(Number(year), Number(month) - 1, Number(day)).toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+function formatScheduleClock(value: string | null | undefined) {
+  const raw = String(value ?? '').trim();
+  const match = raw.match(/(?:^|T)(\d{1,2}):(\d{2})(?::\d{2})?/);
+  if (!match) return raw;
+  const hour24 = Number(match[1]);
+  const hour12 = hour24 % 12 || 12;
+  return `${hour12}:${match[2]} ${hour24 >= 12 ? 'PM' : 'AM'}`;
+}
+
+function formatScheduleTime(start: string | null | undefined, end: string | null | undefined, fallback?: string) {
+  const startLabel = formatScheduleClock(start);
+  const endLabel = formatScheduleClock(end);
+  if (startLabel && endLabel) return `${startLabel}–${endLabel}`;
+  if (startLabel) return startLabel;
+  if (endLabel) return endLabel;
+  const label = String(fallback ?? '').trim();
+  if (label && !['standard session', 'offline exam'].includes(label.toLowerCase())) return label;
+  return 'Time not set';
 }
 
 function formatRemaining(seconds: number | null | undefined) {
@@ -125,6 +158,7 @@ function ProctorLobbyContent() {
   const knownStudentIds = useRef<Set<string>>(new Set());
   const knownStudentMeta = useRef<Map<string, LobbyStudent>>(new Map());
   const knownStudentStatus = useRef<Map<string, LobbyStudent['status']>>(new Map());
+  const batteryOptimizationPromptShown = useRef(false);
   const checkInReady = useRef(false);
   const [notifications, setNotifications] = useState<
     Array<{ id: string; title: string; body: string; at: string; kind: 'connect' | 'disconnect' }>
@@ -359,6 +393,35 @@ function ProctorLobbyContent() {
       cancelled = true;
     };
   }, [sessionId, roomId, examSessionId, setSnapshot, queryClient]);
+
+  useEffect(() => {
+    if (
+      Platform.OS !== 'android' ||
+      batteryOptimizationPromptShown.current ||
+      !ExamSecurityService.hasExamHostForegroundService()
+    ) {
+      return;
+    }
+    let mounted = true;
+    void ExamSecurityService.isIgnoringBatteryOptimizations().then((isExempt) => {
+      if (!mounted || isExempt || batteryOptimizationPromptShown.current) return;
+      batteryOptimizationPromptShown.current = true;
+      Alert.alert(
+        'Keep the examination room connected',
+        'Android battery restrictions can pause the proctor phone and disconnect student devices. Allow TCC Entrance Exam to run without battery restrictions for this session.',
+        [
+          { text: 'Not now', style: 'cancel' },
+          {
+            text: 'Open battery settings',
+            onPress: () => void ExamSecurityService.requestBatteryOptimizationExemption(),
+          },
+        ],
+      );
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // Peer mode: push updates to UI, but throttled to prevent JS thread lockup during high-traffic heartbeats.
   useEffect(() => {
@@ -710,28 +773,25 @@ function ProctorLobbyContent() {
     selectedSchedule?.name ||
     'Examination Schedule';
   const roomLabel = lobby.session?.roomName || lobby.roomName || 'Room 01';
-  const rawBatch = lobby.session?.batchNumber || '1';
-  const batchLabel = String(rawBatch).toLowerCase().startsWith('batch')
-    ? String(rawBatch)
-    : `Batch ${rawBatch}`;
 
   const activeSchedule = lobby.schedule || selectedSchedule;
-  const examDate =
+  const examDate = formatScheduleDate(
     activeSchedule?.examinationDate ||
     activeSchedule?.examinationDateIso ||
-    'Scheduled Today';
-  const sessionTime =
-    activeSchedule?.timeLabel ||
-    (activeSchedule?.batchNumber ? `Batch ${activeSchedule.batchNumber}` : null) ||
-    'Standard Session';
-  const schoolYear = activeSchedule?.schoolYear ? `S.Y. ${activeSchedule.schoolYear}` : null;
+    '',
+  );
+  const sessionTime = formatScheduleTime(
+    lobby.session?.startTime,
+    lobby.session?.endTime,
+    lobby.session?.timeLabel || activeSchedule?.timeLabel,
+  );
 
   const waitingCount = waitingStudents.length || lobby.waitingCount || 0;
   const takingCount = takingStudents.length || lobby.takingCount || 0;
   const finishedCount = completedStudents.length || lobby.finishedCount || 0;
   const disconnectedCount = disconnectedStudents.length || (lobby.disconnectedCount ?? 0);
 
-  const cardWidth = Math.max(114, Math.floor((windowWidth - 32 - 24) / 4));
+  const cardWidth = Math.min(240, Math.floor((windowWidth - 54) / 2));
 
   const monitoringTabs: Array<{
     key: 'waiting' | 'taking' | 'submitted' | 'disconnected';
@@ -755,7 +815,7 @@ function ProctorLobbyContent() {
       students: waitingStudents,
       icon: (color: string) => <Clock size={16} color={color} />,
       colors: {
-        light: { bg: '#FEF9C3', border: '#FDE047', activeBorder: '#CA8A04', badgeBg: '#FEF08A', text: '#854D0E' },
+        light: { bg: '#FFFBEB', border: '#FDE68A', activeBorder: '#D97706', badgeBg: '#FEF3C7', text: '#B45309' },
         dark: { bg: '#241A06', border: '#78350F', activeBorder: '#FACC15', badgeBg: '#451A03', text: '#FDE047' },
       },
     },
@@ -768,8 +828,8 @@ function ProctorLobbyContent() {
       students: takingStudents,
       icon: (color: string) => <Play size={16} color={color} />,
       colors: {
-        light: { bg: '#EFF6FF', border: '#BFDBFE', activeBorder: '#2563EB', badgeBg: '#DBEAFE', text: '#1E40AF' },
-        dark: { bg: '#0B1728', border: '#1E3A8A', activeBorder: '#60A5FA', badgeBg: '#172554', text: '#93C5FD' },
+        light: { bg: '#FFF1F2', border: '#FECDD3', activeBorder: '#BE123C', badgeBg: '#FCE7EA', text: '#9F1239' },
+        dark: { bg: '#2A1418', border: '#7F1D3A', activeBorder: '#FB7185', badgeBg: '#451A24', text: '#FDA4AF' },
       },
     },
     {
@@ -781,7 +841,7 @@ function ProctorLobbyContent() {
       students: completedStudents,
       icon: (color: string) => <CheckCircle2 size={16} color={color} />,
       colors: {
-        light: { bg: '#F0FDF4', border: '#BBF7D0', activeBorder: '#16A34A', badgeBg: '#DCFCE7', text: '#166534' },
+        light: { bg: '#F0FDF4', border: '#BBF7D0', activeBorder: '#16A34A', badgeBg: '#E6F8EF', text: '#15803D' },
         dark: { bg: '#072113', border: '#065F46', activeBorder: '#4ADE80', badgeBg: '#022C22', text: '#86EFAC' },
       },
     },
@@ -794,8 +854,8 @@ function ProctorLobbyContent() {
       students: disconnectedStudents,
       icon: (color: string) => <ShieldAlert size={16} color={color} />,
       colors: {
-        light: { bg: '#FEF2F2', border: '#FECACA', activeBorder: '#DC2626', badgeBg: '#FEE2E2', text: '#991B1B' },
-        dark: { bg: '#250E0E', border: '#7F1D1D', activeBorder: '#F87171', badgeBg: '#450A0A', text: '#FCA5A5' },
+        light: { bg: '#EFF6FF', border: '#BFDBFE', activeBorder: '#2563EB', badgeBg: '#DBEAFE', text: '#1D4ED8' },
+        dark: { bg: '#0B1728', border: '#1E3A8A', activeBorder: '#60A5FA', badgeBg: '#172554', text: '#93C5FD' },
       },
     },
   ];
@@ -832,8 +892,8 @@ function ProctorLobbyContent() {
           <Text style={[styles.navTitleText, { color: themeColors.textPrimary }]} numberOfLines={1}>
             {scheduleLabel}
           </Text>
-          <Text style={[styles.navSubtitleText, { color: themeColors.textSecondary }]} numberOfLines={1}>
-            {roomLabel} · {batchLabel} · {lobby.registeredCount || studentsList.length} Candidates
+          <Text style={[styles.navSubtitleText, { color: themeColors.textSecondary }]} numberOfLines={2}>
+            {roomLabel} · {examDate} · {sessionTime}
           </Text>
         </View>
 
@@ -881,21 +941,6 @@ function ProctorLobbyContent() {
                   </Text>
                 </View>
 
-                {schoolYear ? (
-                  <View
-                    style={[
-                      styles.scheduleSyBadge,
-                      {
-                        backgroundColor: isDark ? '#1F2937' : '#F3F4F6',
-                        borderColor: isDark ? '#374151' : '#E5E7EB',
-                      },
-                    ]}
-                  >
-                    <Text style={[styles.scheduleSyText, { color: themeColors.textSecondary }]}>
-                      {schoolYear}
-                    </Text>
-                  </View>
-                ) : null}
               </View>
 
               <Text style={[styles.scheduleHeroTitle, { color: themeColors.textPrimary }]}>
@@ -905,32 +950,34 @@ function ProctorLobbyContent() {
               <View style={styles.scheduleHeroMetaGrid}>
                 <View
                   style={[
-                    styles.scheduleMetaPill,
+                    styles.scheduleTimingPill,
                     {
-                      backgroundColor: isDark ? '#1A1A1A' : themeColors.background,
-                      borderColor: themeColors.cardBorder,
+                      backgroundColor: isDark ? '#2A1414' : '#FFF1F2',
+                      borderColor: isDark ? '#7A1F2B80' : '#FDA4AF',
                     },
                   ]}
                 >
-                  <CalendarDays size={13} color={themeColors.textSecondary} />
-                  <Text style={[styles.scheduleMetaPillText, { color: themeColors.textPrimary }]}>
-                    {examDate}
-                  </Text>
+                  <CalendarDays size={17} color={isDark ? '#FDA4AF' : '#9F1239'} />
+                  <View style={styles.scheduleTimingCopy}>
+                    <Text style={[styles.scheduleTimingLabel, { color: isDark ? '#FDA4AF' : '#9F1239' }]}>EXAM DATE</Text>
+                    <Text style={[styles.scheduleTimingValue, { color: themeColors.textPrimary }]}>{examDate}</Text>
+                  </View>
                 </View>
 
                 <View
                   style={[
-                    styles.scheduleMetaPill,
+                    styles.scheduleTimingPill,
                     {
-                      backgroundColor: isDark ? '#1A1A1A' : themeColors.background,
-                      borderColor: themeColors.cardBorder,
+                      backgroundColor: isDark ? '#2A1414' : '#FFF1F2',
+                      borderColor: isDark ? '#7A1F2B80' : '#FDA4AF',
                     },
                   ]}
                 >
-                  <Clock size={13} color={themeColors.textSecondary} />
-                  <Text style={[styles.scheduleMetaPillText, { color: themeColors.textPrimary }]}>
-                    {sessionTime}
-                  </Text>
+                  <Clock size={17} color={isDark ? '#FDA4AF' : '#9F1239'} />
+                  <View style={styles.scheduleTimingCopy}>
+                    <Text style={[styles.scheduleTimingLabel, { color: isDark ? '#FDA4AF' : '#9F1239' }]}>SCHEDULED TIME</Text>
+                    <Text style={[styles.scheduleTimingValue, { color: themeColors.textPrimary }]}>{sessionTime}</Text>
+                  </View>
                 </View>
 
                 <View
@@ -944,7 +991,7 @@ function ProctorLobbyContent() {
                 >
                   <MapPin size={13} color={themeColors.textSecondary} />
                   <Text style={[styles.scheduleMetaPillText, { color: themeColors.textPrimary }]}>
-                    {roomLabel} · {batchLabel}
+                    {roomLabel}
                   </Text>
                 </View>
 
@@ -1274,7 +1321,7 @@ function ProctorLobbyContent() {
 
             {/* ============================================================= */}
             {/* MONITORING SECTION (Directly below Access Pass / Room Code)   */}
-            {/* 4 Interactive status cards in a single row + Expandable List  */}
+            {/* Interactive status cards + expandable examinee list             */}
             {/* ============================================================= */}
             <View style={styles.monitoringSection}>
               <View style={styles.monitoringHeaderRow}>
@@ -1288,12 +1335,8 @@ function ProctorLobbyContent() {
                 </View>
               </View>
 
-              {/* 4 Status Cards in a Single Row */}
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.statusCardsRow}
-              >
+              {/* Two-column cards keep each status readable and tappable. */}
+              <View style={styles.statusCardsGrid}>
                 {monitoringTabs.map((tab) => {
                   const isActive = activeStatusFilter === tab.key;
                   const c = isDark ? tab.colors.dark : tab.colors.light;
@@ -1312,8 +1355,8 @@ function ProctorLobbyContent() {
                         styles.statusCard,
                         {
                           width: cardWidth,
-                          backgroundColor: c.bg,
-                          borderColor: isActive ? c.activeBorder : c.border,
+                          backgroundColor: isActive ? c.bg : themeColors.card,
+                          borderColor: isActive ? c.activeBorder : themeColors.cardBorder,
                           borderWidth: isActive ? 2 : 1,
                           opacity: pressed ? 0.85 : 1,
                           transform: [{ scale: pressed ? 0.97 : 1 }],
@@ -1335,13 +1378,13 @@ function ProctorLobbyContent() {
                       </View>
 
                       {/* 2. Big Count */}
-                      <Text style={[styles.cardCountText, { color: c.text }]}>
+                      <Text style={[styles.cardCountText, { color: themeColors.textPrimary }]}>
                         {tab.count}
                       </Text>
 
                       {/* 3. Label */}
                       <Text
-                        style={[styles.cardLabelText, { color: isDark ? '#F4F4F5' : '#18181B' }]}
+                        style={[styles.cardLabelText, { color: themeColors.textPrimary }]}
                         numberOfLines={1}
                       >
                         {tab.label}
@@ -1349,7 +1392,7 @@ function ProctorLobbyContent() {
 
                       {/* 4. Subtitle */}
                       <Text
-                        style={[styles.cardSubtitleText, { color: isDark ? '#A1A1AA' : '#71717A' }]}
+                        style={[styles.cardSubtitleText, { color: themeColors.textSecondary }]}
                         numberOfLines={1}
                       >
                         {tab.subtitle}
@@ -1357,7 +1400,7 @@ function ProctorLobbyContent() {
                     </Pressable>
                   );
                 })}
-              </ScrollView>
+              </View>
 
               {/* Expandable Per-Status Student List Panel */}
               {activeStatusFilter && currentTab ? (
@@ -1857,7 +1900,7 @@ function ProctorLobbyContent() {
                     {lobby.session?.roomName || lobby.roomName || 'Room 101'}
                   </Text>
                   <Text style={styles.swapCardMeta}>
-                    Batch {lobby.session?.batchNumber || '1'} · {lobby.registeredCount || studentsList.length} Registered Candidates
+                    {examDate} · {sessionTime} · {lobby.registeredCount || studentsList.length} Registered Candidates
                   </Text>
                 </View>
                 <View style={styles.swapActiveBadge}>
@@ -2166,16 +2209,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.7,
   },
-  scheduleSyBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3.5,
-    borderRadius: 7,
-    borderWidth: 1,
-  },
-  scheduleSyText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
   scheduleHeroTitle: {
     fontSize: 18,
     fontWeight: '800',
@@ -2199,6 +2232,31 @@ const styles = StyleSheet.create({
   scheduleMetaPillText: {
     fontSize: 12,
     fontWeight: '700',
+  },
+  scheduleTimingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    flexBasis: '46%',
+    flexGrow: 1,
+    minWidth: 132,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    borderRadius: 12,
+    borderWidth: 1.5,
+  },
+  scheduleTimingCopy: {
+    flex: 1,
+  },
+  scheduleTimingLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  scheduleTimingValue: {
+    marginTop: 2,
+    fontSize: 13,
+    fontWeight: '800',
   },
 
   // EXAMINATION LOBBY ACCESS PASS CARD
@@ -2817,19 +2875,21 @@ const styles = StyleSheet.create({
   monitoringHeaderRow: {
     marginBottom: 4,
   },
-  statusCardsRow: {
+  statusCardsGrid: {
     flexDirection: 'row',
-    gap: 8,
+    flexWrap: 'wrap',
+    gap: 10,
     paddingVertical: 6,
     paddingHorizontal: 2,
   },
   statusCard: {
     borderRadius: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 3,
+    minHeight: 132,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    alignItems: 'flex-start',
+    justifyContent: 'flex-start',
+    gap: 2,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.06,
@@ -2843,28 +2903,25 @@ const styles = StyleSheet.create({
     right: 8,
   },
   cardIconBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 2,
   },
   cardCountText: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
-    textAlign: 'center',
     lineHeight: 26,
   },
   cardLabelText: {
     fontSize: 12,
     fontWeight: '700',
-    textAlign: 'center',
   },
   cardSubtitleText: {
     fontSize: 10,
     fontWeight: '500',
-    textAlign: 'center',
   },
   categoryPanel: {
     marginTop: 12,

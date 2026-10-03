@@ -404,11 +404,15 @@ function ExamScreenInner() {
 
     const interval = setInterval(() => {
       void beat();
-    }, 4000);
+    }, 10000);
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void beat();
+    });
     void beat();
     return () => {
       cancelled = true;
       clearInterval(interval);
+      appStateSubscription.remove();
     };
   }, [securityEnabled, router]);
 
@@ -426,52 +430,64 @@ function ExamScreenInner() {
 
       markSubmitting(true);
       router.replace('/(student)/submitting');
-      await ExamProgressStore.save({
-        sessionId: sessionId ?? 'unknown',
-        studentId: verifiedStudent?.id ?? 'unknown',
-        answers,
-        flags,
-        navMode,
-        remainingSeconds: useExamStore.getState().remainingSeconds,
-        startedAt,
-      });
+      try {
+        await ExamProgressStore.save({
+          sessionId: sessionId ?? 'unknown',
+          studentId: verifiedStudent?.id ?? 'unknown',
+          answers,
+          flags,
+          navMode,
+          remainingSeconds: useExamStore.getState().remainingSeconds,
+          startedAt,
+        });
+      } catch (error) {
+        console.warn('[SUBMIT] Final local checkpoint failed; continuing with saved progress:', error);
+      }
 
-      let lastError: unknown = null;
-      for (let tries = 1; tries <= 3; tries++) {
+      let failedAttempts = 0;
+      while (true) {
         try {
           await QuestionRepository.submitAnswers({
             sessionId: sessionId ?? 'unknown',
             studentId: verifiedStudent?.id ?? 'unknown',
             answers: payload,
           });
-          if (verifiedStudent?.id) {
-            await LobbyRepository.finishStudent(verifiedStudent.id, finalReason);
-          }
-          await ExamProgressStore.clear();
-          await clearApplicantExamMaterial();
-          markSubmitted(finalReason);
-          try {
-            const appCode = verifiedStudent?.studentId || verifiedStudent?.id;
-            if (appCode && sessionId) {
-              const sid = String(sessionId).replace(/^offline-/, '').split('-')[0];
-              await appStorage.setItem(`tcc.student.completed.${sid}.${appCode}`, '1');
-            }
-          } catch {
-            // Completion marker is best effort.
-          }
-          markSubmitting(false);
-          router.replace('/(student)/completed');
-          return;
+          break;
         } catch (error) {
-          lastError = error;
-          if (tries < 3) await new Promise((resolve) => setTimeout(resolve, 1200 * tries));
+          failedAttempts += 1;
+          const retryDelayMs = Math.min(1000 * 2 ** Math.min(failedAttempts - 1, 4), 15000);
+          console.warn(
+            `[SUBMIT] Server has not confirmed the submission; retrying in ${retryDelayMs}ms.`,
+            error,
+          );
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
         }
       }
 
-      markSubmitting(false);
-      throw lastError instanceof Error
-        ? lastError
-        : new Error('Submission failed. Please stay on the exam Wi-Fi and try again.');
+      try {
+        if (verifiedStudent?.id) {
+          await LobbyRepository.finishStudent(verifiedStudent.id, finalReason);
+        }
+      } catch (error) {
+        console.warn('[SUBMIT] Result was confirmed; final lobby update will be retried by sync:', error);
+      }
+      await ExamProgressStore.clear().catch((error) => {
+        console.warn('[SUBMIT] Result was confirmed; local checkpoint cleanup failed:', error);
+      });
+      await clearApplicantExamMaterial().catch((error) => {
+        console.warn('[SUBMIT] Result was confirmed; exam material cleanup failed:', error);
+      });
+      markSubmitted(finalReason);
+      try {
+        const appCode = verifiedStudent?.studentId || verifiedStudent?.id;
+        if (appCode && sessionId) {
+          const sid = String(sessionId).replace(/^offline-/, '').split('-')[0];
+          await appStorage.setItem(`tcc.student.completed.${sid}.${appCode}`, '1');
+        }
+      } catch {
+        // Completion marker is best effort.
+      }
+      router.replace('/(student)/completed');
     },
     [answers, flags, navMode, sessionId, startedAt, verifiedStudent, markSubmitting, markSubmitted, router],
   );
