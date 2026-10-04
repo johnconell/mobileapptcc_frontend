@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, Modal, Pressable, Text, View, StyleSheet, Alert, Share, useWindowDimensions, Platform } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,7 +19,6 @@ import {
 } from '@/shared/components/ui/Skeleton';
 import { StatusChip } from '@/shared/components/ui/StatusChip';
 import { StatisticCard } from '@/shared/components/ui/StatisticCard';
-import { LobbyStudentCard } from '@/features/lobby/components/LobbyStudentCard';
 import { useLobby } from '@/features/lobby/hooks/useLobby';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { QUERY_KEYS } from '@/shared/constants';
@@ -51,6 +50,7 @@ import {
   Check,
   Share2,
   Wifi,
+  WifiOff,
   Search,
   Bell,
   X,
@@ -61,6 +61,7 @@ import {
   CalendarDays,
   Clock,
   MapPin,
+  DoorOpen,
 } from 'lucide-react-native';
 
 function formatTime(iso: string | null | undefined) {
@@ -129,6 +130,63 @@ function liveRemainingSeconds(lobby: {
   return lobby.session?.remainingSeconds ?? lobby.remainingSeconds ?? null;
 }
 
+/**
+ * Proctor lobby reference palette (approved light mockup).
+ * Mirrors the `@/shared/theme` light tokens (cream / maroon) plus the gold hero accents,
+ * kept in one place so every block of this screen stays consistent.
+ */
+const LOBBY = {
+  background: '#FAF7F2',
+  card: '#FFFDF8',
+  border: '#E6DCCB',
+  maroon: '#7B1C2B',
+  gold: '#F3D58A',
+  ink: '#2B1A1A',
+  muted: '#7A6A63',
+  danger: '#A32D2D',
+  onMaroon: '#FFF6E5',
+  softBorder: '#D9C9B4',
+  softFill: '#F3ECE0',
+  divider: '#EDE4D8',
+} as const;
+
+/** Monitoring tile tones (background / text) — values from the approved mockup. */
+const LOBBY_STATUS_TONES = {
+  waiting: { bg: '#FAEEDA', text: '#633806' },
+  answering: { bg: '#E6F1FB', text: '#0C447C' },
+  submitted: { bg: '#EAF3DE', text: '#27500A' },
+  disconnected: { bg: '#FCEBEB', text: '#791F1F' },
+} as const;
+
+/** "2 min ago" style label for the last time a student was seen on the LAN. */
+function formatLastSeen(iso: string | null | undefined) {
+  if (!iso) return 'Unknown';
+  const stamp = new Date(iso).getTime();
+  if (Number.isNaN(stamp)) return 'Unknown';
+  const minutes = Math.max(0, Math.floor((Date.now() - stamp) / 60000));
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return `${Math.floor(hours / 24)} d ago`;
+}
+
+/** Initials for the roster avatar (API value first, fall back to the full name). */
+function initialsOf(student: { avatarInitials?: string | null; fullName?: string | null }) {
+  const fromApi = String(student.avatarInitials ?? '').trim();
+  if (fromApi) return fromApi.slice(0, 2).toUpperCase();
+  const parts = String(student.fullName ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return 'ST';
+  return parts
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase();
+}
+
 function ProctorLobbyContent() {
   useKeepAwake();
   const router = useRouter();
@@ -142,7 +200,6 @@ function ProctorLobbyContent() {
     examSessionId?: string;
     scheduleId?: string;
   }>();
-  const profile = useProctorStore((s) => s.profile);
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
   const storeLobby = useLobbyStore((s) => s.snapshot);
   const selectedSchedule = useProctorStore((s) => s.selectedSchedule);
@@ -166,7 +223,7 @@ function ProctorLobbyContent() {
   const [clockTick, setClockTick] = useState(0);
   const [activeStatusFilter, setActiveStatusFilter] = useState<
     'waiting' | 'taking' | 'submitted' | 'disconnected' | null
-  >(null);
+  >('taking');
   const [reconnectCode, setReconnectCode] = useState<string | null>(null);
   const [reconnectExpiresAt, setReconnectExpiresAt] = useState<string | null>(null);
   const [peerHost, setPeerHost] = useState<string | null>(null);
@@ -429,6 +486,7 @@ function ProctorLobbyContent() {
     return PeerExamServer.subscribe(() => {
       const now = Date.now();
       setPeerHost(PeerExamServer.info().host);
+      setHosting(PeerExamServer.info());
       setServerLastHeartbeat(now);
 
       // Only trigger a full UI query invalidation at most once every 3 seconds.
@@ -635,47 +693,33 @@ function ProctorLobbyContent() {
   if (!ready) {
     return (
       <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
-        <View style={[styles.navBar, { backgroundColor: themeColors.background }]}>
-          <View style={styles.navLeftRow}>
-            <Pressable
-              style={[styles.navIconBtn, { backgroundColor: isDark ? '#1A1A1A' : themeColors.card, borderColor: themeColors.cardBorder }]}
-              onPress={goBack}
-              hitSlop={8}
-            >
-              <ArrowLeft size={18} color={themeColors.textPrimary} />
-            </Pressable>
-            <View style={[styles.navAvatarCircle, { backgroundColor: isDark ? '#1E1E1E' : themeColors.cardMuted, borderColor: themeColors.cardBorder }]}>
-              <Text style={[styles.navAvatarText, { color: themeColors.textPrimary }]}>
-                {profile?.displayName
-                  ? profile.displayName
-                      .split(' ')
-                      .map((n) => n[0])
-                      .join('')
-                      .slice(0, 2)
-                      .toUpperCase()
-                  : 'P1'}
-              </Text>
-            </View>
-          </View>
+        <View style={styles.navBar}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+            style={styles.navCircleBtn}
+            onPress={goBack}
+            hitSlop={6}
+          >
+            <ArrowLeft size={20} color={LOBBY.ink} strokeWidth={2.2} />
+          </Pressable>
           <View style={styles.navCenterBlock}>
-            <Text style={[styles.navTitleText, { color: themeColors.textPrimary }]} numberOfLines={1}>
-              Examination Lobby
+            <Text style={styles.navTitleText} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+              Entrance Examination
             </Text>
-            <Text style={[styles.navSubtitleText, { color: themeColors.textSecondary }]} numberOfLines={1}>
+            <Text style={styles.navSubtitleText} numberOfLines={1} maxFontSizeMultiplier={1.2}>
               Connecting to peer server…
             </Text>
           </View>
-          <View style={styles.navRightRow}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Logout"
-              style={[styles.navIconBtn, { backgroundColor: isDark ? '#1A1A1A' : themeColors.card, borderColor: themeColors.cardBorder }]}
-              onPress={() => confirmProctorLogout()}
-              hitSlop={8}
-            >
-              <LogOut size={18} color="#7A1F2B" />
-            </Pressable>
-          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Log out"
+            style={[styles.navCircleBtn, styles.navLogoutBtn]}
+            onPress={() => confirmProctorLogout()}
+            hitSlop={6}
+          >
+            <LogOut size={20} color={LOBBY.maroon} strokeWidth={2.2} />
+          </Pressable>
         </View>
         <View style={styles.lobbySkeleton}>
           <SkeletonCard>
@@ -692,44 +736,33 @@ function ProctorLobbyContent() {
   if (openError || !lobby) {
     return (
       <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
-        <View style={[styles.navBar, { backgroundColor: themeColors.background }]}>
-          <View style={styles.navLeftRow}>
-            <Pressable
-              style={[styles.navIconBtn, { backgroundColor: isDark ? '#1A1A1A' : themeColors.card, borderColor: themeColors.cardBorder }]}
-              onPress={goBack}
-              hitSlop={8}
-            >
-              <ArrowLeft size={18} color={themeColors.textPrimary} />
-            </Pressable>
-            <View style={[styles.navAvatarCircle, { backgroundColor: isDark ? '#1E1E1E' : themeColors.cardMuted, borderColor: themeColors.cardBorder }]}>
-              <Text style={[styles.navAvatarText, { color: themeColors.textPrimary }]}>
-                {profile?.displayName
-                  ? profile.displayName
-                      .split(' ')
-                      .map((n) => n[0])
-                      .join('')
-                      .slice(0, 2)
-                      .toUpperCase()
-                  : 'P1'}
-              </Text>
-            </View>
-          </View>
+        <View style={styles.navBar}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+            style={styles.navCircleBtn}
+            onPress={goBack}
+            hitSlop={6}
+          >
+            <ArrowLeft size={20} color={LOBBY.ink} strokeWidth={2.2} />
+          </Pressable>
           <View style={styles.navCenterBlock}>
-            <Text style={[styles.navTitleText, { color: themeColors.textPrimary }]} numberOfLines={1}>
-              Examination Lobby
+            <Text style={styles.navTitleText} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+              Entrance Examination
+            </Text>
+            <Text style={styles.navSubtitleText} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+              Proctor lobby
             </Text>
           </View>
-          <View style={styles.navRightRow}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Logout"
-              style={[styles.navIconBtn, { backgroundColor: isDark ? '#1A1A1A' : themeColors.card, borderColor: themeColors.cardBorder }]}
-              onPress={() => confirmProctorLogout()}
-              hitSlop={8}
-            >
-              <LogOut size={18} color="#7A1F2B" />
-            </Pressable>
-          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Log out"
+            style={[styles.navCircleBtn, styles.navLogoutBtn]}
+            onPress={() => confirmProctorLogout()}
+            hitSlop={6}
+          >
+            <LogOut size={20} color={LOBBY.maroon} strokeWidth={2.2} />
+          </Pressable>
         </View>
 
         <View style={styles.errorWrap}>
@@ -772,7 +805,15 @@ function ProctorLobbyContent() {
     lobby.schedule?.name ||
     selectedSchedule?.name ||
     'Examination Schedule';
-  const roomLabel = lobby.session?.roomName || lobby.roomName || 'Room 01';
+  const rawRoom = lobby.session?.roomName || lobby.roomName || 'Room 01';
+  const cleanRoomLabel =
+    rawRoom
+      .replace(/\s*·\s*Batch\s*\d+/gi, '')
+      .replace(/\s*-\s*Batch\s*\d+/gi, '')
+      .replace(/\s*,\s*Batch\s*\d+/gi, '')
+      .replace(/\s*Batch\s*\d+/gi, '')
+      .trim() || 'Room 01';
+  const roomLabel = cleanRoomLabel;
 
   const activeSchedule = lobby.schedule || selectedSchedule;
   const examDate = formatScheduleDate(
@@ -786,385 +827,247 @@ function ProctorLobbyContent() {
     lobby.session?.timeLabel || activeSchedule?.timeLabel,
   );
 
-  const waitingCount = waitingStudents.length || lobby.waitingCount || 0;
-  const takingCount = takingStudents.length || lobby.takingCount || 0;
-  const finishedCount = completedStudents.length || lobby.finishedCount || 0;
-  const disconnectedCount = disconnectedStudents.length || (lobby.disconnectedCount ?? 0);
-
-  const cardWidth = Math.min(240, Math.floor((windowWidth - 54) / 2));
-
   const monitoringTabs: Array<{
     key: 'waiting' | 'taking' | 'submitted' | 'disconnected';
     label: string;
     subtitle: string;
+    /** Label for the value shown on the right of the list header ("N students · <metric>"). */
+    metric: string;
     count: number;
     emptyMessage: string;
     students: LobbyStudent[];
     icon: (color: string) => React.ReactNode;
-    colors: {
-      light: { bg: string; border: string; activeBorder: string; badgeBg: string; text: string };
-      dark: { bg: string; border: string; activeBorder: string; badgeBg: string; text: string };
-    };
+    tone: { bg: string; text: string };
+    /** Pill value shown on the right of each student row. */
+    pillOf: (student: LobbyStudent) => string;
   }> = [
     {
       key: 'waiting',
       label: 'Waiting',
-      subtitle: 'In Lobby',
-      count: waitingCount,
-      emptyMessage: 'No students waiting in lobby.',
+      subtitle: 'In lobby',
+      metric: 'Joined',
+      count: waitingStudents.length,
+      emptyMessage: 'No students are waiting in the lobby.',
       students: waitingStudents,
-      icon: (color: string) => <Clock size={16} color={color} />,
-      colors: {
-        light: { bg: '#FFFBEB', border: '#FDE68A', activeBorder: '#D97706', badgeBg: '#FEF3C7', text: '#B45309' },
-        dark: { bg: '#241A06', border: '#78350F', activeBorder: '#FACC15', badgeBg: '#451A03', text: '#FDE047' },
-      },
+      icon: (color: string) => <Clock size={20} color={color} strokeWidth={2.2} />,
+      tone: LOBBY_STATUS_TONES.waiting,
+      pillOf: (student) => formatTime(student.joinedAt),
     },
     {
       key: 'taking',
       label: 'Answering',
-      subtitle: 'Taking Exam',
-      count: takingCount,
-      emptyMessage: 'No students currently taking the exam.',
+      subtitle: 'Taking exam',
+      metric: 'Started',
+      count: takingStudents.length,
+      emptyMessage: 'No students are answering the examination right now.',
       students: takingStudents,
-      icon: (color: string) => <Play size={16} color={color} />,
-      colors: {
-        light: { bg: '#FFF1F2', border: '#FECDD3', activeBorder: '#BE123C', badgeBg: '#FCE7EA', text: '#9F1239' },
-        dark: { bg: '#2A1418', border: '#7F1D3A', activeBorder: '#FB7185', badgeBg: '#451A24', text: '#FDA4AF' },
-      },
+      icon: (color: string) => <Play size={20} color={color} strokeWidth={2.2} />,
+      tone: LOBBY_STATUS_TONES.answering,
+      pillOf: (student) => formatTime(student.startedAt ?? student.lastActivityAt),
     },
     {
       key: 'submitted',
       label: 'Submitted',
       subtitle: 'Completed',
-      count: finishedCount,
-      emptyMessage: 'No students have completed or submitted yet.',
+      metric: 'Submitted',
+      count: completedStudents.length,
+      emptyMessage: 'No students have submitted the examination yet.',
       students: completedStudents,
-      icon: (color: string) => <CheckCircle2 size={16} color={color} />,
-      colors: {
-        light: { bg: '#F0FDF4', border: '#BBF7D0', activeBorder: '#16A34A', badgeBg: '#E6F8EF', text: '#15803D' },
-        dark: { bg: '#072113', border: '#065F46', activeBorder: '#4ADE80', badgeBg: '#022C22', text: '#86EFAC' },
-      },
+      icon: (color: string) => <CheckCircle2 size={20} color={color} strokeWidth={2.2} />,
+      tone: LOBBY_STATUS_TONES.submitted,
+      pillOf: (student) => formatTime(student.submittedAt),
     },
     {
       key: 'disconnected',
       label: 'Disconnected',
       subtitle: 'Offline',
-      count: disconnectedCount,
-      emptyMessage: 'No students disconnected.',
+      metric: 'Last seen',
+      count: disconnectedStudents.length,
+      emptyMessage: 'No students are disconnected.',
       students: disconnectedStudents,
-      icon: (color: string) => <ShieldAlert size={16} color={color} />,
-      colors: {
-        light: { bg: '#EFF6FF', border: '#BFDBFE', activeBorder: '#2563EB', badgeBg: '#DBEAFE', text: '#1D4ED8' },
-        dark: { bg: '#0B1728', border: '#1E3A8A', activeBorder: '#60A5FA', badgeBg: '#172554', text: '#93C5FD' },
-      },
+      icon: (color: string) => <WifiOff size={20} color={color} strokeWidth={2.2} />,
+      tone: LOBBY_STATUS_TONES.disconnected,
+      pillOf: (student) => formatLastSeen(student.lastActivityAt),
     },
   ];
 
   const currentTab = monitoringTabs.find((t) => t.key === activeStatusFilter) ?? null;
 
+  // QR must stay big so students can scan it: white square frame, full card width, max 340dp.
+  const qrFrameSize = Math.min(340, Math.max(200, windowWidth - 56));
+  const qrSize = qrFrameSize - 30;
+
   return (
-    <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
-      {/* 1. UNIFORM HEADER NAV BAR (Avatar Left, Title Center, Logout Right) */}
-      <View style={[styles.navBar, { backgroundColor: themeColors.background }]}>
-        <View style={styles.navLeftRow}>
-          <Pressable
-            style={[styles.navIconBtn, { backgroundColor: isDark ? '#1A1A1A' : themeColors.card, borderColor: themeColors.cardBorder }]}
-            onPress={goBack}
-            hitSlop={8}
-          >
-            <ArrowLeft size={18} color={themeColors.textPrimary} />
-          </Pressable>
-          <View style={[styles.navAvatarCircle, { backgroundColor: isDark ? '#1E1E1E' : themeColors.cardMuted, borderColor: themeColors.cardBorder }]}>
-            <Text style={[styles.navAvatarText, { color: themeColors.textPrimary }]}>
-              {profile?.displayName
-                ? profile.displayName
-                    .split(' ')
-                    .map((n) => n[0])
-                    .join('')
-                    .slice(0, 2)
-                    .toUpperCase()
-                : 'P1'}
-            </Text>
-          </View>
-        </View>
+    <View style={[styles.screen, { paddingTop: insets.top }]}>
+      {/* A. HEADER — back · title · logout (no Close Room here) */}
+      <View style={styles.navBar}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          style={({ pressed }) => [styles.navCircleBtn, pressed && { opacity: 0.7 }]}
+          onPress={goBack}
+          hitSlop={6}
+        >
+          <ArrowLeft size={20} color={LOBBY.ink} strokeWidth={2.2} />
+        </Pressable>
 
         <View style={styles.navCenterBlock}>
-          <Text style={[styles.navTitleText, { color: themeColors.textPrimary }]} numberOfLines={1}>
-            {scheduleLabel}
+          <Text
+            style={styles.navTitleText}
+            numberOfLines={1}
+            maxFontSizeMultiplier={1.2}
+          >
+            Entrance Examination
           </Text>
-          <Text style={[styles.navSubtitleText, { color: themeColors.textSecondary }]} numberOfLines={2}>
-            {roomLabel} · {examDate} · {sessionTime}
+          <Text
+            style={styles.navSubtitleText}
+            numberOfLines={1}
+            maxFontSizeMultiplier={1.2}
+          >
+            Proctor lobby
           </Text>
         </View>
 
-        <View style={styles.navRightRow}>
-          <Pressable
-            accessibilityRole="button"
-            style={[styles.navIconBtn, { backgroundColor: isDark ? '#1A1A1A' : themeColors.card, borderColor: themeColors.cardBorder }]}
-            onPress={() => confirmProctorLogout()}
-            accessibilityLabel="Logout"
-            hitSlop={8}
-          >
-            <LogOut size={18} color="#7A1F2B" />
-          </Pressable>
-        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Log out"
+          style={({ pressed }) => [
+            styles.navCircleBtn,
+            styles.navLogoutBtn,
+            pressed && { opacity: 0.7 },
+          ]}
+          onPress={() => confirmProctorLogout()}
+          hitSlop={6}
+        >
+          <LogOut size={20} color={LOBBY.maroon} strokeWidth={2.2} />
+        </Pressable>
       </View>
 
       <ScrollView contentContainerStyle={styles.list}>
         <View style={styles.headerBlock}>
             {/* ============================================================= */}
-            {/* CURRENT EXAMINATION SCHEDULE CARD                             */}
-            {/* Prominently placed at the top for instant recognition        */}
-            {/* ============================================================= */}
+            {/* B. CURRENT SCHEDULE HERO — solid maroon, gold accents, schedule shown once */}
             <View
-              style={[
-                styles.scheduleHeroCard,
-                {
-                  backgroundColor: themeColors.card,
-                  borderColor: isDark ? 'rgba(122, 31, 43, 0.45)' : '#FECACA',
-                },
-              ]}
+              style={styles.scheduleHeroCard}
+              accessibilityLabel={`Current schedule: ${scheduleLabel}`}
             >
               <View style={styles.scheduleHeroTopRow}>
-                <View
-                  style={[
-                    styles.scheduleHeroBadge,
-                    {
-                      backgroundColor: isDark ? '#2A1414' : '#FEE2E2',
-                      borderColor: isDark ? '#7A1F2B60' : '#FCA5A5',
-                    },
-                  ]}
-                >
-                  <CalendarDays size={13} color={isDark ? '#E8342A' : '#7A1F2B'} />
-                  <Text style={[styles.scheduleHeroBadgeText, { color: isDark ? '#E8342A' : '#7A1F2B' }]}>
-                    CURRENT EXAMINATION SCHEDULE
+                <Text style={styles.scheduleHeroEyebrow} maxFontSizeMultiplier={1.2}>
+                  Current schedule
+                </Text>
+                <View style={styles.scheduleHeroLivePill}>
+                  <Wifi size={15} color={LOBBY.maroon} strokeWidth={2.4} />
+                  <Text style={styles.scheduleHeroLiveText} maxFontSizeMultiplier={1.2}>
+                    LAN live
                   </Text>
                 </View>
-
               </View>
 
-              <Text style={[styles.scheduleHeroTitle, { color: themeColors.textPrimary }]}>
-                {scheduleLabel}
+              <Text style={styles.scheduleHeroDate} maxFontSizeMultiplier={1.2}>
+                {examDate}
               </Text>
 
-              <View style={styles.scheduleHeroMetaGrid}>
-                <View
-                  style={[
-                    styles.scheduleTimingPill,
-                    {
-                      backgroundColor: isDark ? '#2A1414' : '#FFF1F2',
-                      borderColor: isDark ? '#7A1F2B80' : '#FDA4AF',
-                    },
-                  ]}
-                >
-                  <CalendarDays size={17} color={isDark ? '#FDA4AF' : '#9F1239'} />
-                  <View style={styles.scheduleTimingCopy}>
-                    <Text style={[styles.scheduleTimingLabel, { color: isDark ? '#FDA4AF' : '#9F1239' }]}>EXAM DATE</Text>
-                    <Text style={[styles.scheduleTimingValue, { color: themeColors.textPrimary }]}>{examDate}</Text>
-                  </View>
-                </View>
+              <View style={styles.scheduleHeroTimeRow}>
+                <Clock size={18} color={LOBBY.gold} strokeWidth={2.2} />
+                <Text style={styles.scheduleHeroTimeText} maxFontSizeMultiplier={1.25}>
+                  {sessionTime}
+                </Text>
+              </View>
 
-                <View
-                  style={[
-                    styles.scheduleTimingPill,
-                    {
-                      backgroundColor: isDark ? '#2A1414' : '#FFF1F2',
-                      borderColor: isDark ? '#7A1F2B80' : '#FDA4AF',
-                    },
-                  ]}
-                >
-                  <Clock size={17} color={isDark ? '#FDA4AF' : '#9F1239'} />
-                  <View style={styles.scheduleTimingCopy}>
-                    <Text style={[styles.scheduleTimingLabel, { color: isDark ? '#FDA4AF' : '#9F1239' }]}>SCHEDULED TIME</Text>
-                    <Text style={[styles.scheduleTimingValue, { color: themeColors.textPrimary }]}>{sessionTime}</Text>
-                  </View>
-                </View>
-
-                <View
-                  style={[
-                    styles.scheduleMetaPill,
-                    {
-                      backgroundColor: isDark ? '#1A1A1A' : themeColors.background,
-                      borderColor: themeColors.cardBorder,
-                    },
-                  ]}
-                >
-                  <MapPin size={13} color={themeColors.textSecondary} />
-                  <Text style={[styles.scheduleMetaPillText, { color: themeColors.textPrimary }]}>
-                    {roomLabel}
+              <View style={styles.scheduleHeroChipsRow}>
+                <View style={styles.scheduleHeroChip}>
+                  <MapPin size={15} color={LOBBY.onMaroon} strokeWidth={2} />
+                  <Text style={styles.scheduleHeroChipText} maxFontSizeMultiplier={1.25}>
+                    {cleanRoomLabel}
                   </Text>
                 </View>
-
-                <View
-                  style={[
-                    styles.scheduleMetaPill,
-                    {
-                      backgroundColor: isDark ? '#1A1A1A' : themeColors.background,
-                      borderColor: themeColors.cardBorder,
-                    },
-                  ]}
-                >
-                  <Users size={13} color={themeColors.textSecondary} />
-                  <Text style={[styles.scheduleMetaPillText, { color: themeColors.textPrimary }]}>
-                    {`${lobby.registeredCount || studentsList.length} Candidates`}
+                <View style={styles.scheduleHeroChip}>
+                  <Users size={15} color={LOBBY.onMaroon} strokeWidth={2} />
+                  <Text style={styles.scheduleHeroChipText} maxFontSizeMultiplier={1.25}>
+                    {`${lobby.registeredCount || studentsList.length} candidates`}
                   </Text>
                 </View>
-
-                <View
-                  style={[
-                    styles.scheduleMetaPill,
-                    {
-                      backgroundColor: isDark ? '#1A1A1A' : themeColors.background,
-                      borderColor: themeColors.cardBorder,
-                    },
-                  ]}
-                >
-                  <Wifi size={13} color={themeColors.textSecondary} />
-                  <Text style={[styles.scheduleMetaPillText, { color: themeColors.textPrimary }]}>
-                    {`IP: ${peerHost || hosting.host || 'LAN Host'}`}
+                <View style={styles.scheduleHeroChip}>
+                  <Wifi size={15} color={LOBBY.onMaroon} strokeWidth={2} />
+                  <Text style={styles.scheduleHeroChipText} maxFontSizeMultiplier={1.25}>
+                    {`IP ${peerHost || hosting.host || 'LAN host'}`}
                   </Text>
                 </View>
               </View>
             </View>
 
-            {/* ============================================================= */}
-            {/* EXAMINATION ACCESS PASS CARD (Theme-aware, matching results) */}
-            {/* Soft ivory in light mode, elevated dark in dark mode          */}
-            {/* ============================================================= */}
-            <View
-              style={[
-                styles.accessPassCard,
-                {
-                  backgroundColor: themeColors.card,
-                  borderColor: themeColors.cardBorder,
-                },
-              ]}
-            >
-              {/* Top Banner Row */}
-              <View style={styles.depositTopRow}>
-                <View
-                  style={[
-                    styles.depositTagBadge,
-                    {
-                      backgroundColor: isDark ? '#2A1414' : themeColors.accentMuted,
-                      borderColor: isDark ? '#7A1F2B50' : '#FECACA',
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.depositTagText,
-                      { color: isDark ? '#E8342A' : '#7A1F2B' },
-                    ]}
-                  >
-                    EXAMINATION ACCESS PASS
-                  </Text>
-                </View>
-
-                <View
-                  style={[
-                    styles.depositLiveBadge,
-                    {
-                      backgroundColor: isDark ? '#142918' : '#DCFCE7',
-                      borderColor: isDark ? '#22C55E40' : '#86EFAC',
-                    },
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.depositLiveDot,
-                      { backgroundColor: isDark ? '#22C55E' : '#16A34A' },
-                    ]}
-                  />
-                  <Text
-                    style={[
-                      styles.depositLiveText,
-                      { color: isDark ? '#4ADE80' : '#15803D' },
-                    ]}
-                  >
-                    {lobby.status === 'in_progress' ? 'EXAM IN PROGRESS' : 'LAN BROADCAST ACTIVE'}
-                  </Text>
-                </View>
+            {/* C. EXAMINATION ACCESS PASS — big QR, code + copy/share, two equal buttons */}
+            <View style={styles.accessPassCard}>
+              <View style={styles.passHeaderRow}>
+                <Text style={styles.passHeaderTitle} maxFontSizeMultiplier={1.2}>
+                  Examination access pass
+                </Text>
+                <Text style={styles.passHeaderHint} maxFontSizeMultiplier={1.2}>
+                  Students scan this
+                </Text>
               </View>
 
-              {/* Centered QR Code on White Inset Box */}
+              {/* Big, square white QR frame (students must be able to scan it) */}
               <View
                 style={[
                   styles.qrWhiteFrame,
-                  {
-                    borderColor: isDark ? '#262626' : themeColors.cardBorder,
-                  },
+                  { width: qrFrameSize, height: qrFrameSize },
                 ]}
               >
                 <QrCodePanel
                   value={displayQrValue}
-                  size={190}
-                  note={
-                    lobby.status === 'in_progress'
-                      ? 'Exam in progress · New scans locked'
-                      : peerHost
-                        ? `Connect to ${lobby.wifiSsid || 'Exam Wi-Fi'} & scan`
-                        : 'Scan QR with examinee device to enter'
-                  }
+                  size={qrSize}
+                  frame={false}
+                  note={null}
                 />
               </View>
 
-              {/* Bold Hero Code Display */}
-              <View style={styles.heroCodeSection}>
-                <Text style={[styles.heroCodeLabel, { color: themeColors.textMuted }]}>
-                  EXAMINATION ROOM ACCESS CODE
-                </Text>
-                <View style={styles.heroCodeRow}>
-                  <Text
-                    style={[
-                      styles.heroCodeValue,
-                      { color: isDark ? '#FFFFFF' : '#7A1F2B' },
-                    ]}
-                  >
-                    {displayCode}
-                  </Text>
-                  <View style={styles.codeActionButtonsRow}>
-                    <Pressable
-                      style={[
-                        styles.codeSquareBtn,
-                        {
-                          backgroundColor: isDark ? '#1E1E1E' : themeColors.cardMuted,
-                          borderColor: isDark ? '#2E2E2E' : themeColors.cardBorder,
-                        },
-                      ]}
-                      onPress={copyCode}
-                      accessibilityLabel="Copy Code"
-                      hitSlop={6}
-                    >
-                      {copied ? (
-                        <Check size={18} color={isDark ? '#22C55E' : '#16A34A'} />
-                      ) : (
-                        <Copy size={18} color={isDark ? '#FFFFFF' : '#7A1F2B'} />
-                      )}
-                    </Pressable>
-                    <Pressable
-                      style={[
-                        styles.codeSquareBtn,
-                        {
-                          backgroundColor: isDark ? '#1E1E1E' : themeColors.cardMuted,
-                          borderColor: isDark ? '#2E2E2E' : themeColors.cardBorder,
-                        },
-                      ]}
-                      onPress={handleShareCode}
-                      accessibilityLabel="Share Code"
-                      hitSlop={6}
-                    >
-                      <Share2 size={18} color={isDark ? '#FFFFFF' : '#7A1F2B'} />
-                    </Pressable>
-                  </View>
-                </View>
-              </View>
+              <Text style={styles.qrHint} maxFontSizeMultiplier={1.2}>
+                {lobby.status === 'in_progress'
+                  ? 'Exam in progress · New scans are locked'
+                  : peerHost
+                    ? `Connect to ${lobby.wifiSsid || 'Exam Wi-Fi'} then scan`
+                    : 'Hold steady · Students scan the QR with their device to enter'}
+              </Text>
 
-              {/* Primary Card Buttons */}
-              <View style={styles.depositActionsRow}>
+              {/* Room access code + copy / share */}
+              <View style={styles.accessCodeRow}>
+                <Text style={styles.accessCodeValue} maxFontSizeMultiplier={1.3}>
+                  {displayCode}
+                </Text>
+                <Pressable
+                  style={({ pressed }) => [styles.codeSquareBtn, pressed && { opacity: 0.7 }]}
+                  onPress={copyCode}
+                  accessibilityRole="button"
+                  accessibilityLabel="Copy access code"
+                  hitSlop={6}
+                >
+                  {copied ? (
+                    <Check size={20} color="#27500A" strokeWidth={2.4} />
+                  ) : (
+                    <Copy size={20} color={LOBBY.maroon} strokeWidth={2.2} />
+                  )}
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.codeSquareBtn, pressed && { opacity: 0.7 }]}
+                  onPress={handleShareCode}
+                  accessibilityRole="button"
+                  accessibilityLabel="Share access code"
+                  hitSlop={6}
+                >
+                  <Share2 size={20} color={LOBBY.maroon} strokeWidth={2.2} />
+                </Pressable>
+              </View>
+              <Text style={styles.accessCodeHint} maxFontSizeMultiplier={1.2}>
+                Room access code
+              </Text>
+
+              {/* Two equal actions: Regenerate QR (outline) · Start Examination (filled) */}
+              <View style={styles.passActionsRow}>
                 <Button
                   title="Regenerate QR"
                   variant="outline"
+                  icon={<RefreshCw size={17} color={LOBBY.maroon} strokeWidth={2.2} />}
                   loading={busy}
                   disabled={lobby.can_control === false || lobby.status === 'ended' || lobby.status === 'in_progress'}
                   onPress={async () => {
@@ -1190,13 +1093,7 @@ function ProctorLobbyContent() {
                       setBusy(false);
                     }
                   }}
-                  style={[
-                    styles.depositOutlineBtn,
-                    {
-                      borderColor: isDark ? '#333333' : themeColors.cardBorder,
-                      backgroundColor: isDark ? '#1A1A1A' : themeColors.card,
-                    },
-                  ]}
+                  style={[styles.passActionBtn, { borderColor: LOBBY.softBorder }]}
                 />
 
                 <Button
@@ -1208,6 +1105,13 @@ function ProctorLobbyContent() {
                         : 'Start Examination'
                   }
                   variant="primary"
+                  icon={
+                    lobby.status === 'in_progress' ? (
+                      <DoorOpen size={17} color={LOBBY.onMaroon} strokeWidth={2.2} />
+                    ) : (
+                      <Play size={17} color={LOBBY.onMaroon} strokeWidth={2.2} />
+                    )
+                  }
                   loading={busy}
                   disabled={lobby.can_control === false || lobby.status === 'ended'}
                   onPress={() => {
@@ -1221,10 +1125,7 @@ function ProctorLobbyContent() {
                       setStartOpen(true);
                     }
                   }}
-                  style={[
-                    styles.depositSolidBtn,
-                    { backgroundColor: '#7A1F2B' },
-                  ]}
+                  style={[styles.passActionBtn, { backgroundColor: LOBBY.maroon }]}
                 />
               </View>
             </View>
@@ -1304,96 +1205,71 @@ function ProctorLobbyContent() {
             ) : null}
 
             {lobby.status === 'in_progress' ? (
-              <Card>
-                <Text style={[styles.monitorTitle, { color: themeColors.textPrimary }]}>Live monitoring</Text>
-                <Text style={styles.monitorTimer}>
-                  {formatRemaining(remainingLive)}
+              <Card style={styles.timerCard}>
+                <Text style={styles.timerCardTitle} maxFontSizeMultiplier={1.2}>
+                  Time remaining
                 </Text>
-                <Text style={[styles.monitorLine, { color: themeColors.textSecondary }]}>Remaining time</Text>
-                <Text style={[styles.monitorLine, { color: themeColors.textSecondary }]}>
-                  Taking: {lobby.takingCount} · Disconnected:{' '}
-                  {lobby.disconnectedCount ?? 0} · Done: {lobby.finishedCount}
+                <Text style={styles.timerCardValue} maxFontSizeMultiplier={1.2}>
+                  {formatRemaining(remainingLive)}
                 </Text>
               </Card>
             ) : null}
 
-
-
-            {/* ============================================================= */}
-            {/* MONITORING SECTION (Directly below Access Pass / Room Code)   */}
-            {/* Interactive status cards + expandable examinee list             */}
-            {/* ============================================================= */}
+            {/* D. MONITORING — equal-width 2×2 tiles + the selected status roster */}
             <View style={styles.monitoringSection}>
               <View style={styles.monitoringHeaderRow}>
-                <View>
-                  <Text style={[styles.section, { color: themeColors.textMuted, marginTop: 14, marginBottom: 2 }]}>
-                    Monitoring
-                  </Text>
-                  <Text style={[styles.sectionHint, { color: themeColors.textSecondary, marginBottom: 10 }]}>
-                    {`${lobby.registeredCount || studentsList.length} Candidates registered · Tap a category to view examinees`}
-                  </Text>
-                </View>
+                <Text style={styles.monitoringSectionTitle} maxFontSizeMultiplier={1.2}>
+                  Monitoring
+                </Text>
+                <Text style={styles.monitoringSectionSubtitle} maxFontSizeMultiplier={1.2}>
+                  Tap a status to see students
+                </Text>
               </View>
 
-              {/* Two-column cards keep each status readable and tappable. */}
               <View style={styles.statusCardsGrid}>
                 {monitoringTabs.map((tab) => {
                   const isActive = activeStatusFilter === tab.key;
-                  const c = isDark ? tab.colors.dark : tab.colors.light;
-
                   return (
                     <Pressable
                       key={tab.key}
                       accessibilityRole="button"
-                      accessibilityLabel={`${tab.label}: ${tab.count} candidates. Tap to view.`}
-                      onPress={() => setActiveStatusFilter((prev) => (prev === tab.key ? null : tab.key))}
-                      android_ripple={{
-                        color: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
-                        borderless: false,
-                      }}
+                      accessibilityState={{ selected: isActive }}
+                      accessibilityLabel={`${tab.label}: ${tab.count} students. ${tab.subtitle}`}
+                      onPress={() =>
+                        setActiveStatusFilter((prev) => (prev === tab.key ? null : tab.key))
+                      }
+                      android_ripple={{ color: 'rgba(0,0,0,0.05)', borderless: false }}
                       style={({ pressed }) => [
                         styles.statusCard,
                         {
-                          width: cardWidth,
-                          backgroundColor: isActive ? c.bg : themeColors.card,
-                          borderColor: isActive ? c.activeBorder : themeColors.cardBorder,
-                          borderWidth: isActive ? 2 : 1,
+                          backgroundColor: tab.tone.bg,
+                          borderColor: LOBBY.border,
                           opacity: pressed ? 0.85 : 1,
-                          transform: [{ scale: pressed ? 0.97 : 1 }],
                         },
                       ]}
                     >
-                      {/* Top-right Chevron indicator */}
-                      <View style={styles.cardChevronWrap}>
-                        {isActive ? (
-                          <ChevronUp size={13} color={c.activeBorder} strokeWidth={2.5} />
-                        ) : (
-                          <ChevronDown size={13} color={isDark ? '#71717A' : '#9CA3AF'} strokeWidth={2} />
-                        )}
-                      </View>
-
-                      {/* 1. Category Icon */}
-                      <View style={[styles.cardIconBadge, { backgroundColor: c.badgeBg }]}>
-                        {tab.icon(c.text)}
-                      </View>
-
-                      {/* 2. Big Count */}
-                      <Text style={[styles.cardCountText, { color: themeColors.textPrimary }]}>
+                      {isActive ? (
+                        <View
+                          pointerEvents="none"
+                          style={[styles.statusCardOutline, { borderColor: tab.tone.text }]}
+                        />
+                      ) : null}
+                      {tab.icon(tab.tone.text)}
+                      <Text
+                        style={[styles.cardCountText, { color: tab.tone.text }]}
+                        maxFontSizeMultiplier={1.2}
+                      >
                         {tab.count}
                       </Text>
-
-                      {/* 3. Label */}
                       <Text
-                        style={[styles.cardLabelText, { color: themeColors.textPrimary }]}
-                        numberOfLines={1}
+                        style={[styles.cardLabelText, { color: tab.tone.text }]}
+                        maxFontSizeMultiplier={1.2}
                       >
                         {tab.label}
                       </Text>
-
-                      {/* 4. Subtitle */}
                       <Text
-                        style={[styles.cardSubtitleText, { color: themeColors.textSecondary }]}
-                        numberOfLines={1}
+                        style={[styles.cardSubtitleText, { color: tab.tone.text }]}
+                        maxFontSizeMultiplier={1.2}
                       >
                         {tab.subtitle}
                       </Text>
@@ -1402,103 +1278,105 @@ function ProctorLobbyContent() {
                 })}
               </View>
 
-              {/* Expandable Per-Status Student List Panel */}
               {activeStatusFilter && currentTab ? (
-                <View
-                  style={[
-                    styles.categoryPanel,
-                    {
-                      backgroundColor: isDark ? '#141414' : themeColors.card,
-                      borderColor: isDark ? '#2E2E2E' : themeColors.cardBorder,
-                    },
-                  ]}
-                >
-                  <View style={styles.categoryPanelHeader}>
-                    <View style={styles.categoryPanelHeaderLeft}>
-                      <View
-                        style={[
-                          styles.categoryPanelIconBadge,
-                          { backgroundColor: isDark ? currentTab.colors.dark.badgeBg : currentTab.colors.light.badgeBg },
-                        ]}
-                      >
-                        {currentTab.icon(isDark ? currentTab.colors.dark.text : currentTab.colors.light.text)}
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                          <Text style={[styles.categoryPanelTitle, { color: themeColors.textPrimary }]}>
-                            {currentTab.label}
-                          </Text>
-                          <View
-                            style={[
-                              styles.categoryPanelCountBadge,
-                              {
-                                backgroundColor: isDark
-                                  ? currentTab.colors.dark.badgeBg
-                                  : currentTab.colors.light.badgeBg,
-                              },
-                            ]}
-                          >
-                            <Text
-                              style={[
-                                styles.categoryPanelCountText,
-                                { color: isDark ? currentTab.colors.dark.text : currentTab.colors.light.text },
-                              ]}
-                            >
-                              {currentTab.students.length}
-                            </Text>
-                          </View>
-                        </View>
-                        <Text style={[styles.categoryPanelSubtitle, { color: themeColors.textSecondary }]}>
-                          {currentTab.subtitle}
-                        </Text>
-                      </View>
-                    </View>
-                    <Pressable
-                      onPress={() => setActiveStatusFilter(null)}
-                      style={[styles.categoryPanelCloseBtn, { backgroundColor: isDark ? '#262626' : themeColors.cardMuted }]}
-                      hitSlop={8}
-                      accessibilityLabel="Close student list"
+                <View style={styles.statusListBlock}>
+                  <View style={styles.statusListHeaderRow}>
+                    <Text
+                      style={[styles.statusListTitle, { color: currentTab.tone.text }]}
+                      maxFontSizeMultiplier={1.2}
                     >
-                      <X size={16} color={themeColors.textSecondary} />
-                    </Pressable>
+                      {currentTab.label}
+                    </Text>
+                    <Text style={styles.statusListMeta} maxFontSizeMultiplier={1.2}>
+                      {`${currentTab.students.length} students · ${currentTab.metric}`}
+                    </Text>
                   </View>
 
-                  <View style={styles.categoryPanelList}>
-                    {currentTab.students.length === 0 ? (
-                      <View style={styles.emptyCategoryBlock}>
-                        <Text style={[styles.emptyCategoryText, { color: themeColors.textMuted }]}>
-                          {currentTab.emptyMessage}
-                        </Text>
-                      </View>
-                    ) : (
-                      currentTab.students.map((item, index) => (
-                        <LobbyStudentCard
-                          key={item.id}
-                          student={item}
-                          delay={Math.min(index * 30, 150)}
-                          isAttended={attendedIds.has(item.id)}
-                          onToggleAttendance={() => toggleAttendance(item.id)}
-                          onKick={() => handleRemoveStudent(item)}
-                          onPress={() => {
-                            setSelected(item);
-                            setReconnectCode(item.reconnectCode ?? null);
-                            setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
-                          }}
-                        />
-                      ))
-                    )}
-                  </View>
+                  {currentTab.students.length === 0 ? (
+                    <Text style={styles.statusListEmpty} maxFontSizeMultiplier={1.2}>
+                      {currentTab.emptyMessage}
+                    </Text>
+                  ) : (
+                    currentTab.students.map((item) => (
+                      <Pressable
+                        key={item.id}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${item.fullName}, applicant ${item.studentId || 'unknown'}, ${currentTab.pillOf(item)}`}
+                        onPress={() => {
+                          setSelected(item);
+                          setReconnectCode(item.reconnectCode ?? null);
+                          setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
+                        }}
+                        style={({ pressed }) => [styles.statusRow, pressed && { opacity: 0.7 }]}
+                      >
+                        <View
+                          style={[styles.statusRowAvatar, { backgroundColor: currentTab.tone.bg }]}
+                        >
+                          <Text
+                            style={[styles.statusRowAvatarText, { color: currentTab.tone.text }]}
+                            maxFontSizeMultiplier={1.15}
+                          >
+                            {initialsOf(item)}
+                          </Text>
+                        </View>
+                        <View style={styles.statusRowInfo}>
+                          <Text style={styles.statusRowName} maxFontSizeMultiplier={1.25}>
+                            {item.fullName}
+                          </Text>
+                          <Text style={styles.statusRowId} maxFontSizeMultiplier={1.25}>
+                            {item.studentId || item.applicantCode || 'No applicant number'}
+                          </Text>
+                        </View>
+                        <View
+                          style={[styles.statusRowPill, { backgroundColor: currentTab.tone.bg }]}
+                        >
+                          <Text
+                            style={[styles.statusRowPillText, { color: currentTab.tone.text }]}
+                            maxFontSizeMultiplier={1.25}
+                          >
+                            {currentTab.pillOf(item)}
+                          </Text>
+                        </View>
+                      </Pressable>
+                    ))
+                  )}
                 </View>
-              ) : null}
-
-              {studentsList.length === 0 && !activeStatusFilter ? (
-                <View style={styles.emptyRosterCard}>
-                  <Text style={[styles.empty, { color: themeColors.textMuted }]}>
-                    No students have joined yet. Share the QR Code or access code.
-                  </Text>
-                </View>
-              ) : null}
+              ) : (
+                <Text style={styles.statusListEmpty} maxFontSizeMultiplier={1.2}>
+                  {studentsList.length === 0
+                    ? 'No students have joined yet. Share the QR code or access code.'
+                    : 'Tap a status above to see the students in it.'}
+                </Text>
+              )}
             </View>
+
+            {/* E. CLOSE LOBBY — one outlined red button at the bottom of the screen */}
+            {lobby.status !== 'ended' ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close lobby"
+                disabled={lobby.can_control === false || busy}
+                onPress={() => {
+                  if (lobby.can_control === false) {
+                    Alert.alert(
+                      'Not allowed',
+                      'Only the proctor who opened this lobby can control it.',
+                    );
+                    return;
+                  }
+                  setEndOpen(true);
+                }}
+                style={({ pressed }) => [
+                  styles.closeLobbyBtn,
+                  { opacity: pressed || lobby.can_control === false ? 0.7 : 1 },
+                ]}
+              >
+                <DoorOpen size={20} color={LOBBY.danger} strokeWidth={2.2} />
+                <Text style={styles.closeLobbyBtnText} maxFontSizeMultiplier={1.2}>
+                  {lobby.status === 'in_progress' ? 'End & close examination room' : 'Close lobby'}
+                </Text>
+              </Pressable>
+            ) : null}
           </View>
         </ScrollView>
 
@@ -1623,15 +1501,18 @@ function ProctorLobbyContent() {
       <ConfirmationModal
         visible={endOpen}
         title={
-          lobby?.status === 'lobby_open' ? 'Close Lobby?' : 'End Examination?'
+          lobby?.status === 'lobby_open'
+            ? 'Close this lobby?'
+            : 'End Examination & Close Room?'
         }
         description={
           lobby?.status === 'lobby_open'
-            ? 'This closes the lobby before the exam starts. No new students can join until you open this room again.'
+            ? "New students won't be able to join with this QR or code."
             : 'This immediately ends the exam, auto-submits every student still taking it, and closes the session. This cannot be undone.'
         }
-        confirmLabel={lobby?.status === 'lobby_open' ? 'Yes, close lobby' : 'Yes, end now'}
+        confirmLabel={lobby?.status === 'lobby_open' ? 'Close lobby' : 'Yes, end & close'}
         cancelLabel="Cancel"
+        danger={lobby?.status === 'lobby_open'}
         loading={busy}
         onCancel={() => setEndOpen(false)}
         onConfirm={async () => {
@@ -1759,6 +1640,46 @@ function ProctorLobbyContent() {
               ) : null}
 
               <View style={styles.detailActions}>
+                {/* Attendance marker — kept reachable now that roster rows are compact */}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: attendedIds.has(selected.id) }}
+                  accessibilityLabel="Toggle verified in room"
+                  onPress={() => toggleAttendance(selected.id)}
+                  style={({ pressed }) => [
+                    styles.attendanceToggle,
+                    {
+                      backgroundColor: attendedIds.has(selected.id)
+                        ? LOBBY_STATUS_TONES.submitted.bg
+                        : LOBBY.card,
+                      borderColor: attendedIds.has(selected.id)
+                        ? LOBBY_STATUS_TONES.submitted.text
+                        : LOBBY.border,
+                      opacity: pressed ? 0.7 : 1,
+                    },
+                  ]}
+                >
+                  <View style={styles.attendanceToggleInner}>
+                    {attendedIds.has(selected.id) ? (
+                      <Check size={16} color={LOBBY_STATUS_TONES.submitted.text} strokeWidth={2.6} />
+                    ) : (
+                      <UserCheck size={16} color={LOBBY.muted} strokeWidth={2.2} />
+                    )}
+                    <Text
+                      style={[
+                        styles.attendanceToggleText,
+                        {
+                          color: attendedIds.has(selected.id)
+                            ? LOBBY_STATUS_TONES.submitted.text
+                            : LOBBY.ink,
+                        },
+                      ]}
+                      maxFontSizeMultiplier={1.2}
+                    >
+                      {attendedIds.has(selected.id) ? 'Verified in room' : 'Mark as verified in room'}
+                    </Text>
+                  </View>
+                </Pressable>
                 {selected.status === 'disconnected' ? (
                   <Button
                     title="Issue new reconnect PIN"
@@ -2116,78 +2037,58 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#0D0D0D' },
+  screen: { flex: 1, backgroundColor: LOBBY.background },
+
+  // HEADER — 42dp circles, centered title
   navBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    backgroundColor: '#0D0D0D',
-  },
-  navLeftRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: LOBBY.background,
+  },
+  navCircleBtn: {
+    width: 42,
+    height: 42,
+    minWidth: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: LOBBY.card,
+    borderWidth: 1,
+    borderColor: LOBBY.border,
+  },
+  navLogoutBtn: {
+    borderColor: LOBBY.softBorder,
   },
   navCenterBlock: {
     flex: 1,
-    marginHorizontal: 10,
     alignItems: 'center',
+    gap: 1,
+    minWidth: 0,
   },
   navTitleText: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '700',
+    color: LOBBY.ink,
+    textAlign: 'center',
   },
   navSubtitleText: {
-    fontSize: 11,
-    color: '#A1A1AA',
-    fontWeight: '500',
-    marginTop: 1,
-  },
-  navRightRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  navAvatarCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#1E1E1E',
-    borderWidth: 1.5,
-    borderColor: '#333333',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navAvatarText: {
     fontSize: 13,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
-  navIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#1A1A1A',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#262626',
+    color: LOBBY.muted,
+    fontWeight: '500',
+    textAlign: 'center',
   },
 
-  // CURRENT EXAMINATION SCHEDULE HERO CARD
+  // CURRENT SCHEDULE HERO — solid maroon, gold accents
   scheduleHeroCard: {
+    backgroundColor: LOBBY.maroon,
     borderRadius: 20,
-    borderWidth: 1.5,
     padding: 16,
-    gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
+    gap: 0,
+    marginTop: 14,
   },
   scheduleHeroTopRow: {
     flexDirection: 'row',
@@ -2195,213 +2096,145 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 8,
   },
-  scheduleHeroBadge: {
+  scheduleHeroEyebrow: {
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: LOBBY.gold,
+  },
+  scheduleHeroLivePill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4.5,
-    borderRadius: 8,
-    borderWidth: 1,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: LOBBY.gold,
   },
-  scheduleHeroBadgeText: {
-    fontSize: 10.5,
-    fontWeight: '800',
-    letterSpacing: 0.7,
-  },
-  scheduleHeroTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    lineHeight: 24,
-    letterSpacing: -0.2,
-  },
-  scheduleHeroMetaGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  scheduleMetaPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  scheduleMetaPillText: {
+  scheduleHeroLiveText: {
     fontSize: 12,
     fontWeight: '700',
+    color: LOBBY.maroon,
   },
-  scheduleTimingPill: {
+  scheduleHeroDate: {
+    fontSize: 30,
+    lineHeight: 35,
+    fontWeight: '700',
+    color: LOBBY.onMaroon,
+    marginTop: 10,
+    marginBottom: 2,
+  },
+  scheduleHeroTimeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 9,
-    flexBasis: '46%',
-    flexGrow: 1,
-    minWidth: 132,
-    paddingHorizontal: 11,
-    paddingVertical: 9,
-    borderRadius: 12,
-    borderWidth: 1.5,
+    gap: 7,
+    minHeight: 24,
   },
-  scheduleTimingCopy: {
-    flex: 1,
+  scheduleHeroTimeText: {
+    flexShrink: 1,
+    fontSize: 16,
+    fontWeight: '600',
+    color: LOBBY.onMaroon,
   },
-  scheduleTimingLabel: {
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.6,
-  },
-  scheduleTimingValue: {
-    marginTop: 2,
-    fontSize: 13,
-    fontWeight: '800',
-  },
-
-  // EXAMINATION LOBBY ACCESS PASS CARD
-  accessPassCard: {
-    borderRadius: 22,
-    borderWidth: 1,
-    padding: 18,
-    gap: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    elevation: 2,
-  },
-  depositTopRow: {
+  scheduleHeroChipsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginTop: 14,
   },
-  depositTagBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4.5,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  depositTagText: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.6,
-  },
-  depositLiveBadge: {
+  scheduleHeroChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+  },
+  scheduleHeroChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: LOBBY.onMaroon,
+  },
+
+  // EXAMINATION ACCESS PASS CARD
+  accessPassCard: {
+    backgroundColor: LOBBY.card,
+    borderColor: LOBBY.border,
+    borderRadius: 20,
     borderWidth: 1,
+    padding: 14,
+    gap: 12,
+    marginTop: 12,
   },
-  depositLiveDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+  passHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    flexWrap: 'wrap',
   },
-  depositLiveText: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.4,
+  passHeaderTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: LOBBY.ink,
+    flexShrink: 1,
+  },
+  passHeaderHint: {
+    fontSize: 13,
+    color: LOBBY.muted,
+    fontWeight: '500',
   },
   qrWhiteFrame: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
+    borderRadius: 18,
     padding: 14,
+    alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
+    borderColor: LOBBY.border,
   },
-  heroCodeSection: {
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 4,
+  qrHint: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: LOBBY.muted,
+    textAlign: 'center',
   },
-  heroCodeLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  heroCodeRow: {
+  accessCodeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 14,
+    gap: 10,
+    marginTop: 2,
   },
-  heroCodeValue: {
-    fontSize: 34,
-    fontWeight: '900',
-    letterSpacing: 6,
+  accessCodeValue: {
+    flexShrink: 1,
+    fontSize: 30,
+    fontWeight: '700',
+    letterSpacing: 3,
+    color: LOBBY.maroon,
   },
-  codeActionButtonsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  accessCodeHint: {
+    fontSize: 13,
+    color: LOBBY.muted,
+    textAlign: 'center',
   },
   codeSquareBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-  },
-  depositDetailsTable: {
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderWidth: 1,
-  },
-  depositDetailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  depositDetailLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  depositDetailVal: {
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  depositDetailDivider: {
-    height: 1,
-  },
-  cardInlineActionsRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  cardActionPill: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 7,
-    backgroundColor: 'rgba(0,0,0,0.28)',
-    paddingVertical: 11,
+    width: 42,
+    height: 42,
     borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: LOBBY.softFill,
   },
-  cardActionPillText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  depositActionsRow: {
+  passActionsRow: {
     flexDirection: 'row',
     gap: 10,
     marginTop: 4,
   },
-  depositOutlineBtn: {
+  passActionBtn: {
     flex: 1,
-    borderRadius: 14,
-  },
-  depositSolidBtn: {
-    flex: 1.3,
     borderRadius: 14,
   },
 
@@ -2629,8 +2462,8 @@ const styles = StyleSheet.create({
   },
 
   lobbySkeleton: { padding: 20, gap: 12 },
-  list: { padding: 20, gap: 10, paddingBottom: 40 },
-  headerBlock: { gap: 14, marginBottom: 8 },
+  list: { padding: 14, gap: 0, paddingBottom: 40 },
+  headerBlock: { gap: 0, marginBottom: 8 },
   examHead: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
   examName: { fontSize: 18, fontWeight: '700', color: colors.ink, marginBottom: 8 },
   line: { fontSize: 13, color: colors.inkSecondary, marginBottom: 4, fontWeight: '500' },
@@ -2682,24 +2515,24 @@ const styles = StyleSheet.create({
   liveIndicator: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   liveDot: { width: 6, height: 6, borderRadius: 3 },
   liveText: { fontSize: 9, fontWeight: '900', color: colors.success },
-  monitorTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: colors.ink,
-    marginBottom: 8,
+  timerCard: {
+    backgroundColor: LOBBY.card,
+    borderColor: LOBBY.border,
+    borderWidth: 1,
+    borderRadius: 20,
+    marginTop: 12,
+    gap: 4,
   },
-  monitorTimer: {
-    fontSize: 36,
-    fontWeight: '800',
-    color: colors.primary,
-    fontVariant: ['tabular-nums'],
-    marginBottom: 2,
-  },
-  monitorLine: {
-    fontSize: 14,
-    color: colors.inkSecondary,
+  timerCardTitle: {
+    fontSize: 13,
     fontWeight: '600',
-    marginBottom: 4,
+    color: LOBBY.muted,
+  },
+  timerCardValue: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: LOBBY.maroon,
+    fontVariant: ['tabular-nums'],
   },
   endedBanner: {
     flexDirection: 'row',
@@ -2867,131 +2700,186 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  // NEW MONITORING SECTION STYLES
+  // MONITORING — equal-width 2×2 tiles + selected-status roster
   monitoringSection: {
-    marginTop: 18,
-    marginBottom: 16,
+    backgroundColor: LOBBY.card,
+    borderColor: LOBBY.border,
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 14,
+    marginTop: 12,
   },
   monitoringHeaderRow: {
-    marginBottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  monitoringSectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: LOBBY.ink,
+  },
+  monitoringSectionSubtitle: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: LOBBY.muted,
+    flexShrink: 1,
   },
   statusCardsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
-    paddingVertical: 6,
-    paddingHorizontal: 2,
+    marginTop: 12,
   },
   statusCard: {
+    // Equal-width columns that always wrap 2-up
+    flexBasis: '46%',
+    flexGrow: 1,
+    minWidth: 132,
     borderRadius: 16,
-    minHeight: 132,
-    paddingVertical: 13,
-    paddingHorizontal: 14,
+    borderWidth: 1,
+    padding: 12,
     alignItems: 'flex-start',
     justifyContent: 'flex-start',
-    gap: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 2,
     position: 'relative',
   },
-  cardChevronWrap: {
+  statusCardOutline: {
     position: 'absolute',
-    top: 8,
-    right: 8,
-  },
-  cardIconBadge: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 2,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 16,
+    borderWidth: 3,
   },
   cardCountText: {
-    fontSize: 20,
-    fontWeight: '800',
-    lineHeight: 26,
+    fontSize: 28,
+    lineHeight: 31,
+    fontWeight: '700',
+    marginTop: 8,
   },
   cardLabelText: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '700',
   },
   cardSubtitleText: {
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: '500',
+    opacity: 0.85,
   },
-  categoryPanel: {
-    marginTop: 12,
-    borderRadius: 18,
-    borderWidth: 1,
-    padding: 14,
-    gap: 12,
+  statusListBlock: {
+    marginTop: 16,
+    gap: 2,
   },
-  categoryPanelHeader: {
+  statusListHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(150,150,150,0.15)',
-  },
-  categoryPanelHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 10,
-    flex: 1,
+    flexWrap: 'wrap',
+    paddingBottom: 6,
   },
-  categoryPanelIconBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  categoryPanelTitle: {
+  statusListTitle: {
     fontSize: 15,
-    fontWeight: '800',
+    fontWeight: '700',
   },
-  categoryPanelSubtitle: {
-    fontSize: 11,
-    fontWeight: '500',
-    marginTop: 1,
-  },
-  categoryPanelCountBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-  },
-  categoryPanelCountText: {
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  categoryPanelCloseBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  categoryPanelList: {
-    gap: 8,
-  },
-  emptyCategoryBlock: {
-    paddingVertical: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emptyCategoryText: {
+  statusListMeta: {
     fontSize: 13,
     fontWeight: '500',
-    textAlign: 'center',
+    color: LOBBY.muted,
+    flexShrink: 1,
   },
-  emptyRosterCard: {
-    paddingVertical: 20,
+  statusListEmpty: {
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '500',
+    color: LOBBY.muted,
+    paddingVertical: 14,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    minHeight: 58,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: LOBBY.divider,
+  },
+  statusRowAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  statusRowAvatarText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  statusRowInfo: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
+  },
+  statusRowName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: LOBBY.ink,
+  },
+  statusRowId: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: LOBBY.muted,
+  },
+  statusRowPill: {
+    maxWidth: '46%',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  statusRowPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  // CLOSE LOBBY — single outlined danger button
+  closeLobbyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    width: '100%',
+    minHeight: 52,
+    marginTop: 14,
+    borderRadius: 16,
+    backgroundColor: LOBBY.card,
+    borderWidth: 2,
+    borderColor: LOBBY.danger,
+  },
+  closeLobbyBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: LOBBY.danger,
+    textAlign: 'center',
+  },
+
+  // Student detail sheet — attendance marker
+  attendanceToggle: {
+    minHeight: 46,
+    paddingHorizontal: 14,
+    justifyContent: 'center',
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  attendanceToggleInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  attendanceToggleText: {
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

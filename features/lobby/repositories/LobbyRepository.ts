@@ -773,6 +773,19 @@ export const LobbyRepository = {
     if (!code) throw new Error('Missing examination code. Scan QR again.');
 
     if (await PeerExamClient.isActive()) {
+      const health = await PeerExamClient.probeHealth();
+      if (health === 'unreachable') {
+        throw new Error(
+          'Cannot reach the proctor, check you are on the same WiFi. The WiFi may block device-to-device connections.',
+        );
+      }
+      if (health === 'ended') {
+        throw new Error('This examination has ended. Ask the proctor to reopen the room.');
+      }
+      if (health === 'idle') {
+        throw new Error('No examination is open on the proctor phone.');
+      }
+
       const response = await PeerExamClient.request<{
         classification?: 'valid' | 'wrong_schedule' | 'already_completed' | 'already_in_lobby';
         message?: string;
@@ -816,7 +829,7 @@ export const LobbyRepository = {
         console.debug('[LobbyRepository.validatePasskey] peer response', { classification: response.classification, hasStudent: Boolean(response.student), schedule: response.schedule });
       }
       if (!response.student) {
-        throw new Error(response.message || 'Invalid examination key.');
+        throw new Error(response.message || 'Key not found.');
       }
       return {
         classification: 'valid',

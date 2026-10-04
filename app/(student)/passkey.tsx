@@ -166,7 +166,7 @@ export default function StudentPasskeyScreen() {
         },
       } as any);
     } catch (err) {
-      setError(userFacingError(err, 'Invalid examination key. Please check and try again.'));
+      setError(userFacingError(err, 'Unable to validate the examination key. Please try again.'));
     }
   });
 

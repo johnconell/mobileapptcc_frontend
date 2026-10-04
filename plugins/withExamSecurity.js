@@ -187,6 +187,15 @@ class ExamKioskModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun startExamHostService(promise: Promise) {
+        startExamService(false, promise)
+    }
+
+    @ReactMethod
+    fun startStudentExamService(promise: Promise) {
+        startExamService(true, promise)
+    }
+
+    private fun startExamService(studentSession: Boolean, promise: Promise) {
         try {
             val activity = reactContext.currentActivity
             if (Build.VERSION.SDK_INT >= 33 && activity != null &&
@@ -194,6 +203,7 @@ class ExamKioskModule(private val reactContext: ReactApplicationContext) :
                 activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9778)
             }
             val intent = Intent(reactContext, ExamHostForegroundService::class.java)
+                .putExtra(ExamHostForegroundService.EXTRA_STUDENT_SESSION, studentSession)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 reactContext.startForegroundService(intent)
             } else {
@@ -303,7 +313,7 @@ class ExamHostForegroundService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        showOngoingNotification()
+        showOngoingNotification(intent?.getBooleanExtra(EXTRA_STUDENT_SESSION, false) == true)
         return START_STICKY
     }
 
@@ -322,7 +332,7 @@ class ExamHostForegroundService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    private fun showOngoingNotification() {
+    private fun showOngoingNotification(isStudentSession: Boolean = false) {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
         val pendingIntent = launchIntent?.let {
             PendingIntent.getActivity(
@@ -340,7 +350,10 @@ class ExamHostForegroundService : Service() {
         val notification = builder
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle(applicationInfo.loadLabel(packageManager))
-            .setContentText("Examination room is active. Stay connected to exam Wi-Fi.")
+            .setContentText(
+                if (isStudentSession) "Exam active. Answers are saved on this phone."
+                else "Room is active. Stay connected to exam Wi-Fi."
+            )
             .setCategory(Notification.CATEGORY_SERVICE)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -360,6 +373,7 @@ class ExamHostForegroundService : Service() {
 
     companion object {
         const val ACTION_STOP = "edu.tcc.entranceexam.STOP_EXAM_HOST"
+        const val EXTRA_STUDENT_SESSION = "student_exam_session"
         private const val CHANNEL_ID = "exam_room_host"
         private const val NOTIFICATION_ID = 9777
     }

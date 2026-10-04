@@ -1,7 +1,7 @@
 import '../global.css';
 
-import React, { useEffect } from 'react';
-import { AppState } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { Alert, AppState, Platform } from 'react-native';
 import { Stack, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
@@ -18,6 +18,7 @@ import { hydrateApiBaseUrl } from '@/shared/services/api';
 import { useSettingsStore } from '@/features/settings/stores/settingsStore';
 import { colors } from '@/shared/theme';
 import { startNetworkMonitoring } from '@/features/monitoring/services/networkMonitor';
+import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
@@ -25,6 +26,7 @@ const EXAM_FLOW_KEEP_AWAKE_TAG = 'tcc-exam-flow-root';
 
 /** Keep the display awake across navigation for the complete live exam flow. */
 function ExamFlowKeepAwake() {
+  const batteryPromptShown = useRef(false);
   const segments = useSegments() as readonly string[];
   const group = segments[0];
   const screen = segments[1];
@@ -49,18 +51,47 @@ function ExamFlowKeepAwake() {
       void activate();
     } else {
       deactivateKeepAwake(EXAM_FLOW_KEEP_AWAKE_TAG);
+      batteryPromptShown.current = false;
+    }
+    if (enabled && Platform.OS === 'android' && !batteryPromptShown.current) {
+      batteryPromptShown.current = true;
+      void ExamSecurityService.isIgnoringBatteryOptimizations().then((isExempt) => {
+        if (disposed || isExempt) return;
+        Alert.alert(
+          'Allow reliable exam sessions',
+          'Android battery optimization can stop the exam connection in the background. Allow unrestricted battery use for this app so the proctor room or your exam can reconnect reliably.',
+          [
+            { text: 'Not now', style: 'cancel' },
+            {
+              text: 'Open battery settings',
+              onPress: () => void ExamSecurityService.requestBatteryOptimizationExemption(),
+            },
+          ],
+        );
+      });
+    }
+    if (isStudentExamFlow && Platform.OS === 'android') {
+      void ExamSecurityService.startStudentExamKeepAlive();
     }
 
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active' && enabled) void activate();
+      if (state === 'active' && enabled) {
+        void activate();
+        if (isStudentExamFlow && Platform.OS === 'android') {
+          void ExamSecurityService.startStudentExamKeepAlive();
+        }
+      }
     });
 
     return () => {
       disposed = true;
       subscription.remove();
       deactivateKeepAwake(EXAM_FLOW_KEEP_AWAKE_TAG);
+      if (isStudentExamFlow && Platform.OS === 'android') {
+        void ExamSecurityService.stopStudentExamKeepAlive();
+      }
     };
-  }, [enabled]);
+  }, [enabled, isStudentExamFlow]);
 
   return null;
 }

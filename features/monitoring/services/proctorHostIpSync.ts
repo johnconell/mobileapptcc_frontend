@@ -14,6 +14,7 @@ let intervalId: ReturnType<typeof setInterval> | null = null;
 let options: SyncOptions = {};
 let lastSyncedIp: string | null = null;
 let syncing = false;
+let refreshQueued = false;
 
 async function readWifiSsid(): Promise<string | null> {
   try {
@@ -33,14 +34,28 @@ async function readWifiSsid(): Promise<string | null> {
  * so examinees can resolve the current host after a Wi‑Fi / DHCP change.
  */
 export async function syncProctorHostIp(force = false): Promise<string | null> {
-  if (syncing) return lastSyncedIp;
+  if (syncing) {
+    if (force) refreshQueued = true;
+    return lastSyncedIp;
+  }
   const info = PeerExamServer.info();
   if (!info.running && !options.examSessionId) return null;
 
   syncing = true;
   try {
-    const ip = (await PeerExamServer.refreshHostIp()) ?? info.host;
-    if (!ip || ip === '0.0.0.0') return lastSyncedIp;
+    const ip = await PeerExamServer.refreshHostIp();
+    if (__DEV__) {
+      console.log('[PROCTOR NETWORK] refresh result', {
+        previousIp: info.host,
+        currentIp: ip,
+        force,
+      });
+    }
+    if (!ip || ip === '0.0.0.0') {
+      lastSyncedIp = null;
+      options.onHostChanged?.(null);
+      return null;
+    }
 
     const changed = force || ip !== lastSyncedIp;
     if (changed) {
@@ -71,6 +86,12 @@ export async function syncProctorHostIp(force = false): Promise<string | null> {
     return ip;
   } finally {
     syncing = false;
+    if (refreshQueued) {
+      refreshQueued = false;
+      setTimeout(() => {
+        void syncProctorHostIp(true);
+      }, 0);
+    }
   }
 }
 
@@ -119,4 +140,5 @@ export function stopProctorHostIpSync(): void {
     intervalId = null;
   }
   options = {};
+  refreshQueued = false;
 }

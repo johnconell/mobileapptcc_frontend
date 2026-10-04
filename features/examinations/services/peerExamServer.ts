@@ -121,7 +121,6 @@ type PeerSessionState = {
   violations: PeerViolation[];
   violationSeq: number;
   wifiSsid?: string | null;
-  hostIp?: string | null;
   startSeq: number;
 };
 
@@ -743,6 +742,12 @@ function registerRoutes(mod: HttpServerModule) {
   });
 
   mod.route(p('/passkey'), 'POST', async (request) => {
+    if (__DEV__) {
+      console.log('[PEER SERVER] passkey request reached proctor', {
+        hostIp,
+        port: PEER_PORT,
+      });
+    }
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
     const passkey = String(body.passkey ?? '').trim().toUpperCase();
@@ -753,11 +758,11 @@ function registerRoutes(mod: HttpServerModule) {
       passkey,
       session.scheduleId,
     );
-    if (!validated) return fail(404, 'Invalid examination key for this examination.');
+    if (!validated) return fail(404, 'Key not found.');
     if (validated.classification === 'wrong_schedule') {
       return ok({
         classification: 'wrong_schedule',
-        message: validated.message || 'This examination key belongs to a different schedule.',
+        message: validated.message || 'Key not valid for this schedule/date.',
         schedule: validated.schedule,
       });
     }
@@ -1577,6 +1582,7 @@ export const PeerExamServer = {
       const saved = await OfflineStore.getPeerSession<PeerSessionState>();
       if (!saved) return false;
       session = saved;
+      delete (session as PeerSessionState & { hostIp?: string | null }).hostIp;
       session.startSeq = Number(session.startSeq ?? (session.status === 'in_progress' ? 1 : 0));
       try {
         const pack = await OfflineStore.getPack();
@@ -1677,6 +1683,15 @@ export const PeerExamServer = {
 
     const lan = await resolveWifiLanIp();
     hostIp = lan.ip;
+    if (__DEV__) {
+      console.log('[PROCTOR NETWORK] server opened', {
+        currentIp: hostIp,
+        qrIp: hostIp,
+        port: PEER_PORT,
+        wifi: lan.isWifi,
+        cellularLikely: lan.cellularLikely,
+      });
+    }
     const netState = await Network.getNetworkStateAsync();
     const wifiSsid = netState.type === Network.NetworkStateType.WIFI ? (netState as any).ssid : null;
 
@@ -1940,10 +1955,25 @@ export const PeerExamServer = {
 
   async refreshHostIp(): Promise<string | null> {
     const ip = await resolveHostIp();
-    if (ip) {
+    const previousHost = hostIp;
+    if (ip !== previousHost) {
       hostIp = ip;
+
+      if (ip && running) {
+        const mod = loadHttpServer();
+        if (!mod) {
+          throw new Error('The local examination server is unavailable.');
+        }
+        mod.stop();
+        running = false;
+        routesRegistered = false;
+        mod.setup(PEER_PORT);
+        registerRoutes(mod);
+        mod.start();
+        running = true;
+      }
+
       if (session) {
-        session.hostIp = ip;
         try {
           const netState = await Network.getNetworkStateAsync();
           session.wifiSsid =
@@ -1951,12 +1981,22 @@ export const PeerExamServer = {
               ? ((netState as { ssid?: string | null }).ssid ?? session.wifiSsid)
               : session.wifiSsid;
         } catch {
-          // keep previous SSID
+          // Keep the last known SSID; the host address is always read fresh.
         }
         await persist();
       }
+
       invalidateSnapshot();
       notify();
+      if (__DEV__) {
+        console.log('[PROCTOR NETWORK] host address refreshed', {
+          previousIp: previousHost,
+          currentIp: ip,
+          qrIp: ip,
+          serverRunning: running,
+          port: PEER_PORT,
+        });
+      }
     }
     return ip;
   },

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proctor lobby</title>
+<style>
+:root{--bg:#FAF7F2;--card:#FFFDF8;--line:#E6DCCB;--maroon:#7B1C2B;--gold:#F3D58A;--ink:#2B1A1A;--mute:#7A6A63;--red:#A32D2D}
+*{box-sizing:border-box}
+body{margin:0;background:#EFE9DF;font-family:Roboto,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);line-height:1.4}
+.app{max-width:430px;margin:0 auto;min-height:100vh;background:var(--bg);padding:16px 14px 28px}
+.i{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+button{font:inherit;cursor:pointer;color:inherit}
+button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+.top{display:flex;align-items:center;gap:10px}
+.ib{width:42px;height:42px;border-radius:50%;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;padding:0}
+.ttl{flex:1;text-align:center;min-width:0}
+.ttl b{display:block;font-size:17px;font-weight:700}
+.ttl span{font-size:13px;color:var(--mute)}
+.sched{background:var(--maroon);color:#FFF6E5;border-radius:20px;padding:16px;margin-top:14px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.lab{font-size:13px;font-weight:700;color:var(--gold)}
+.live{display:inline-flex;align-items:center;gap:6px;background:var(--gold);color:#4A1B0C;border-radius:999px;padding:4px 11px;font-size:12px;font-weight:700}
+.live .i{width:15px;height:15px}
+.date{font-size:30px;font-weight:700;line-height:1.15;margin:8px 0 2px}
+.time{display:flex;align-items:center;gap:7px;font-size:16px}
+.time .i{color:var(--gold)}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:14px}
+.chip{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.14);border-radius:999px;padding:6px 12px;font-size:13px}
+.chip .i{width:15px;height:15px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:14px;margin-top:12px}
+.h{font-size:15px;font-weight:700}
+.sub{font-size:13px;color:var(--mute)}
+.qrbox{background:#fff;border:1px solid var(--line);border-radius:18px;padding:14px;margin:12px auto 0;width:100%;max-width:340px;aspect-ratio:1/1}
+.qrbox svg{display:block;width:100%;height:100%}
+.hint{text-align:center;font-size:13px;color:var(--mute);margin:10px 0 0}
+.code{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px}
+.code b{font-size:30px;letter-spacing:.1em;color:var(--maroon);font-weight:700}
+.sq{width:42px;height:42px;border-radius:12px;background:#F3ECE0;border:0;color:var(--maroon);display:flex;align-items:center;justify-content:center;padding:0}
+.btns{display:flex;gap:10px;margin-top:14px}
+.bt{flex:1;height:48px;border-radius:14px;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:7px}
+.out{background:var(--card);border:1.5px solid #D9C9B4;color:var(--maroon)}
+.fill{background:var(--maroon);border:0;color:#FFF6E5}
+.tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}
+.tl{text-align:left;border-radius:16px;border:1px solid var(--line);padding:12px;display:flex;flex-direction:column;gap:2px;outline:3px solid transparent;outline-offset:-1px}
+.tl[aria-pressed=true]{outline-color:currentColor}
+.tl .n{font-size:28px;font-weight:700;line-height:1.1}
+.tl b{font-size:14px}
+.tl span{font-size:12px}
+.rw{display:flex;align-items:center;gap:11px;padding:10px 0;border-top:1px solid #EDE4D8}
+.av{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex:none}
+.rw div.nm{flex:1;min-width:0}
+.rw .nm b{display:block;font-size:14px}
+.rw .nm span{font-size:12px;color:var(--mute)}
+.pill{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;white-space:nowrap}
+.close{width:100%;height:52px;margin-top:14px;border-radius:16px;background:var(--card);border:2px solid var(--red);color:var(--red);font-size:16px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px}
+.cf{display:none;margin-top:10px;background:#FCEBEB;color:#791F1F;border-radius:16px;padding:12px;font-size:14px}
+.cf .btns{margin-top:10px}
+.cf .bt{height:42px;font-size:14px}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<symbol id="back" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></symbol>
+<symbol id="out" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
+<symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+<symbol id="wifi" viewBox="0 0 24 24"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01"/></symbol>
+<symbol id="pin" viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+<symbol id="users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.5-3.5 3-5.5 6.5-5.5s6 2 6.5 5.5M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14.8c2 .6 3.3 2.4 3.5 5"/></symbol>
+<symbol id="copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></symbol>
+<symbol id="share" viewBox="0 0 24 24"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="M8.2 10.8l7.6-4.6M8.2 13.2l7.6 4.6"/></symbol>
+<symbol id="refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.5-4M4 4v4h4M4 13a8 8 0 0 0 14.5 4M20 20v-4h-4"/></symbol>
+<symbol id="play" viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></symbol>
+<symbol id="ok" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></symbol>
+<symbol id="off" viewBox="0 0 24 24"><path d="M3 3l18 18M8.5 16a5 5 0 0 1 5.5-1M5 12.5a10 10 0 0 1 3-2M12 20h.01M19 12.5a10 10 0 0 0-5-2.7"/></symbol>
+<symbol id="door" viewBox="0 0 24 24"><path d="M13 12h8M18 8l3 4-3 4M14 4H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h8"/></symbol>
+</svg>
+
+<main class="app">
+<div class="top">
+<button class="ib" aria-label="Back"><svg class="i"><use href="#back"/></svg></button>
+<div class="ttl"><b>Entrance Examination</b><span>Proctor lobby</span></div>
+<button class="ib" style="color:var(--maroon)" aria-label="Log out"><svg class="i"><use href="#out"/></svg></button>
+</div>
+
+<section class="sched" aria-label="Current schedule">
+<div class="row"><span class="lab">Current schedule</span><span class="live"><svg class="i"><use href="#wifi"/></svg>LAN live</span></div>
+<div class="date">Sep 28, 2026</div>
+<div class="time"><svg class="i"><use href="#clock"/></svg>Standard session</div>
+<div class="chips">
+<span class="chip"><svg class="i"><use href="#pin"/></svg>Room 01 · Batch 2</span>
+<span class="chip"><svg class="i"><use href="#users"/></svg>18 candidates</span>
+<span class="chip"><svg class="i"><use href="#wifi"/></svg>IP 192.168.1.5</span>
+</div>
+</section>
+
+<section class="card" aria-label="Examination access pass">
+<div class="row"><span class="h">Examination access pass</span><span class="sub">Students scan this</span></div>
+<div class="qrbox" id="qr" role="img" aria-label="Room QR code"></div>
+<p class="hint">Hold steady. Students scan the QR with their device to enter.</p>
+<div class="code"><b>92JB9Y6U</b>
+<button class="sq" aria-label="Copy code"><svg class="i"><use href="#copy"/></svg></button>
+<button class="sq" aria-label="Share code"><svg class="i"><use href="#share"/></svg></button>
+</div>
+<p class="hint" style="margin-top:4px">Room access code</p>
+<div class="btns">
+<button class="bt out"><svg class="i"><use href="#refresh"/></svg>Regenerate QR</button>
+<button class="bt fill"><svg class="i"><use href="#play"/></svg>Start exam</button>
+</div>
+</section>
+
+<section class="card" aria-label="Monitoring">
+<div class="row"><span class="h">Monitoring</span><span class="sub">Tap a status to see students</span></div>
+<div class="tiles">
+<button class="tl" data-k="waiting" style="background:#FAEEDA;color:#633806"><svg class="i"><use href="#clock"/></svg><span class="n">4</span><b>Waiting</b><span>In lobby</span></button>
+<button class="tl" data-k="answering" style="background:#E6F1FB;color:#0C447C" aria-pressed="true"><svg class="i"><use href="#play"/></svg><span class="n">6</span><b>Answering</b><span>Taking exam</span></button>
+<button class="tl" data-k="submitted" style="background:#EAF3DE;color:#27500A"><svg class="i"><use href="#ok"/></svg><span class="n">5</span><b>Submitted</b><span>Completed</span></button>
+<button class="tl" data-k="disconnected" style="background:#FCEBEB;color:#791F1F"><svg class="i"><use href="#off"/></svg><span class="n">3</span><b>Disconnected</b><span>Offline</span></button>
+</div>
+<div class="row" style="margin-top:16px"><span class="h" id="lt"></span><span class="sub" id="lc"></span></div>
+<div id="lst" style="margin-top:4px"></div>
+</section>
+
+<button class="close" id="cl"><svg class="i"><use href="#door"/></svg>Close lobby</button>
+<div class="cf" id="cf">
+<div>Close this lobby? New students won't be able to join with this QR or code.</div>
+<div class="btns">
+<button class="bt out" id="no" style="color:var(--ink)">Cancel</button>
+<button class="bt fill" id="yes" style="background:var(--red)">Close lobby</button>
+</div>
+</div>
+</main>
+
+<script>
+/* Placeholder QR for the mockup. Replace #qr with your real QR component (keep the big size). */
+(function(){
+var n=25,s='<svg viewBox="0 0 '+n+' '+n+'" shape-rendering="crispEdges">';
+function fd(x,y){return (x<7&&y<7)||(x>=n-7&&y<7)||(x<7&&y>=n-7)}
+for(var y=0;y<n;y++)for(var x=0;x<n;x++){var on;
+if(fd(x,y)){var a=x>=n-7?x-(n-7):x,b=y>=n-7?y-(n-7):y;on=(a==0||a==6||b==0||b==6||(a>=2&&a<=4&&b>=2&&b<=4))}
+else if((x<8&&y<8)||(x>=n-8&&y<8)||(x<8&&y>=n-8)){on=false}
+else on=((x*7+y*13+x*y)%5<2);
+if(on)s+='<rect x="'+x+'" y="'+y+'" width="1" height="1" fill="#2B1A1A"/>'}
+document.getElementById('qr').innerHTML=s+'</svg>';
+})();
+var C={waiting:['Waiting','#FAEEDA','#633806','Joined'],answering:['Answering','#E6F1FB','#0C447C','Progress'],submitted:['Submitted','#EAF3DE','#27500A','Submitted'],disconnected:['Disconnected','#FCEBEB','#791F1F','Last seen']};
+var D={
+waiting:[['Maria Santos','APP-0141','7:12 AM'],['Juan Dela Cruz','APP-0152','7:14 AM'],['Ana Reyes','APP-0163','7:15 AM'],['Paolo Garcia','APP-0170','7:16 AM']],
+answering:[['Carla Mendoza','APP-0118','Q 24 of 60'],['Mark Villanueva','APP-0124','Q 31 of 60'],['Jessa Ramos','APP-0129','Q 18 of 60'],['Ken Bautista','APP-0133','Q 27 of 60'],['Liza Cruz','APP-0137','Q 22 of 60'],['Noel Aquino','APP-0139','Q 29 of 60']],
+submitted:[['Rica Flores','APP-0101','8:02 AM'],['Dan Torres','APP-0105','8:10 AM'],['Gina Navarro','APP-0108','8:14 AM'],['Leo Castillo','APP-0112','8:21 AM'],['Faye Lim','APP-0115','8:25 AM']],
+disconnected:[['Rey Pascual','APP-0121','2 min ago'],['Ivy Tan','APP-0144','5 min ago'],['Jay Ocampo','APP-0158','8 min ago']]};
+function show(k){var c=C[k],d=D[k],h='';
+document.getElementById('lt').textContent=c[0];
+document.getElementById('lc').textContent=d.length+' students · '+c[3];
+d.forEach(function(r){var i=r[0].split(' ').map(function(w){return w[0]}).join('');
+h+='<div class="rw"><div class="av" style="background:'+c[1]+';color:'+c[2]+'">'+i+'</div><div class="nm"><b>'+r[0]+'</b><span>'+r[1]+'</span></div><span class="pill" style="background:'+c[1]+';color:'+c[2]+'">'+r[2]+'</span></div>'});
+document.getElementById('lst').innerHTML=h}
+document.querySelectorAll('.tl').forEach(function(t){t.onclick=function(){
+document.querySelectorAll('.tl').forEach(function(o){o.setAttribute('aria-pressed','false')});
+t.setAttribute('aria-pressed','true');show(t.dataset.k)}});
+show('answering');
+var cf=document.getElementById('cf');
+document.getElementById('cl').onclick=function(){cf.style.display='block'};
+document.getElementById('no').onclick=function(){cf.style.display='none'};
+document.getElementById('yes').onclick=function(){cf.innerHTML='<b>Lobby closed</b><div style="margin-top:2px">This QR and code no longer work. Regenerate to open a new lobby.</div>'};
+</script>
+</body>
+</html>

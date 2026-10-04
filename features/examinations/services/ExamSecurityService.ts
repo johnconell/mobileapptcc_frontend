@@ -20,6 +20,7 @@ type NativeKioskBridge = {
   isLocked?: () => Promise<boolean>;
   startExamHostService?: () => Promise<void>;
   stopExamHostService?: () => Promise<void>;
+  startStudentExamService?: () => Promise<void>;
   isIgnoringBatteryOptimizations?: () => Promise<boolean>;
   requestBatteryOptimizationExemption?: () => Promise<boolean>;
 };
@@ -102,6 +103,24 @@ export const ExamSecurityService = {
   },
 
   async stopExamHostKeepAlive(): Promise<void> {
+    if (Platform.OS !== 'android') return;
+    try {
+      await getNativeBridge()?.stopExamHostService?.();
+    } catch {
+      // A service that did not start needs no cleanup.
+    }
+  },
+
+  async startStudentExamKeepAlive(): Promise<void> {
+    if (Platform.OS !== 'android') return;
+    try {
+      await getNativeBridge()?.startStudentExamService?.();
+    } catch (err) {
+      console.warn('[STUDENT EXAM] Foreground service could not start:', err);
+    }
+  },
+
+  async stopStudentExamKeepAlive(): Promise<void> {
     if (Platform.OS !== 'android') return;
     try {
       await getNativeBridge()?.stopExamHostService?.();

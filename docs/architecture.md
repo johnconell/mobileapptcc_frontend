@@ -46,6 +46,16 @@ Applicant uses `features/examinations/services/peerExamClient.ts`.
 Pack persistence: `features/synchronization/services/offlineStore.ts` and
 `offlineExamRepository.ts`.
 
+The proctor resolves its private Wi-Fi address when opening/restoring a room and
+refreshes it on network-state events (with an 8-second fallback poll). An address
+change restarts the listener on port 9777, updates the live lobby snapshot/QR,
+and syncs the current session address for code-based discovery. The address is
+not retained in the local peer-session record. Peer QR JSON carries `h` (host),
+`p` (port), `c` (exam code), `s` (schedule), `r` (room), and `w` (Wi-Fi name).
+Applicants probe `/p2p/health` before validating a key; an unreachable host is
+reported as a connection/Wi-Fi issue, not as a rejected key. Direct peer joins
+do not require internet access.
+
 ## Setup
 
 ```bash

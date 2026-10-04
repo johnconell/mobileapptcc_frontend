@@ -33,6 +33,13 @@ export const PeerExamClient = {
     };
     cached = value;
     await appStorage.setItem(STORAGE_KEYS.peerTarget, JSON.stringify(value));
+    if (__DEV__) {
+      console.log('[PEER JOIN] QR target accepted', {
+        qrIp: value.host,
+        port: value.port,
+        baseUrl: baseUrl(value),
+      });
+    }
   },
 
   async getTarget(): Promise<PeerTarget | null> {
@@ -276,6 +283,12 @@ export const PeerExamClient = {
     const resolved = (target as PeerTarget | undefined) ?? (await this.getTarget());
     if (!resolved) return 'unreachable';
     try {
+      if (__DEV__) {
+        console.log('[PEER JOIN] health check', {
+          baseUrl: `${baseUrl(resolved)}/health`,
+          qrIp: resolved.host,
+        });
+      }
       const res = await withTimeout(
         (signal) =>
           fetch(`${baseUrl(resolved)}/health`, {
@@ -286,6 +299,13 @@ export const PeerExamClient = {
           }),
         4000,
       );
+      if (__DEV__) {
+        console.log('[PEER JOIN] health response', {
+          qrIp: resolved.host,
+          status: res.status,
+          ok: res.ok,
+        });
+      }
       if (!res.ok) return 'unreachable';
       const json = await res.json().catch(() => null);
       const data = json?.data ?? json;
@@ -294,7 +314,14 @@ export const PeerExamClient = {
       if (sessionStatus === 'ended' || status === 'ended') return 'ended';
       if (status === 'idle' || !sessionStatus || sessionStatus === 'null') return 'idle';
       return 'ready';
-    } catch {
+    } catch (err) {
+      if (__DEV__) {
+        console.warn('[PEER JOIN] health transport error', {
+          qrIp: resolved.host,
+          errorType: err instanceof Error ? err.name : typeof err,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       return 'unreachable';
     }
   },
@@ -329,7 +356,13 @@ export const PeerExamClient = {
 
     let res: Response;
     try {
-      if (__DEV__) console.log(`[LAN DEBUG] Sending request to ${baseUrl(target)}${path}`);
+      if (__DEV__) {
+        console.log('[PEER JOIN] sending request', {
+          baseUrl: `${baseUrl(target)}${path}`,
+          qrIp: target.host,
+          method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
+        });
+      }
 
       res = await withTimeout(
         (signal) =>
@@ -342,10 +375,26 @@ export const PeerExamClient = {
         options.timeoutMs ?? 5000, // Reduced default timeout for faster failure detection
       );
     } catch (err) {
-      if (__DEV__) console.error(`[LAN ERROR] Request failed: ${baseUrl(target)}${path}`, err);
+      if (__DEV__) {
+        console.error('[PEER JOIN] transport failure', {
+          baseUrl: `${baseUrl(target)}${path}`,
+          qrIp: target.host,
+          errorType: err instanceof Error ? err.name : typeof err,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       throw new Error(
-        `Lost connection to the proctor phone (${target.host}). Make sure you are on the same Wi‑Fi as the proctor, then try again. If the proctor just changed networks, tap Reconnect.`,
+        'Cannot reach the proctor, check you are on the same WiFi. The WiFi may block device-to-device connections.',
       );
+    }
+
+    if (__DEV__) {
+      console.log('[PEER JOIN] HTTP response', {
+        baseUrl: `${baseUrl(target)}${path}`,
+        qrIp: target.host,
+        status: res.status,
+        errorType: res.ok ? null : 'HttpError',
+      });
     }
 
     const text = await res.text();
@@ -372,7 +421,14 @@ export const PeerExamClient = {
       (!json || !text ? '' : `Request rejected (${res.status})`);
     const msg = classifyPeerStartupError(rawMessage, path);
     if (__DEV__) {
-      console.error(`[LAN ERROR] ${path} status=${res.status} body=${(text || '').slice(0, 180)} mapped=${msg}`);
+      console.error('[PEER JOIN] HTTP error response', {
+        baseUrl: `${baseUrl(target)}${path}`,
+        qrIp: target.host,
+        status: res.status,
+        errorType: 'HttpError',
+        body: (text || '').slice(0, 180),
+        mapped: msg,
+      });
     }
     throw new Error(msg);
   },
