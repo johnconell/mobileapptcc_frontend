@@ -21,6 +21,7 @@ import android.view.View
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -226,6 +227,19 @@ class ExamKioskModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun getExamHostServiceStatus(promise: Promise) {
+        try {
+            promise.resolve(Arguments.createMap().apply {
+                putBoolean("running", ExamHostForegroundService.isRunning)
+                putBoolean("partialWakeLockHeld", ExamHostForegroundService.isWakeLockHeld)
+                putBoolean("wifiLockHeld", ExamHostForegroundService.isWifiLockHeld)
+            })
+        } catch (e: Exception) {
+            promise.reject("EXAM_HOST_SERVICE_STATUS", e)
+        }
+    }
+
+    @ReactMethod
     fun isIgnoringBatteryOptimizations(promise: Promise) {
         try {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
@@ -294,10 +308,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.util.Log
 
 /** Keeps the proctor LAN host process foreground-prioritized during a room. */
 class ExamHostForegroundService : Service() {
@@ -305,10 +323,13 @@ class ExamHostForegroundService : Service() {
         super.onCreate()
         createNotificationChannel()
         showOngoingNotification()
+        acquireKeepAliveLocks()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            releaseKeepAliveLocks()
+            isRunning = false
             stopForeground(true)
             stopSelf()
             return START_NOT_STICKY
@@ -318,6 +339,65 @@ class ExamHostForegroundService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        releaseKeepAliveLocks()
+        isRunning = false
+        super.onDestroy()
+    }
+
+    private fun acquireKeepAliveLocks() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$packageName:ExamHostCpu"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            isWakeLockHeld = wakeLock?.isHeld == true
+        } catch (error: Exception) {
+            isWakeLockHeld = false
+            Log.w(TAG, "Could not acquire exam-host partial wake lock", error)
+        }
+
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            wifiLock = wifiManager.createWifiLock(
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                "$packageName:ExamHostWifi"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            isWifiLockHeld = wifiLock?.isHeld == true
+        } catch (error: Exception) {
+            isWifiLockHeld = false
+            Log.w(TAG, "Could not acquire exam-host Wi-Fi lock", error)
+        }
+
+        isRunning = true
+    }
+
+    private fun releaseKeepAliveLocks() {
+        try {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        } catch (error: Exception) {
+            Log.w(TAG, "Could not release exam-host partial wake lock", error)
+        } finally {
+            wakeLock = null
+            isWakeLockHeld = false
+        }
+        try {
+            if (wifiLock?.isHeld == true) wifiLock?.release()
+        } catch (error: Exception) {
+            Log.w(TAG, "Could not release exam-host Wi-Fi lock", error)
+        } finally {
+            wifiLock = null
+            isWifiLockHeld = false
+        }
+    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -372,11 +452,18 @@ class ExamHostForegroundService : Service() {
     }
 
     companion object {
+        private const val TAG = "ExamHostService"
         const val ACTION_STOP = "edu.tcc.entranceexam.STOP_EXAM_HOST"
         const val EXTRA_STUDENT_SESSION = "student_exam_session"
         private const val CHANNEL_ID = "exam_room_host"
         private const val NOTIFICATION_ID = 9777
+        @Volatile var isRunning = false
+        @Volatile var isWakeLockHeld = false
+        @Volatile var isWifiLockHeld = false
     }
+
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 }
 `;
 
@@ -420,6 +507,7 @@ function withExamSecurity(config) {
     // Permission to hide all non-system overlay windows (chat heads, floating apps)
     AndroidConfig.Permissions.addPermission(manifest, 'android.permission.HIDE_OVERLAY_WINDOWS');
     AndroidConfig.Permissions.addPermission(manifest, 'android.permission.WAKE_LOCK');
+    AndroidConfig.Permissions.addPermission(manifest, 'android.permission.ACCESS_WIFI_STATE');
     AndroidConfig.Permissions.addPermission(manifest, 'android.permission.FOREGROUND_SERVICE');
     AndroidConfig.Permissions.addPermission(manifest, 'android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE');
     AndroidConfig.Permissions.addPermission(manifest, 'android.permission.POST_NOTIFICATIONS');

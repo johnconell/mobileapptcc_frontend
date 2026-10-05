@@ -7,6 +7,7 @@ import {
 } from '@/features/synchronization/services/offlineExamRepository';
 import { OfflineStore, computePackHash, computePackHashAsync } from '@/features/synchronization/services/offlineStore';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
+import { classifyPeerReconnectError } from '@/features/examinations/services/peerReconnectErrors';
 import { parsePeerQr, PeerExamServer, resolveNumericScheduleId } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
 import { DeviceService } from '@/shared/services/DeviceService';
@@ -1437,6 +1438,7 @@ export const LobbyRepository = {
     startSeq?: number;
     remainingSeconds?: number;
     removed?: boolean;
+    sessionNotFound?: boolean;
     myStatus?: string;
   }> {
     // Peer LAN is the exam network. Never skip it because cloud is offline.
@@ -1447,6 +1449,18 @@ export const LobbyRepository = {
         const { ExamPreloader } = await import('@/features/examinations/services/examPreloader');
         const readiness = ExamPreloader.getProgress();
         const hash = (await ExamPreloader.getPreloadedHash()) || '';
+        const [deviceId, target] = await Promise.all([
+          DeviceService.getDeviceId().catch(() => ''),
+          PeerExamClient.getTarget(),
+        ]);
+        if (__DEV__) {
+          console.info('[RECONNECT TRACE] student heartbeat request', {
+            savedPeerHost: target?.host ?? null,
+            savedPeerPort: target?.port ?? null,
+            tokenPresent: Boolean(token),
+            deviceIdPresent: Boolean(deviceId),
+          });
+        }
         const pulse = await PeerExamClient.request<{
           status?: string;
           authorityStatus?: string;
@@ -1458,6 +1472,7 @@ export const LobbyRepository = {
           method: 'POST',
           body: {
             participation_token: token,
+            device_id: deviceId || undefined,
             download_percent: readiness.percent,
             hash_verified: readiness.hashVerified,
             module_ready: readiness.moduleReady,
@@ -1479,13 +1494,18 @@ export const LobbyRepository = {
         const msg = e instanceof Error ? e.message : 'Lost the proctor phone.';
         const isRemoved =
           msg.toLowerCase().includes('removed') ||
-          msg.toLowerCase().includes('terminated') ||
-          msg.toLowerCase().includes('no longer joined');
+          msg.toLowerCase().includes('terminated');
+        const sessionNotFound =
+          msg.toLowerCase().includes('no longer joined') ||
+          msg.toLowerCase().includes('session not found') ||
+          msg.toLowerCase().includes('no examination is open') ||
+          msg.toLowerCase().includes('invalid participation token');
         return {
           ok: false,
           removed: isRemoved,
           myStatus: isRemoved ? 'terminated' : undefined,
-          message: msg,
+          sessionNotFound,
+          message: classifyPeerReconnectError(msg),
         };
       }
     }
@@ -1508,30 +1528,34 @@ export const LobbyRepository = {
       const msg = e instanceof Error ? e.message : 'Heartbeat failed.';
       const isRemoved =
         msg.toLowerCase().includes('terminated') ||
-        msg.toLowerCase().includes('removed') ||
-        msg.toLowerCase().includes('invalid participation token');
+        msg.toLowerCase().includes('removed');
+      const lower = msg.toLowerCase();
+      const sessionNotFound =
+        lower.includes('invalid participation token') ||
+        lower.includes('session not found') ||
+        lower.includes('no longer joined') ||
+        lower.includes('no examination is open');
       return {
         ok: false,
         removed: isRemoved,
         myStatus: isRemoved ? 'terminated' : undefined,
-        message: msg,
+        sessionNotFound,
+        message: classifyPeerReconnectError(msg),
       };
     }
   },
 
-  async reportWifiDisconnect(): Promise<void> {
-    if (await OfflineStore.isOfflineMode()) return;
+  async reportWifiDisconnect(
+    reason: 'wifi_lost' | 'wrong_network' | 'proctor_network_change' = 'wifi_lost',
+    sessionId: string | null = null,
+  ): Promise<void> {
     const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
     if (!token) return;
-    try {
-      await apiRequest('/exam/wifi-disconnect', {
-        method: 'POST',
-        auth: false,
-        body: { participation_token: token },
-      });
-    } catch {
-      // Best-effort; local lock still applies.
-    }
+    const { recordStudentDisconnect, syncStudentDisconnects } = await import(
+      '@/features/monitoring/services/studentDisconnectAudit'
+    );
+    await recordStudentDisconnect(reason, token, sessionId);
+    await syncStudentDisconnects();
   },
 
   async reconnectWithCode(code: string): Promise<{ ok: boolean; message?: string }> {
@@ -1549,7 +1573,10 @@ export const LobbyRepository = {
             });
             return { ok: true };
         } catch (e) {
-            return { ok: false, message: e instanceof Error ? e.message : 'Reconnect failed.' };
+            return {
+              ok: false,
+              message: classifyPeerReconnectError(e instanceof Error ? e.message : 'Reconnect failed.'),
+            };
         }
     }
 
@@ -1566,7 +1593,7 @@ export const LobbyRepository = {
     } catch (e) {
       return {
         ok: false,
-        message: e instanceof Error ? e.message : 'Reconnect failed.',
+        message: classifyPeerReconnectError(e instanceof Error ? e.message : 'Reconnect failed.'),
       };
     }
   },

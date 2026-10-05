@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 import { isWifiConnected } from '@/features/monitoring/services/campusWifiGate';
 import * as Network from 'expo-network';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
+import { shouldOfferReconnectExit } from '@/features/monitoring/services/reconnectExitPolicy';
 
 export type WifiDisconnectReason =
   | 'wifi_lost'               // Wi-Fi turned off or disconnected entirely
@@ -53,6 +54,7 @@ export function useWifiExamGate({
   const [wifiConnected, setWifiConnected] = useState(true);
   const [disconnectReason, setDisconnectReason] = useState<WifiDisconnectReason | null>(null);
   const [graceSecondsRemaining, setGraceSecondsRemaining] = useState<number | null>(null);
+  const [reconnectFailed, setReconnectFailed] = useState(false);
   const wasConnected = useRef(true);
   const disconnectStartTime = useRef<number | null>(null);
   const graceExpiredRef = useRef(false);
@@ -100,6 +102,7 @@ export function useWifiExamGate({
       setWifiLocked(false);
       setDisconnectReason(null);
       setGraceSecondsRemaining(null);
+      setReconnectFailed(false);
       graceExpiredRef.current = false;
       wasConnected.current = true;
       disconnectStartTime.current = null;
@@ -115,6 +118,7 @@ export function useWifiExamGate({
       setRequiresPin(false);
       setDisconnectReason(null);
       setGraceSecondsRemaining(null);
+      setReconnectFailed(false);
       graceExpiredRef.current = false;
       wasConnected.current = true;
       disconnectStartTime.current = null;
@@ -217,6 +221,7 @@ export function useWifiExamGate({
         const elapsed = (Date.now() - disconnectStartTime.current) / 1000;
         const remaining = Math.max(0, Math.ceil(effectiveGraceSeconds - elapsed));
         setGraceSecondsRemaining(remaining);
+        setReconnectFailed(shouldOfferReconnectExit(elapsed * 1000));
 
         // Only wifi_lost and wrong_network escalate to PIN — proctor change does not.
         const escalatesPin = reason === 'wifi_lost' || reason === 'wrong_network';
@@ -238,6 +243,7 @@ export function useWifiExamGate({
           setWifiLocked(false);
           setDisconnectReason(null);
           setGraceSecondsRemaining(null);
+          setReconnectFailed(false);
           graceExpiredRef.current = false;
           wasConnected.current = true;
           disconnectStartTime.current = null;
@@ -265,6 +271,7 @@ export function useWifiExamGate({
     wifiConnected,
     disconnectReason,
     graceSecondsRemaining,
+    reconnectFailed,
     unlockAfterReconnect,
     setWifiLocked,
     setRequiresPin,

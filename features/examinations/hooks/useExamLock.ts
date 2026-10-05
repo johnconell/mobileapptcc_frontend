@@ -63,9 +63,9 @@ export function useExamLock({ enabled, onViolation }: UseExamLockOptions) {
     if (Platform.OS !== 'android' || !enabledRef.current) return;
     try {
       await startExamLock();
-      // Poll quickly (every 400ms for up to 8s) to detect immediately when student taps "GOT IT"
+      // Observe the system pinning prompt briefly; reconnect itself never waits on this poll.
       const start = Date.now();
-      while (Date.now() - start < 8000) {
+      while (Date.now() - start < 5000) {
         await new Promise((r) => setTimeout(r, 400));
         const locked = await isExamLocked().catch(() => false);
         if (locked) {
@@ -120,7 +120,7 @@ export function useExamLock({ enabled, onViolation }: UseExamLockOptions) {
 
         // Poll every 500ms for initial prompt confirmation
         const start = Date.now();
-        while (Date.now() - start < 8000) {
+        while (Date.now() - start < 5000) {
           if (cancelled) return;
           await new Promise((r) => setTimeout(r, 500));
           if (cancelled) return;
@@ -175,5 +175,13 @@ export function useExamLock({ enabled, onViolation }: UseExamLockOptions) {
     };
   }, [enabled, handleAppStateChange]);
 
-  return { isKioskActive, examLockError, requestLock };
+  const releaseLock = useCallback(async () => {
+    enabledRef.current = false;
+    wasEverLockedRef.current = false;
+    setIsKioskActive(false);
+    setExamLockError(null);
+    await stopExamLock().catch(() => undefined);
+  }, []);
+
+  return { isKioskActive, examLockError, requestLock, releaseLock };
 }

@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ScrollView, Modal, Pressable, Text, View, StyleSheet, Alert, Share, useWindowDimensions, Platform } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { AppState, BackHandler, ScrollView, Modal, Pressable as RNPressable, Text, View, StyleSheet, Alert, Share, useWindowDimensions, Platform, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { usePreventRemove } from '@react-navigation/native';
+import type { NavigationAction } from '@react-navigation/routers';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQueryClient } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
@@ -32,7 +34,6 @@ import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { colors } from '@/shared/theme';
 import type { LobbyStudent } from '@/shared/types';
 import { safeBack } from '@/shared/utils';
-import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
 import {
   // keep existing imports below — do not break the rest of this file
   Copy,
@@ -43,7 +44,6 @@ import {
   CheckCircle2,
   ShieldAlert,
   AlertTriangle,
-  LogOut,
   ArrowDownUp,
   ArrowLeft,
   RefreshCw,
@@ -63,6 +63,17 @@ import {
   MapPin,
   DoorOpen,
 } from 'lucide-react-native';
+
+type PressableBoxProps = Omit<PressableProps, 'style'> & { style?: StyleProp<ViewStyle> };
+
+function PressableBox({ android_ripple, ...props }: PressableBoxProps) {
+  return (
+    <RNPressable
+      {...props}
+      android_ripple={android_ripple ?? { color: 'rgba(0,0,0,0.06)' }}
+    />
+  );
+}
 
 function formatTime(iso: string | null | undefined) {
   if (!iso) return '—';
@@ -190,6 +201,7 @@ function initialsOf(student: { avatarInitials?: string | null; fullName?: string
 function ProctorLobbyContent() {
   useKeepAwake();
   const router = useRouter();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const queryClient = useQueryClient();
@@ -206,6 +218,8 @@ function ProctorLobbyContent() {
   const [busy, setBusy] = useState(false);
   const [startOpen, setStartOpen] = useState(false);
   const [endOpen, setEndOpen] = useState(false);
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [allowLeave, setAllowLeave] = useState(false);
   const [ready, setReady] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -215,8 +229,9 @@ function ProctorLobbyContent() {
   const knownStudentIds = useRef<Set<string>>(new Set());
   const knownStudentMeta = useRef<Map<string, LobbyStudent>>(new Map());
   const knownStudentStatus = useRef<Map<string, LobbyStudent['status']>>(new Map());
-  const batteryOptimizationPromptShown = useRef(false);
   const checkInReady = useRef(false);
+  const pendingLeaveActionRef = useRef<NavigationAction | null>(null);
+  const pendingLeaveContinuationRef = useRef<(() => void) | null>(null);
   const [notifications, setNotifications] = useState<
     Array<{ id: string; title: string; body: string; at: string; kind: 'connect' | 'disconnect' }>
   >([]);
@@ -228,6 +243,7 @@ function ProctorLobbyContent() {
   const [reconnectExpiresAt, setReconnectExpiresAt] = useState<string | null>(null);
   const [peerHost, setPeerHost] = useState<string | null>(null);
   const [hosting, setHosting] = useState(PeerExamServer.info());
+  const [batteryOptimizationExempt, setBatteryOptimizationExempt] = useState(true);
   const [serverLastHeartbeat, setServerLastHeartbeat] = useState<number>(Date.now());
   const [cloudCode, setCloudCode] = useState<string | null>(null);
   const [cloudQrValue, setCloudQrValue] = useState<string | null>(null);
@@ -452,31 +468,23 @@ function ProctorLobbyContent() {
   }, [sessionId, roomId, examSessionId, setSnapshot, queryClient]);
 
   useEffect(() => {
-    if (
-      Platform.OS !== 'android' ||
-      batteryOptimizationPromptShown.current ||
-      !ExamSecurityService.hasExamHostForegroundService()
-    ) {
+    let mounted = true;
+    if (Platform.OS !== 'android') {
+      setBatteryOptimizationExempt(true);
       return;
     }
-    let mounted = true;
-    void ExamSecurityService.isIgnoringBatteryOptimizations().then((isExempt) => {
-      if (!mounted || isExempt || batteryOptimizationPromptShown.current) return;
-      batteryOptimizationPromptShown.current = true;
-      Alert.alert(
-        'Keep the examination room connected',
-        'Android battery restrictions can pause the proctor phone and disconnect student devices. Allow TCC Entrance Exam to run without battery restrictions for this session.',
-        [
-          { text: 'Not now', style: 'cancel' },
-          {
-            text: 'Open battery settings',
-            onPress: () => void ExamSecurityService.requestBatteryOptimizationExemption(),
-          },
-        ],
-      );
+    const checkExemption = () => {
+      void ExamSecurityService.isIgnoringBatteryOptimizations().then((isExempt) => {
+        if (mounted) setBatteryOptimizationExempt(isExempt);
+      });
+    };
+    checkExemption();
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') checkExemption();
     });
     return () => {
       mounted = false;
+      appStateSub.remove();
     };
   }, []);
 
@@ -663,6 +671,53 @@ function ProctorLobbyContent() {
     router.replace('/(proctor)/(tabs)/examination');
   };
 
+  const requestLeave = () => {
+    if (!ready || openError || !lobby || lobby.status === 'ended') {
+      goBack();
+      return;
+    }
+    pendingLeaveActionRef.current = null;
+    setLeaveOpen(true);
+  };
+
+  usePreventRemove(
+    ready && !openError && Boolean(lobby) && lobby?.status !== 'ended' && !allowLeave,
+    ({ data }) => {
+      pendingLeaveActionRef.current = data.action;
+      setLeaveOpen(true);
+    },
+  );
+
+  useEffect(() => {
+    if (!allowLeave) return;
+    const continuation = pendingLeaveContinuationRef.current;
+    pendingLeaveContinuationRef.current = null;
+    continuation?.();
+  }, [allowLeave]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!ready || !lobby || lobby.status === 'ended') return false;
+      if (leaveOpen) {
+        setLeaveOpen(false);
+        pendingLeaveActionRef.current = null;
+        return true;
+      }
+      pendingLeaveActionRef.current = null;
+      setLeaveOpen(true);
+      return true;
+    });
+    return () => subscription.remove();
+  }, [ready, lobby?.status, leaveOpen]);
+
+  useEffect(() => {
+    if (lobby?.status === 'ended') {
+      setLeaveOpen(false);
+      setEndOpen(false);
+      pendingLeaveActionRef.current = null;
+    }
+  }, [lobby?.status]);
+
   // ─── Derived student lists (MUST be above every early-return) ─────────────
   // React requires hooks to run the same number of times on every render.
   // These were originally placed AFTER `if (!ready) return` — that caused
@@ -694,7 +749,7 @@ function ProctorLobbyContent() {
     return (
       <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
         <View style={styles.navBar}>
-          <Pressable
+          <PressableBox
             accessibilityRole="button"
             accessibilityLabel="Go back"
             style={styles.navCircleBtn}
@@ -702,7 +757,7 @@ function ProctorLobbyContent() {
             hitSlop={6}
           >
             <ArrowLeft size={20} color={LOBBY.ink} strokeWidth={2.2} />
-          </Pressable>
+          </PressableBox>
           <View style={styles.navCenterBlock}>
             <Text style={styles.navTitleText} numberOfLines={1} maxFontSizeMultiplier={1.2}>
               Entrance Examination
@@ -711,15 +766,7 @@ function ProctorLobbyContent() {
               Connecting to peer server…
             </Text>
           </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Log out"
-            style={[styles.navCircleBtn, styles.navLogoutBtn]}
-            onPress={() => confirmProctorLogout()}
-            hitSlop={6}
-          >
-            <LogOut size={20} color={LOBBY.maroon} strokeWidth={2.2} />
-          </Pressable>
+          <View style={styles.navActionSpacer} />
         </View>
         <View style={styles.lobbySkeleton}>
           <SkeletonCard>
@@ -737,7 +784,7 @@ function ProctorLobbyContent() {
     return (
       <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
         <View style={styles.navBar}>
-          <Pressable
+          <PressableBox
             accessibilityRole="button"
             accessibilityLabel="Go back"
             style={styles.navCircleBtn}
@@ -745,7 +792,7 @@ function ProctorLobbyContent() {
             hitSlop={6}
           >
             <ArrowLeft size={20} color={LOBBY.ink} strokeWidth={2.2} />
-          </Pressable>
+          </PressableBox>
           <View style={styles.navCenterBlock}>
             <Text style={styles.navTitleText} numberOfLines={1} maxFontSizeMultiplier={1.2}>
               Entrance Examination
@@ -754,15 +801,7 @@ function ProctorLobbyContent() {
               Proctor lobby
             </Text>
           </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Log out"
-            style={[styles.navCircleBtn, styles.navLogoutBtn]}
-            onPress={() => confirmProctorLogout()}
-            hitSlop={6}
-          >
-            <LogOut size={20} color={LOBBY.maroon} strokeWidth={2.2} />
-          </Pressable>
+          <View style={styles.navActionSpacer} />
         </View>
 
         <View style={styles.errorWrap}>
@@ -896,20 +935,26 @@ function ProctorLobbyContent() {
   // QR must stay big so students can scan it: white square frame, full card width, max 340dp.
   const qrFrameSize = Math.min(340, Math.max(200, windowWidth - 56));
   const qrSize = qrFrameSize - 30;
+  const listenerLabel =
+    hosting.listenerState === 'live'
+      ? 'LAN live'
+      : hosting.listenerState === 'reconnecting'
+        ? 'LAN reconnecting'
+        : 'LAN stopped';
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
-      {/* A. HEADER — back · title · logout (no Close Room here) */}
+      {/* A. HEADER — back and centered title */}
       <View style={styles.navBar}>
-        <Pressable
+        <PressableBox
           accessibilityRole="button"
           accessibilityLabel="Go back"
-          style={({ pressed }) => [styles.navCircleBtn, pressed && { opacity: 0.7 }]}
-          onPress={goBack}
+          style={styles.navCircleBtn}
+          onPress={requestLeave}
           hitSlop={6}
         >
           <ArrowLeft size={20} color={LOBBY.ink} strokeWidth={2.2} />
-        </Pressable>
+        </PressableBox>
 
         <View style={styles.navCenterBlock}>
           <Text
@@ -928,20 +973,26 @@ function ProctorLobbyContent() {
           </Text>
         </View>
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Log out"
-          style={({ pressed }) => [
-            styles.navCircleBtn,
-            styles.navLogoutBtn,
-            pressed && { opacity: 0.7 },
-          ]}
-          onPress={() => confirmProctorLogout()}
-          hitSlop={6}
-        >
-          <LogOut size={20} color={LOBBY.maroon} strokeWidth={2.2} />
-        </Pressable>
+        <View style={styles.navActionSpacer} />
       </View>
+
+      {Platform.OS === 'android' && !batteryOptimizationExempt ? (
+        <View style={styles.batteryWarningBanner}>
+          <AlertTriangle size={18} color={LOBBY.gold} strokeWidth={2.2} />
+          <Text style={styles.batteryWarningText}>
+            Battery restrictions may pause this room when the screen is off.
+          </Text>
+          <PressableBox
+            accessibilityRole="button"
+            accessibilityLabel="Open battery settings"
+            style={styles.batteryWarningButton}
+            android_ripple={{ color: 'rgba(255,255,255,0.18)', borderless: false }}
+            onPress={() => void ExamSecurityService.requestBatteryOptimizationExemption()}
+          >
+            <Text style={styles.batteryWarningButtonText}>Allow</Text>
+          </PressableBox>
+        </View>
+      ) : null}
 
       <ScrollView contentContainerStyle={styles.list}>
         <View style={styles.headerBlock}>
@@ -956,9 +1007,15 @@ function ProctorLobbyContent() {
                   Current schedule
                 </Text>
                 <View style={styles.scheduleHeroLivePill}>
-                  <Wifi size={15} color={LOBBY.maroon} strokeWidth={2.4} />
+                  {hosting.listenerState === 'live' ? (
+                    <Wifi size={15} color={LOBBY.maroon} strokeWidth={2.4} />
+                  ) : hosting.listenerState === 'reconnecting' ? (
+                    <RefreshCw size={15} color={LOBBY.maroon} strokeWidth={2.4} />
+                  ) : (
+                    <WifiOff size={15} color={LOBBY.maroon} strokeWidth={2.4} />
+                  )}
                   <Text style={styles.scheduleHeroLiveText} maxFontSizeMultiplier={1.2}>
-                    LAN live
+                    {listenerLabel}
                   </Text>
                 </View>
               </View>
@@ -1035,8 +1092,8 @@ function ProctorLobbyContent() {
                 <Text style={styles.accessCodeValue} maxFontSizeMultiplier={1.3}>
                   {displayCode}
                 </Text>
-                <Pressable
-                  style={({ pressed }) => [styles.codeSquareBtn, pressed && { opacity: 0.7 }]}
+                <PressableBox
+                  style={styles.codeSquareBtn}
                   onPress={copyCode}
                   accessibilityRole="button"
                   accessibilityLabel="Copy access code"
@@ -1047,16 +1104,16 @@ function ProctorLobbyContent() {
                   ) : (
                     <Copy size={20} color={LOBBY.maroon} strokeWidth={2.2} />
                   )}
-                </Pressable>
-                <Pressable
-                  style={({ pressed }) => [styles.codeSquareBtn, pressed && { opacity: 0.7 }]}
+                </PressableBox>
+                <PressableBox
+                  style={styles.codeSquareBtn}
                   onPress={handleShareCode}
                   accessibilityRole="button"
                   accessibilityLabel="Share access code"
                   hitSlop={6}
                 >
                   <Share2 size={20} color={LOBBY.maroon} strokeWidth={2.2} />
-                </Pressable>
+                </PressableBox>
               </View>
               <Text style={styles.accessCodeHint} maxFontSizeMultiplier={1.2}>
                 Room access code
@@ -1230,7 +1287,7 @@ function ProctorLobbyContent() {
                 {monitoringTabs.map((tab) => {
                   const isActive = activeStatusFilter === tab.key;
                   return (
-                    <Pressable
+                    <PressableBox
                       key={tab.key}
                       accessibilityRole="button"
                       accessibilityState={{ selected: isActive }}
@@ -1239,21 +1296,15 @@ function ProctorLobbyContent() {
                         setActiveStatusFilter((prev) => (prev === tab.key ? null : tab.key))
                       }
                       android_ripple={{ color: 'rgba(0,0,0,0.05)', borderless: false }}
-                      style={({ pressed }) => [
+                      style={[
                         styles.statusCard,
                         {
                           backgroundColor: tab.tone.bg,
-                          borderColor: LOBBY.border,
-                          opacity: pressed ? 0.85 : 1,
+                          borderColor: isActive ? tab.tone.text : LOBBY.border,
+                          borderWidth: isActive ? 3 : 1,
                         },
                       ]}
                     >
-                      {isActive ? (
-                        <View
-                          pointerEvents="none"
-                          style={[styles.statusCardOutline, { borderColor: tab.tone.text }]}
-                        />
-                      ) : null}
                       {tab.icon(tab.tone.text)}
                       <Text
                         style={[styles.cardCountText, { color: tab.tone.text }]}
@@ -1273,7 +1324,7 @@ function ProctorLobbyContent() {
                       >
                         {tab.subtitle}
                       </Text>
-                    </Pressable>
+                    </PressableBox>
                   );
                 })}
               </View>
@@ -1298,7 +1349,7 @@ function ProctorLobbyContent() {
                     </Text>
                   ) : (
                     currentTab.students.map((item) => (
-                      <Pressable
+                      <PressableBox
                         key={item.id}
                         accessibilityRole="button"
                         accessibilityLabel={`${item.fullName}, applicant ${item.studentId || 'unknown'}, ${currentTab.pillOf(item)}`}
@@ -1307,7 +1358,7 @@ function ProctorLobbyContent() {
                           setReconnectCode(item.reconnectCode ?? null);
                           setReconnectExpiresAt(item.reconnectCodeExpiresAt ?? null);
                         }}
-                        style={({ pressed }) => [styles.statusRow, pressed && { opacity: 0.7 }]}
+                        style={styles.statusRow}
                       >
                         <View
                           style={[styles.statusRowAvatar, { backgroundColor: currentTab.tone.bg }]}
@@ -1337,7 +1388,7 @@ function ProctorLobbyContent() {
                             {currentTab.pillOf(item)}
                           </Text>
                         </View>
-                      </Pressable>
+                      </PressableBox>
                     ))
                   )}
                 </View>
@@ -1350,35 +1401,32 @@ function ProctorLobbyContent() {
               )}
             </View>
 
-            {/* E. CLOSE LOBBY — one outlined red button at the bottom of the screen */}
-            {lobby.status !== 'ended' ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Close lobby"
-                disabled={lobby.can_control === false || busy}
-                onPress={() => {
-                  if (lobby.can_control === false) {
-                    Alert.alert(
-                      'Not allowed',
-                      'Only the proctor who opened this lobby can control it.',
-                    );
-                    return;
-                  }
-                  setEndOpen(true);
-                }}
-                style={({ pressed }) => [
-                  styles.closeLobbyBtn,
-                  { opacity: pressed || lobby.can_control === false ? 0.7 : 1 },
-                ]}
-              >
-                <DoorOpen size={20} color={LOBBY.danger} strokeWidth={2.2} />
-                <Text style={styles.closeLobbyBtnText} maxFontSizeMultiplier={1.2}>
-                  {lobby.status === 'in_progress' ? 'End & close examination room' : 'Close lobby'}
-                </Text>
-              </Pressable>
-            ) : null}
           </View>
         </ScrollView>
+
+        {lobby.status !== 'ended' ? (
+          <View style={[styles.closeFooter, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+            <PressableBox
+              accessibilityRole="button"
+              accessibilityLabel={
+                lobby.status === 'in_progress'
+                  ? 'End and close examination room'
+                  : 'Close lobby'
+              }
+              disabled={lobby.can_control === false || busy}
+              onPress={() => setEndOpen(true)}
+              style={[
+                styles.closeLobbyBtn,
+                lobby.can_control === false && styles.closeLobbyBtnDisabled,
+              ]}
+            >
+              <DoorOpen size={20} color={LOBBY.danger} strokeWidth={2.2} />
+              <Text style={styles.closeLobbyBtnText} maxFontSizeMultiplier={1.2}>
+                {lobby.status === 'in_progress' ? 'End & close examination room' : 'Close lobby'}
+              </Text>
+            </PressableBox>
+          </View>
+        ) : null}
 
       <ConfirmationModal
         visible={startOpen}
@@ -1503,16 +1551,16 @@ function ProctorLobbyContent() {
         title={
           lobby?.status === 'lobby_open'
             ? 'Close this lobby?'
-            : 'End Examination & Close Room?'
+            : 'End examination and close the room?'
         }
         description={
           lobby?.status === 'lobby_open'
-            ? "New students won't be able to join with this QR or code."
-            : 'This immediately ends the exam, auto-submits every student still taking it, and closes the session. This cannot be undone.'
+            ? 'Students will no longer be able to join with this QR or access code. You can open the room again later.'
+            : 'This ends the exam now, auto-submits every student still answering, and closes the session. This cannot be undone.'
         }
-        confirmLabel={lobby?.status === 'lobby_open' ? 'Close lobby' : 'Yes, end & close'}
+        confirmLabel={lobby?.status === 'lobby_open' ? 'Yes, close lobby' : 'Yes, end and close'}
         cancelLabel="Cancel"
-        danger={lobby?.status === 'lobby_open'}
+        danger
         loading={busy}
         onCancel={() => setEndOpen(false)}
         onConfirm={async () => {
@@ -1555,7 +1603,9 @@ function ProctorLobbyContent() {
                 ? 'This room is closed but not ended. You can open it again when ready.'
                 : 'All active examinees were submitted and the session is closed.',
             );
-            router.replace('/(proctor)/(tabs)/examination');
+            pendingLeaveContinuationRef.current = () =>
+              router.replace('/(proctor)/(tabs)/examination');
+            setAllowLeave(true);
           } catch (error) {
             Alert.alert(
               'Unable to close',
@@ -1564,6 +1614,27 @@ function ProctorLobbyContent() {
           } finally {
             setBusy(false);
           }
+        }}
+      />
+
+      <ConfirmationModal
+        visible={leaveOpen}
+        title="Leave this lobby?"
+        description="Leaving this screen does not close the room. Students stay connected and the exam keeps running. Use Close lobby to close the room."
+        confirmLabel="Yes, leave"
+        cancelLabel="Stay"
+        onCancel={() => {
+          pendingLeaveActionRef.current = null;
+          setLeaveOpen(false);
+        }}
+        onConfirm={() => {
+          setLeaveOpen(false);
+          const action = pendingLeaveActionRef.current;
+          pendingLeaveActionRef.current = null;
+          pendingLeaveContinuationRef.current = action
+            ? () => navigation.dispatch(action)
+            : goBack;
+          setAllowLeave(true);
         }}
       />
 
@@ -1578,7 +1649,7 @@ function ProctorLobbyContent() {
         }}
       >
         <View style={styles.detailOverlay}>
-          <Pressable
+          <PressableBox
             style={StyleSheet.absoluteFill}
             onPress={() => {
               setSelected(null);
@@ -1641,12 +1712,12 @@ function ProctorLobbyContent() {
 
               <View style={styles.detailActions}>
                 {/* Attendance marker — kept reachable now that roster rows are compact */}
-                <Pressable
+                <PressableBox
                   accessibilityRole="button"
                   accessibilityState={{ selected: attendedIds.has(selected.id) }}
                   accessibilityLabel="Toggle verified in room"
                   onPress={() => toggleAttendance(selected.id)}
-                  style={({ pressed }) => [
+                  style={[
                     styles.attendanceToggle,
                     {
                       backgroundColor: attendedIds.has(selected.id)
@@ -1655,7 +1726,6 @@ function ProctorLobbyContent() {
                       borderColor: attendedIds.has(selected.id)
                         ? LOBBY_STATUS_TONES.submitted.text
                         : LOBBY.border,
-                      opacity: pressed ? 0.7 : 1,
                     },
                   ]}
                 >
@@ -1679,7 +1749,7 @@ function ProctorLobbyContent() {
                       {attendedIds.has(selected.id) ? 'Verified in room' : 'Mark as verified in room'}
                     </Text>
                   </View>
-                </Pressable>
+                </PressableBox>
                 {selected.status === 'disconnected' ? (
                   <Button
                     title="Issue new reconnect PIN"
@@ -1800,13 +1870,13 @@ function ProctorLobbyContent() {
         onRequestClose={() => setSwapModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setSwapModalVisible(false)} />
+          <PressableBox style={StyleSheet.absoluteFill} onPress={() => setSwapModalVisible(false)} />
           <View style={styles.swapModalCard}>
             <View style={styles.swapModalHeader}>
               <Text style={styles.swapModalTitle}>Switch Active Room</Text>
-              <Pressable onPress={() => setSwapModalVisible(false)} hitSlop={8}>
+              <PressableBox onPress={() => setSwapModalVisible(false)} hitSlop={8}>
                 <X size={20} color="#71717A" />
-              </Pressable>
+              </PressableBox>
             </View>
             <Text style={styles.swapModalSub}>
               Migrate local Wi-Fi broadcasting and student check-ins to a different room session.
@@ -1844,7 +1914,7 @@ function ProctorLobbyContent() {
                 {availableRooms.map((rm) => {
                   const isSelected = targetRoomId === rm.id;
                   return (
-                    <Pressable
+                    <PressableBox
                       key={rm.id}
                       style={[
                         styles.roomSelectOption,
@@ -1871,7 +1941,7 @@ function ProctorLobbyContent() {
                           <Check size={14} color="#FFFFFF" />
                         </View>
                       )}
-                    </Pressable>
+                    </PressableBox>
                   );
                 })}
               </View>
@@ -1908,13 +1978,13 @@ function ProctorLobbyContent() {
         onRequestClose={() => setCodeModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setCodeModalVisible(false)} />
+          <PressableBox style={StyleSheet.absoluteFill} onPress={() => setCodeModalVisible(false)} />
           <View style={styles.codeModalCard}>
             <View style={styles.swapModalHeader}>
               <Text style={styles.swapModalTitle}>Room Access Code</Text>
-              <Pressable onPress={() => setCodeModalVisible(false)} hitSlop={8}>
+              <PressableBox onPress={() => setCodeModalVisible(false)} hitSlop={8}>
                 <X size={20} color="#71717A" />
-              </Pressable>
+              </PressableBox>
             </View>
             <Text style={styles.swapModalSub}>
               Enter a custom numeric access code or generate a random passkey for examinees.
@@ -1955,7 +2025,7 @@ function ProctorLobbyContent() {
               ].map((row, rIdx) => (
                 <View key={rIdx} style={styles.keypadRow}>
                   {row.map((btn) => (
-                    <Pressable
+                    <PressableBox
                       key={btn}
                       style={styles.keypadBtn}
                       onPress={() => {
@@ -1973,7 +2043,7 @@ function ProctorLobbyContent() {
                       >
                         {btn}
                       </Text>
-                    </Pressable>
+                    </PressableBox>
                   ))}
                 </View>
               ))}
@@ -2049,6 +2119,42 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: LOBBY.background,
   },
+  batteryWarningBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    marginHorizontal: 14,
+    marginBottom: 8,
+    padding: 11,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: LOBBY.gold,
+    backgroundColor: LOBBY.card,
+  },
+  batteryWarningText: {
+    flex: 1,
+    minWidth: 0,
+    color: LOBBY.ink,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '500',
+  },
+  batteryWarningButton: {
+    minHeight: 36,
+    minWidth: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 11,
+    borderRadius: 9,
+    backgroundColor: LOBBY.maroon,
+    overflow: 'hidden',
+  },
+  batteryWarningButtonText: {
+    color: LOBBY.onMaroon,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
   navCircleBtn: {
     width: 42,
     height: 42,
@@ -2060,9 +2166,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: LOBBY.border,
   },
-  navLogoutBtn: {
-    borderColor: LOBBY.softBorder,
-  },
+  navActionSpacer: { width: 42, height: 42 },
   navCenterBlock: {
     flex: 1,
     alignItems: 'center',
@@ -2462,7 +2566,7 @@ const styles = StyleSheet.create({
   },
 
   lobbySkeleton: { padding: 20, gap: 12 },
-  list: { padding: 14, gap: 0, paddingBottom: 40 },
+  list: { padding: 14, gap: 0, paddingBottom: 16 },
   headerBlock: { gap: 0, marginBottom: 8 },
   examHead: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
   examName: { fontSize: 18, fontWeight: '700', color: colors.ink, marginBottom: 8 },
@@ -2734,25 +2838,16 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   statusCard: {
-    // Equal-width columns that always wrap 2-up
-    flexBasis: '46%',
-    flexGrow: 1,
-    minWidth: 132,
+    // Two equal columns with enough width to stay side by side at 320dp.
+    flexBasis: '48%',
+    flexGrow: 0,
+    minWidth: 0,
+    minHeight: 110,
     borderRadius: 16,
     borderWidth: 1,
     padding: 12,
     alignItems: 'flex-start',
     justifyContent: 'flex-start',
-    position: 'relative',
-  },
-  statusCardOutline: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderRadius: 16,
-    borderWidth: 3,
   },
   cardCountText: {
     fontSize: 28,
@@ -2844,7 +2939,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // CLOSE LOBBY — single outlined danger button
+  closeFooter: {
+    paddingTop: 12,
+    paddingHorizontal: 14,
+    backgroundColor: LOBBY.background,
+    borderTopWidth: 1,
+    borderTopColor: LOBBY.divider,
+  },
+  // CLOSE LOBBY — fixed outlined danger button
   closeLobbyBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2852,11 +2954,15 @@ const styles = StyleSheet.create({
     gap: 8,
     width: '100%',
     minHeight: 52,
-    marginTop: 14,
+    marginTop: 0,
     borderRadius: 16,
     backgroundColor: LOBBY.card,
     borderWidth: 2,
     borderColor: LOBBY.danger,
+    overflow: 'hidden',
+  },
+  closeLobbyBtnDisabled: {
+    opacity: 0.55,
   },
   closeLobbyBtnText: {
     fontSize: 16,
@@ -2883,3 +2989,4 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
+ 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Pressable,
   Text,
@@ -32,16 +32,44 @@ let isAppColdBoot = true;
 export default function HomeScreen() {
   const { colors: themeColors } = useAppTheme();
   const router = useRouter();
-  const params = useLocalSearchParams<{ stay?: string; from?: string; completed?: string }>();
+  const params = useLocalSearchParams<{
+    stay?: string;
+    from?: string;
+    completed?: string;
+    examExitNotice?: string;
+  }>();
   const insets = useSafeAreaInsets();
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [showCompletedModal, setShowCompletedModal] = useState(false);
+  const handledExitNoticeRef = useRef<string | null>(null);
+
+  const showPendingExitNotice = React.useCallback(async () => {
+    const { appStorage } = await import('@/shared/services/storage');
+    const { STORAGE_KEYS } = await import('@/shared/constants');
+    const notice = await appStorage.getItem(STORAGE_KEYS.pendingExamExitNotice);
+    if (!notice || handledExitNoticeRef.current === notice) return;
+    handledExitNoticeRef.current = notice;
+    await appStorage.deleteItem(STORAGE_KEYS.pendingExamExitNotice);
+    Alert.alert('Examination update', notice);
+  }, []);
 
   useEffect(() => {
     if (params.completed === '1') {
       setShowCompletedModal(true);
     }
   }, [params.completed]);
+
+  useEffect(() => {
+    const notice = params.examExitNotice;
+    if (!notice || handledExitNoticeRef.current === notice) return;
+    handledExitNoticeRef.current = notice;
+    Alert.alert('Examination update', notice);
+    router.setParams({ examExitNotice: undefined } as any);
+  }, [params.examExitNotice, router]);
+
+  useEffect(() => {
+    void showPendingExitNotice();
+  }, [showPendingExitNotice]);
 
   // If a proctor session exists on this phone on initial cold launch, go straight to proctor dashboard.
   // When a user deliberately navigates here (e.g. after logout, back from login, or mode toggle),
@@ -75,6 +103,7 @@ export default function HomeScreen() {
           router.replace(resumed.route);
           return;
         }
+        if (active) await showPendingExitNotice();
       } catch (err) {
         console.warn('Fast session check error:', err);
       } finally {
@@ -86,13 +115,14 @@ export default function HomeScreen() {
     return () => {
       active = false;
     };
-  }, [router, params.stay, params.from]);
+  }, [router, params.stay, params.from, showPendingExitNotice]);
 
   useEffect(() => {
     // Applicants must not keep leftover exam modules on the landing phone.
     // Do not wipe a live lobby/exam session if the student briefly returns here.
     // If a live session exists, offer resume instead of showing a dead home screen.
     void (async () => {
+      await showPendingExitNotice();
       const session = await AuthRepository.getCachedSessionFast();
       if (session) return;
       const { appStorage } = await import('@/shared/services/storage');
@@ -108,6 +138,7 @@ export default function HomeScreen() {
             router.replace(resumed.route);
             return;
           }
+          await showPendingExitNotice();
         } catch {
           // keep token; do not clear while an exam may still be recoverable
         }
@@ -115,7 +146,7 @@ export default function HomeScreen() {
       }
       await clearApplicantExamMaterial();
     })();
-  }, [router]);
+  }, [router, showPendingExitNotice]);
 
   // Join screen merges QR scan + room code. Wi‑Fi is validated after a payload is provided.
   const startTakeExam = () => {

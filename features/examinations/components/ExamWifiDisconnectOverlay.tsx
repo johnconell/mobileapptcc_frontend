@@ -18,10 +18,13 @@ interface ExamWifiDisconnectOverlayProps {
   wrongNetwork?: boolean;
   /** Proctor changed Wi‑Fi / LAN IP — not an examinee fault. */
   proctorNetworkChanged?: boolean;
+  /** A reconnect attempt failed or the connection has been down for 60 seconds. */
+  reconnectFailed?: boolean;
   /** Seconds remaining in the 2-minute grace period before auto-submit. */
   graceSecondsRemaining?: number;
   onSubmitCode: (code: string) => void | Promise<void>;
   onRetry?: () => void | Promise<void>;
+  onExitExam?: () => void | Promise<void>;
   onExitEnded?: () => void | Promise<void>;
 }
 
@@ -33,27 +36,35 @@ export function ExamWifiDisconnectOverlay({
   examinationEnded = false,
   wrongNetwork = false,
   proctorNetworkChanged = false,
+  reconnectFailed = false,
   graceSecondsRemaining,
   onSubmitCode,
   onRetry,
+  onExitExam,
   onExitEnded,
 }: ExamWifiDisconnectOverlayProps) {
   const [code, setCode] = useState('');
   const { theme } = useThemeTokens();
-  const renderAction = (title: string, onPress?: () => void | Promise<void>, disabled = false) => (
+  const renderAction = (
+    title: string,
+    onPress?: () => void | Promise<void>,
+    disabled = false,
+    danger = false,
+    allowDuringLoading = false,
+  ) => (
     <Pressable
       accessibilityRole="button"
-      disabled={disabled || loading}
+      disabled={disabled || (loading && !allowDuringLoading)}
       onPress={() => void onPress?.()}
       style={({ pressed }) => [
         styles.actionButton,
         {
-          backgroundColor: theme.accent,
-          opacity: disabled || loading ? 0.55 : pressed ? 0.86 : 1,
+          backgroundColor: danger ? theme.timer.red.text : theme.accent,
+          opacity: disabled || (loading && !allowDuringLoading) ? 0.55 : pressed ? 0.86 : 1,
         },
       ]}
     >
-      {loading ? (
+      {loading && !allowDuringLoading ? (
         <ActivityIndicator color={theme.onAccent} />
       ) : (
         <Text style={[styles.actionText, { color: theme.onAccent }]}>{title}</Text>
@@ -80,6 +91,43 @@ export function ExamWifiDisconnectOverlay({
                 home screen — you are no longer in an active exam.
               </Text>
               {renderAction('Return Home', onExitEnded)}
+            </>
+          ) : reconnectFailed ? (
+            <>
+              <Text style={[styles.title, { color: theme.text }]}>Reconnection failed</Text>
+              <Text style={[styles.message, { color: theme.textSecondary }]}>
+                The proctor phone is not reachable. Try again or leave the exam now. Leaving works
+                offline and will be recorded on this phone for later sync.
+              </Text>
+              {requiresPin ? (
+                <View style={styles.pinInputGroup}>
+                  <Text style={[styles.pinInputLabel, { color: theme.textSecondary }]}>Reconnect PIN, if provided</Text>
+                  <TextInput
+                    value={code}
+                    onChangeText={(text) => setCode(text.replace(/\D/g, '').slice(0, 6))}
+                    keyboardType="number-pad"
+                    maxLength={6}
+                    placeholder="6-digit PIN"
+                    placeholderTextColor={theme.textMuted}
+                    editable={!loading}
+                    style={[styles.pinInput, { backgroundColor: theme.surfaceAlt, borderColor: theme.border, color: theme.text }]}
+                  />
+                </View>
+              ) : null}
+              {error ? (
+                <Text style={[styles.error, { color: theme.timer.red.text }]}>
+                  {userFacingError(error, 'Cannot reach the proctor.')}
+                </Text>
+              ) : null}
+              {renderAction(
+                'Try again',
+                () =>
+                  requiresPin && code.trim().length === 6
+                    ? onSubmitCode(code.trim())
+                    : onRetry?.(),
+                requiresPin && code.trim().length > 0 && code.trim().length !== 6,
+              )}
+              {renderAction('Exit exam', onExitExam, false, true, true)}
             </>
           ) : wrongNetwork && !requiresPin ? (
             // Student deliberately connected to a different Wi-Fi network.

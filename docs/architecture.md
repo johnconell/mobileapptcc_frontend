@@ -56,6 +56,15 @@ Applicants probe `/p2p/health` before validating a key; an unreachable host is
 reported as a connection/Wi-Fi issue, not as a rejected key. Direct peer joins
 do not require internet access.
 
+### Proctor phone during a room
+
+Keep the proctor phone plugged into power, set this app to unrestricted battery
+use, and keep the app open while the room is active. Android shows an ongoing
+exam-room notification and the host service holds partial CPU and Wi-Fi locks
+while the room is running. These protections reduce background suspension, but
+they cannot keep the LAN listener alive after a force-stop or power-off; opening
+the app again restores the saved room and rebinds its listener.
+
 ## Setup
 
 ```bash

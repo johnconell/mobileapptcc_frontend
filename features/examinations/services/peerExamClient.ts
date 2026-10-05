@@ -74,6 +74,12 @@ export const PeerExamClient = {
     const current = await this.getTarget();
     const code = (examCode || current?.code || '').trim().toUpperCase();
     if (!code) return false;
+    if (__DEV__) {
+      console.info('[RECONNECT TRACE] refresh saved peer target', {
+        savedPeerHost: current?.host ?? null,
+        savedPeerPort: current?.port ?? null,
+      });
+    }
 
     try {
       const Network = await import('expo-network');
@@ -398,6 +404,15 @@ export const PeerExamClient = {
     }
 
     const text = await res.text();
+    if (__DEV__ && (path === '/heartbeat' || path === '/reconnect')) {
+      console.info('[RECONNECT TRACE] proctor HTTP response', {
+        host: target.host,
+        port: target.port,
+        path,
+        status: res.status,
+        body: (text || '').slice(0, 400),
+      });
+    }
     let json: any = null;
     try {
       json = text ? JSON.parse(text) : null;

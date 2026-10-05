@@ -19,6 +19,8 @@ import { useSettingsStore } from '@/features/settings/stores/settingsStore';
 import { colors } from '@/shared/theme';
 import { startNetworkMonitoring } from '@/features/monitoring/services/networkMonitor';
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
+import { recoverOrphanedStudentKioskAtStartup } from '@/features/examinations/services/resumeExamSession';
+import { PeerExamServer } from '@/features/examinations/services/peerExamServer';
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
@@ -53,7 +55,7 @@ function ExamFlowKeepAwake() {
       deactivateKeepAwake(EXAM_FLOW_KEEP_AWAKE_TAG);
       batteryPromptShown.current = false;
     }
-    if (enabled && Platform.OS === 'android' && !batteryPromptShown.current) {
+    if (isStudentExamFlow && screen === 'exam' && Platform.OS === 'android' && !batteryPromptShown.current) {
       batteryPromptShown.current = true;
       void ExamSecurityService.isIgnoringBatteryOptimizations().then((isExempt) => {
         if (disposed || isExempt) return;
@@ -73,12 +75,18 @@ function ExamFlowKeepAwake() {
     if (isStudentExamFlow && Platform.OS === 'android') {
       void ExamSecurityService.startStudentExamKeepAlive();
     }
+    if (isProctorMonitoring && Platform.OS === 'android') {
+      void ExamSecurityService.startExamHostKeepAlive();
+    }
 
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active' && enabled) {
         void activate();
         if (isStudentExamFlow && Platform.OS === 'android') {
           void ExamSecurityService.startStudentExamKeepAlive();
+        }
+        if (isProctorMonitoring && Platform.OS === 'android') {
+          void ExamSecurityService.startExamHostKeepAlive();
         }
       }
     });
@@ -91,13 +99,14 @@ function ExamFlowKeepAwake() {
         void ExamSecurityService.stopStudentExamKeepAlive();
       }
     };
-  }, [enabled, isStudentExamFlow]);
+  }, [enabled, isStudentExamFlow, isProctorMonitoring, screen]);
 
   return null;
 }
 
 export default function RootLayout() {
   const hydrate = useSettingsStore((s) => s.hydrate);
+  const hostRestoreStarted = useRef(false);
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
@@ -110,6 +119,15 @@ export default function RootLayout() {
     async function prepare() {
       await hydrateApiBaseUrl();
       await hydrate();
+      await recoverOrphanedStudentKioskAtStartup();
+      if (!hostRestoreStarted.current) {
+        hostRestoreStarted.current = true;
+        // Bind a persisted proctor room after process restart without making
+        // the app shell wait on local server or foreground-service startup.
+        void PeerExamServer.restore().catch((error) => {
+          console.warn('[PEER RESTORE] Startup restore failed:', error);
+        });
+      }
       if (fontsLoaded) {
         await SplashScreen.hideAsync();
       }

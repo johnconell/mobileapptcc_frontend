@@ -135,6 +135,8 @@ type JsonResponse = {
 let session: PeerSessionState | null = null;
 let routesRegistered = false;
 let running = false;
+export type PeerListenerState = 'live' | 'reconnecting' | 'stopped';
+let listenerState: PeerListenerState = 'stopped';
 let hostIp: string | null = null;
 let listeners: Array<() => void> = [];
 let examWatchdog: ReturnType<typeof setInterval> | null = null;
@@ -254,6 +256,41 @@ function notify() {
       // A failing subscriber must not stop the exam.
     }
   });
+}
+
+function updatePeerListenerStatus(event: { status: string; message?: string }): void {
+  const next: PeerListenerState =
+    event.status === 'STARTED' || event.status === 'RESUMED'
+      ? 'live'
+      : event.status === 'PAUSED'
+        ? 'reconnecting'
+        : 'stopped';
+  const nextRunning = next === 'live';
+  if (listenerState === next && running === nextRunning) return;
+
+  listenerState = next;
+  running = nextRunning;
+  if (event.status === 'ERROR') {
+    console.error('[PEER SERVER] Native listener failed:', event.message || 'Unknown listener error.');
+  } else if (__DEV__) {
+    console.info('[PEER SERVER] Native listener state:', {
+      state: listenerState,
+      message: event.message,
+      host: hostIp,
+      port: PEER_PORT,
+    });
+  }
+  notify();
+}
+
+function bindPeerListener(mod: HttpServerModule): void {
+  listenerState = 'reconnecting';
+  running = false;
+  routesRegistered = false;
+  notify();
+  mod.setup(PEER_PORT, updatePeerListenerStatus);
+  registerRoutes(mod);
+  mod.start();
 }
 
 async function persist() {
@@ -1354,11 +1391,27 @@ function registerRoutes(mod: HttpServerModule) {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
     const token = String(body.participation_token ?? '');
+    const providedDeviceId = String(body.device_id ?? '').trim();
     if (token && session.removedStudents?.[token]) {
       return fail(403, 'You have been removed from this examination session.');
     }
     const student = studentByToken(token);
+    if (__DEV__) {
+      console.info('[RECONNECT TRACE] proctor heartbeat check', {
+        host: hostIp,
+        port: PEER_PORT,
+        tokenPresent: Boolean(token),
+        participationFound: Boolean(student),
+        deviceIdReceived: Boolean(providedDeviceId),
+        deviceIdMatches:
+          Boolean(student?.deviceId) && Boolean(providedDeviceId) && student?.deviceId === providedDeviceId,
+        roomStatus: session.status,
+      });
+    }
     if (!student) return fail(403, 'You are no longer joined to this examination.');
+    if (providedDeviceId && student.deviceId && providedDeviceId !== student.deviceId) {
+      return fail(403, 'This examination participation is reserved for another device.');
+    }
     if (student.status === 'terminated') {
       return fail(403, 'You have been removed from this examination session.');
     }
@@ -1442,7 +1495,7 @@ function registerRoutes(mod: HttpServerModule) {
     student.reconnectCode = pin;
     student.reconnectCodeExpiresAt = expiresAt;
 
-    console.log(`[SERVER] Issued Reconnect PIN ${pin} for student ${student.applicantCode}`);
+    console.log('[SERVER] Issued reconnect PIN for a participation.');
 
     invalidateSnapshot();
     await persist();
@@ -1481,7 +1534,7 @@ function registerRoutes(mod: HttpServerModule) {
       student.status = 'taking_exam';
     }
 
-    console.log(`[SERVER] Student ${student.applicantCode} reconnected via PIN.`);
+    console.log('[SERVER] Participation reconnected with a PIN.');
 
     invalidateSnapshot();
     await persist();
@@ -1567,9 +1620,16 @@ export const PeerExamServer = {
     };
   },
 
-  info(): { running: boolean; host: string | null; port: number; code: string | null } {
+  info(): {
+    running: boolean;
+    listenerState: PeerListenerState;
+    host: string | null;
+    port: number;
+    code: string | null;
+  } {
     return {
       running,
+      listenerState,
       host: hostIp,
       port: PEER_PORT,
       code: session?.examCode ?? null,
@@ -1584,15 +1644,17 @@ export const PeerExamServer = {
       session = saved;
       delete (session as PeerSessionState & { hostIp?: string | null }).hostIp;
       session.startSeq = Number(session.startSeq ?? (session.status === 'in_progress' ? 1 : 0));
-      try {
-        const pack = await OfflineStore.getPack();
-        session.violationLimit = 0;
-        if (pack?.examination_settings?.duration_minutes) {
-          session.durationMinutes = pack.examination_settings.duration_minutes;
-        }
-      } catch {
-        session.violationLimit = 0;
-      }
+      // Keep the values captured when the room started. In particular, the
+      // timer is derived from the original startedAt + durationMinutes.
+      session.students = session.students ?? {};
+      session.violations = session.violations ?? [];
+      session.violationSeq = Math.max(
+        Number(session.violationSeq ?? 0),
+        ...session.violations.map((violation) => Number(violation.id) || 0),
+      );
+      session.tokenMap = Object.fromEntries(
+        Object.values(session.students).map((student) => [student.token, student.registrationId]),
+      );
       for (const student of Object.values(session.students || {})) {
         student.downloadPercent = Number(student.downloadPercent ?? (student.isReady ? 100 : 0));
         student.hashVerified = Boolean(student.hashVerified ?? student.isReady);
@@ -1611,15 +1673,16 @@ export const PeerExamServer = {
     if (!mod) return Boolean(session);
 
     hostIp = await resolveHostIp();
-    if (!running) {
+    if (listenerState === 'stopped') {
       try {
-        mod.setup(PEER_PORT);
-        registerRoutes(mod);
-        mod.start();
-        running = true;
-      } catch {
-        // Port may already be bound from a previous JS context; treat as running.
-        running = true;
+        bindPeerListener(mod);
+      } catch (error) {
+        running = false;
+        listenerState = 'stopped';
+        routesRegistered = false;
+        notify();
+        console.error('[PEER RESTORE] Failed to rebind the LAN listener:', error);
+        return false;
       }
     }
 
@@ -1641,6 +1704,22 @@ export const PeerExamServer = {
 
     await persist();
     notify();
+    if (__DEV__) {
+      console.info('[PEER RESTORE] room restored and listener rebound', {
+        host: hostIp,
+        port: PEER_PORT,
+        roomStatus: session.status,
+        participationCount: Object.keys(session.students).length,
+        tokenCount: Object.keys(session.tokenMap).length,
+        reconnectPinCount: Object.values(session.students).filter((student) => Boolean(student.reconnectCode)).length,
+        answerCount: Object.values(session.students).reduce(
+          (count, student) => count + Object.keys(student.answers ?? {}).length,
+          0,
+        ),
+        startedAt: session.startedAt,
+        durationMinutes: session.durationMinutes,
+      });
+    }
     return true;
   },
 
@@ -1712,7 +1791,7 @@ export const PeerExamServer = {
       session &&
       session.scheduleId === scheduleId &&
       session.roomId === roomId &&
-      session.status === 'lobby_open' &&
+      session.status !== 'ended' &&
       session.examCode === input.examCode.trim().toUpperCase();
 
     // Reset when switching rooms/schedules, after end, or when minting a new exam code.
@@ -1723,9 +1802,10 @@ export const PeerExamServer = {
 
     if (reopening && session) {
       session.startSeq = Number(session.startSeq ?? 0);
-      session.violationLimit = 0;
-      session.durationMinutes =
-        pack.examination_settings?.duration_minutes ?? session.durationMinutes;
+      if (session.status === 'lobby_open') {
+        session.durationMinutes =
+          pack.examination_settings?.duration_minutes ?? session.durationMinutes;
+      }
     }
 
     if (!reopening) {
@@ -1750,15 +1830,15 @@ export const PeerExamServer = {
       invalidateSnapshot();
     }
 
-    if (!running) {
+    if (listenerState === 'stopped') {
       try {
-        mod.setup(PEER_PORT);
-        registerRoutes(mod);
-        mod.start();
-        running = true;
+        bindPeerListener(mod);
       } catch (err) {
+        running = false;
+        listenerState = 'stopped';
+        routesRegistered = false;
+        notify();
         console.warn('[SERVER] Could not start server (may be already running):', err);
-        running = true;
       }
     }
 
@@ -1940,7 +2020,9 @@ export const PeerExamServer = {
       // Server may already be down.
     }
     running = false;
+    listenerState = 'stopped';
     routesRegistered = false;
+    notify();
     await ExamSecurityService.stopExamHostKeepAlive();
   },
 
@@ -1959,18 +2041,24 @@ export const PeerExamServer = {
     if (ip !== previousHost) {
       hostIp = ip;
 
-      if (ip && running) {
+      if (ip && listenerState === 'live') {
         const mod = loadHttpServer();
         if (!mod) {
           throw new Error('The local examination server is unavailable.');
         }
-        mod.stop();
+        listenerState = 'reconnecting';
         running = false;
-        routesRegistered = false;
-        mod.setup(PEER_PORT);
-        registerRoutes(mod);
-        mod.start();
-        running = true;
+        notify();
+        mod.stop();
+        try {
+          bindPeerListener(mod);
+        } catch (error) {
+          listenerState = 'stopped';
+          running = false;
+          routesRegistered = false;
+          notify();
+          throw error;
+        }
       }
 
       if (session) {
