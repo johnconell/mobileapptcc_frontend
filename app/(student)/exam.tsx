@@ -40,6 +40,7 @@ import { ExamWifiDisconnectOverlay } from '@/features/examinations/components/Ex
 import { buildCategoryProgress } from '@/features/examinations/components/ExamCategoryNav';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore, type ExamNavMode } from '@/features/examinations/stores/examStore';
+import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import type { QuestionNavigatorFilter } from '@/shared/components/ui/QuestionNavigatorSheet';
 import { useExamTimer } from '@/features/examinations/hooks/useExamTimer';
 import { useExamSecurity } from '@/features/examinations/hooks/useExamSecurity';
@@ -54,7 +55,9 @@ import { ExamLifecycle } from '@/features/examinations/services/examLifecycle';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { parseStartPulse } from '@/features/examinations/services/examStartCoordinator';
 import { playExamTimeWarning } from '@/features/examinations/services/examTimeWarning';
-import { startExamLock, isExamLocked } from '@/features/examinations/services/ExamSecurityService';
+import { stopExamLock } from '@/features/examinations/services/ExamSecurityService';
+import { recordStudentDisconnect } from '@/features/monitoring/services/studentDisconnectAudit';
+import type { StudentDisconnectReason } from '@/features/monitoring/services/studentDisconnectAudit';
 import {
   createSubmitController,
   type SubmitReason,
@@ -140,8 +143,9 @@ function ExamScreenInner() {
   // Network & Lifecycle state
   const [reconnectLoading, setReconnectLoading] = useState(false);
   const [reconnectError, setReconnectError] = useState<string | null>(null);
-  const [reconnectPinRequired, setReconnectPinRequired] = useState(false);
   const [roomEnded, setRoomEnded] = useState(false);
+  const [manualReconnectFailed, setManualReconnectFailed] = useState(false);
+  const [isLeavingExam, setIsLeavingExam] = useState(false);
 
   // Store state & selectors
   const questions = useExamStore((s) => s.questions);
@@ -168,6 +172,7 @@ function ExamScreenInner() {
   const restoredRef = useRef(false);
   const lowTimeWarnedRef = useRef(false);
   const autoSubmittedRef = useRef(false);
+  const exitStartedRef = useRef(false);
 
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const securityEnabled = questions.length > 0;
@@ -255,9 +260,9 @@ function ExamScreenInner() {
   const onWifiDisconnect = useCallback(
     (reason: 'wifi_lost' | 'wrong_network' | 'proctor_network_change') => {
       if (reason === 'proctor_network_change') return;
-      void LobbyRepository.reportWifiDisconnect();
+      void LobbyRepository.reportWifiDisconnect(reason, sessionId).catch(() => undefined);
     },
-    [],
+    [sessionId],
   );
 
   const [gracePeriodSeconds, setGracePeriodSeconds] = useState(120);
@@ -278,12 +283,46 @@ function ExamScreenInner() {
     unlockAfterReconnect,
     disconnectReason,
     graceSecondsRemaining,
+    reconnectFailed,
   } = useWifiExamGate({
     enabled: securityEnabled,
     onDisconnect: onWifiDisconnect,
     onGraceExpired: () => graceExpiredCallbackRef.current(),
     gracePeriodSeconds,
   });
+
+  const exitToLanding = useCallback(
+    async (reason: StudentDisconnectReason, message: string) => {
+      if (exitStartedRef.current) return;
+      exitStartedRef.current = true;
+      setIsLeavingExam(true);
+
+      // Release Android Lock Task before any storage cleanup so a failed local
+      // write can never keep the student inside kiosk mode.
+      await stopExamLock().catch(() => undefined);
+
+      const token = await appStorage.getItem(STORAGE_KEYS.participationToken).catch(() => null);
+      if (token) {
+        // This is local-only. Bound the wait so a storage failure cannot block
+        // the offline Exit exam action or the landing-page navigation.
+        await Promise.race([
+          recordStudentDisconnect(reason, token, sessionId).catch(() => undefined),
+          new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+        ]);
+      }
+
+      useExamStore.getState().reset();
+      useStudentStore.getState().reset();
+      useLobbyStore.getState().reset();
+      router.replace({ pathname: '/', params: { examExitNotice: message } } as any);
+
+      // Cleanup continues after navigation; the native kiosk has already been
+      // stopped and the in-memory exam state is cleared synchronously above.
+      void ExamLifecycle.clear().catch(() => undefined);
+      void clearApplicantExamMaterial().catch(() => undefined);
+    },
+    [router, sessionId],
+  );
 
   const [isInactiveOrBackground, setIsInactiveOrBackground] = useState(
     Platform.OS === 'ios' && AppState.currentState !== 'active',
@@ -357,12 +396,14 @@ function ExamScreenInner() {
       const pulse = await LobbyRepository.sendHeartbeat();
       if (pulse.removed || pulse.myStatus === 'terminated') {
         cancelled = true;
-        await appStorage.deleteItem(STORAGE_KEYS.participationToken);
-        Alert.alert(
-          'Session Removed',
-          'You have been removed from this session.',
-          [{ text: 'OK', onPress: () => router.replace('/' as any) }],
-          { cancelable: false },
+        await exitToLanding('proctor_removed', 'The proctor removed you from this examination.');
+        return;
+      }
+      if (pulse.sessionNotFound) {
+        cancelled = true;
+        await exitToLanding(
+          'session_ended',
+          'This examination session has ended or is no longer available. The app has been unlocked.',
         );
         return;
       }
@@ -370,13 +411,7 @@ function ExamScreenInner() {
       if (cancelled) return;
       if (parsed?.roomStatus === 'terminated') {
         cancelled = true;
-        await appStorage.deleteItem(STORAGE_KEYS.participationToken);
-        Alert.alert(
-          'Session Removed',
-          'You have been removed from this session.',
-          [{ text: 'OK', onPress: () => router.replace('/' as any) }],
-          { cancelable: false },
-        );
+        await exitToLanding('proctor_removed', 'The proctor removed you from this examination.');
         return;
       }
       if (parsed?.roomStatus === 'ended') {
@@ -395,22 +430,33 @@ function ExamScreenInner() {
           return;
         }
         const health = await PeerExamClient.probeHealth();
-        if (!cancelled && (health === 'ended' || health === 'idle')) {
+        if (!cancelled && health === 'ended') {
           await ExamLifecycle.applyFromServer('ended');
           setRoomEnded(true);
+          return;
+        }
+        if (!cancelled && health === 'idle') {
+          await exitToLanding(
+            'session_ended',
+            'This examination session is closed or no longer available. The app has been unlocked.',
+          );
         }
       }
     };
 
     const interval = setInterval(() => {
       void beat();
-    }, 4000);
+    }, 10000);
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void beat();
+    });
     void beat();
     return () => {
       cancelled = true;
       clearInterval(interval);
+      appStateSubscription.remove();
     };
-  }, [securityEnabled, router]);
+  }, [securityEnabled, exitToLanding]);
 
   const finalizeSubmission = useCallback(
     async (reason: SubmitReason) => {
@@ -425,53 +471,79 @@ function ExamScreenInner() {
       );
 
       markSubmitting(true);
+      // Timer expiry, proctor end, and manual submission all leave kiosk mode
+      // before the network confirmation loop begins.
+      await stopExamLock().catch(() => undefined);
       router.replace('/(student)/submitting');
-      await ExamProgressStore.save({
-        sessionId: sessionId ?? 'unknown',
-        studentId: verifiedStudent?.id ?? 'unknown',
-        answers,
-        flags,
-        navMode,
-        remainingSeconds: useExamStore.getState().remainingSeconds,
-        startedAt,
-      });
+      try {
+        await ExamProgressStore.save({
+          sessionId: sessionId ?? 'unknown',
+          studentId: verifiedStudent?.id ?? 'unknown',
+          answers,
+          flags,
+          navMode,
+          remainingSeconds: useExamStore.getState().remainingSeconds,
+          startedAt,
+        });
+      } catch (error) {
+        console.warn('[SUBMIT] Final local checkpoint failed; continuing with saved progress:', error);
+      }
 
-      let lastError: unknown = null;
-      for (let tries = 1; tries <= 3; tries++) {
+      let failedAttempts = 0;
+      while (true) {
         try {
           await QuestionRepository.submitAnswers({
             sessionId: sessionId ?? 'unknown',
             studentId: verifiedStudent?.id ?? 'unknown',
             answers: payload,
           });
-          if (verifiedStudent?.id) {
-            await LobbyRepository.finishStudent(verifiedStudent.id, finalReason);
-          }
-          await ExamProgressStore.clear();
-          await clearApplicantExamMaterial();
-          markSubmitted(finalReason);
-          try {
-            const appCode = verifiedStudent?.studentId || verifiedStudent?.id;
-            if (appCode && sessionId) {
-              const sid = String(sessionId).replace(/^offline-/, '').split('-')[0];
-              await appStorage.setItem(`tcc.student.completed.${sid}.${appCode}`, '1');
-            }
-          } catch {
-            // Completion marker is best effort.
-          }
-          markSubmitting(false);
-          router.replace('/(student)/completed');
-          return;
+          break;
         } catch (error) {
-          lastError = error;
-          if (tries < 3) await new Promise((resolve) => setTimeout(resolve, 1200 * tries));
+          failedAttempts += 1;
+          const retryDelayMs = Math.min(1000 * 2 ** Math.min(failedAttempts - 1, 4), 15000);
+          console.warn(
+            `[SUBMIT] Server has not confirmed the submission; retrying in ${retryDelayMs}ms.`,
+            error,
+          );
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
         }
       }
 
-      markSubmitting(false);
-      throw lastError instanceof Error
-        ? lastError
-        : new Error('Submission failed. Please stay on the exam Wi-Fi and try again.');
+      try {
+        if (verifiedStudent?.id) {
+          await LobbyRepository.finishStudent(verifiedStudent.id, finalReason);
+        }
+      } catch (error) {
+        console.warn('[SUBMIT] Result was confirmed; final lobby update will be retried by sync:', error);
+      }
+      await ExamProgressStore.clear().catch((error) => {
+        console.warn('[SUBMIT] Result was confirmed; local checkpoint cleanup failed:', error);
+      });
+      await clearApplicantExamMaterial().catch((error) => {
+        console.warn('[SUBMIT] Result was confirmed; exam material cleanup failed:', error);
+      });
+      markSubmitted(finalReason);
+      try {
+        const appCode = verifiedStudent?.studentId || verifiedStudent?.id;
+        if (appCode && sessionId) {
+          const sid = String(sessionId).replace(/^offline-/, '').split('-')[0];
+          await appStorage.setItem(`tcc.student.completed.${sid}.${appCode}`, '1');
+        }
+      } catch {
+        // Completion marker is best effort.
+      }
+      await stopExamLock().catch(() => undefined);
+      await ExamLifecycle.clear().catch(() => undefined);
+      useExamStore.getState().reset();
+      useStudentStore.getState().reset();
+      useLobbyStore.getState().reset();
+      const exitNotice =
+        finalReason === 'time_expired'
+          ? 'Your time ended and your answers were submitted.'
+          : finalReason === 'proctor_terminated'
+            ? 'The proctor ended the examination and your answers were submitted.'
+            : 'Your answers were submitted successfully.';
+      router.replace({ pathname: '/', params: { examExitNotice: exitNotice } } as any);
     },
     [answers, flags, navMode, sessionId, startedAt, verifiedStudent, markSubmitting, markSubmitted, router],
   );
@@ -531,106 +603,125 @@ function ExamScreenInner() {
 
   // Android Kiosk Pinning
   const { isKioskActive, requestLock } = useExamLock({
-    enabled: securityEnabled && !wifiLocked && !roomEnded && remainingSeconds > 0,
+    enabled: securityEnabled && !wifiLocked && !roomEnded && !isLeavingExam && remainingSeconds > 0,
   });
 
   const isAndroidUnpinned = Platform.OS === 'android' && !isKioskActive;
-  const paused = wifiLocked || isAndroidUnpinned || roomEnded || remainingSeconds <= 0;
+  const paused = wifiLocked || isAndroidUnpinned || roomEnded || isLeavingExam || remainingSeconds <= 0;
 
   useEffect(() => {
     setPaused(paused);
   }, [paused, setPaused]);
 
   useExamSecurity({
-    enabled: securityEnabled && !wifiLocked && !roomEnded && remainingSeconds > 0,
+    enabled: securityEnabled && !wifiLocked && !roomEnded && !isLeavingExam && remainingSeconds > 0,
     sessionId,
     studentId: verifiedStudent?.id ?? null,
     studentName: verifiedStudent?.fullName ?? null,
     onRequestSubmit: openSubmitConfirmation,
   });
 
-  const enforceRepinAfterReconnect = useCallback(async (): Promise<boolean> => {
-    if (Platform.OS !== 'android') return true;
-    setReconnectPinRequired(true);
-    try {
-      await startExamLock();
-    } catch {
-      /* ignore */
-    }
-    const deadline = Date.now() + 7000;
-    while (Date.now() < deadline) {
-      await new Promise<void>((r) => setTimeout(r, 500));
-      const locked = await isExamLocked().catch(() => false);
-      if (locked) {
-        setReconnectPinRequired(false);
-        return true;
-      }
-    }
-    setReconnectPinRequired(false);
-    return false;
-  }, []);
-
   const handleReconnect = useCallback(
     async (code: string) => {
       setReconnectLoading(true);
       setReconnectError(null);
-      const result = await LobbyRepository.reconnectWithCode(code);
-      if (!result.ok) {
-        setReconnectError(result.message || 'Invalid reconnect code.');
-        setReconnectLoading(false);
-        return;
+      setManualReconnectFailed(false);
+      try {
+        const result = await LobbyRepository.reconnectWithCode(code);
+        if (!result.ok) {
+          const message = result.message || 'Cannot reach the proctor';
+          if (message === 'Removed by proctor') {
+            await exitToLanding('proctor_removed', 'The proctor removed you from this examination.');
+            return;
+          }
+          if (message === 'Session ended') {
+            await exitToLanding(
+              'session_ended',
+              'This examination session has ended or is no longer available. The app has been unlocked.',
+            );
+            return;
+          }
+          setReconnectError(message);
+          setManualReconnectFailed(true);
+          return;
+        }
+
+        const pulse = await LobbyRepository.sendHeartbeat();
+        if (pulse.removed || pulse.myStatus === 'terminated') {
+          await exitToLanding('proctor_removed', 'The proctor removed you from this examination.');
+          return;
+        }
+        if (pulse.sessionNotFound) {
+          await exitToLanding(
+            'session_ended',
+            'This examination session has ended or is no longer available. The app has been unlocked.',
+          );
+          return;
+        }
+        if (!pulse.ok) {
+          setReconnectError(pulse.message || 'Cannot reach the proctor.');
+          setManualReconnectFailed(true);
+          return;
+        }
+
+        const unlocked = await unlockAfterReconnect(true);
+        if (!unlocked) {
+          setReconnectError('Cannot reach the proctor. Check the exam Wi-Fi and try again.');
+          setManualReconnectFailed(true);
+          return;
+        }
+        setReconnectError(null);
+      } catch (error) {
+        setReconnectError(error instanceof Error ? error.message : 'Reconnect failed.');
+        setManualReconnectFailed(true);
+      } finally {
+        if (!exitStartedRef.current) setReconnectLoading(false);
       }
-      const unlocked = await unlockAfterReconnect(true);
-      if (!unlocked) {
-        setReconnectError('Turn Wi‑Fi back on, then enter the reconnect code.');
-        setReconnectLoading(false);
-        return;
-      }
-      const pinned = await enforceRepinAfterReconnect();
-      if (!pinned) {
-        setReconnectError(
-          'App pinning is required to continue the examination. Tap "Reconnect" and approve the App Pinning prompt.',
-        );
-        setReconnectLoading(false);
-        return;
-      }
-      void LobbyRepository.sendHeartbeat();
-      setReconnectLoading(false);
     },
-    [unlockAfterReconnect, enforceRepinAfterReconnect],
+    [exitToLanding, unlockAfterReconnect],
   );
 
   const handleProctorNetworkRetry = useCallback(async () => {
     setReconnectLoading(true);
     setReconnectError(null);
+    setManualReconnectFailed(false);
     try {
       await PeerExamClient.refreshHostFromCloud();
-      const unlocked = await unlockAfterReconnect();
-      if (!unlocked) {
-        setReconnectError(
-          "Still can't reach the proctor phone. Ask the proctor to stay on the exam Wi‑Fi and confirm the lobby is open.",
-        );
-      } else {
-        void LobbyRepository.sendHeartbeat();
-        setReconnectLoading(false);
-        return;
-      }
-      const pinned = await enforceRepinAfterReconnect();
-      if (!pinned) {
-        setReconnectError(
-          'App pinning is required to continue the examination. Tap "Retry" and approve the App Pinning prompt.',
-        );
-        setReconnectLoading(false);
-        return;
-      }
-      void LobbyRepository.sendHeartbeat();
-    } catch (err) {
-      setReconnectError(err instanceof Error ? err.message : 'Reconnect failed.');
-    } finally {
-      setReconnectLoading(false);
-    }
-  }, [unlockAfterReconnect, enforceRepinAfterReconnect]);
+      if (exitStartedRef.current) return;
 
+      const pulse = await LobbyRepository.sendHeartbeat();
+      if (pulse.removed || pulse.myStatus === 'terminated') {
+        await exitToLanding('proctor_removed', 'The proctor removed you from this examination.');
+        return;
+      }
+      if (pulse.sessionNotFound) {
+        await exitToLanding(
+          'session_ended',
+          'This examination session has ended or is no longer available. The app has been unlocked.',
+        );
+        return;
+      }
+      if (!pulse.ok) {
+        throw new Error(pulse.message || 'Cannot reach the proctor.');
+      }
+
+      const unlocked = await unlockAfterReconnect();
+      if (exitStartedRef.current) return;
+      if (!unlocked) {
+        throw new Error('Cannot reach the proctor. Scan the room QR code to try another host address.');
+      }
+
+      setReconnectError(null);
+      setManualReconnectFailed(false);
+    } catch (error) {
+      if (exitStartedRef.current) return;
+      setReconnectError(error instanceof Error ? error.message : 'Cannot reach the proctor.');
+      setManualReconnectFailed(true);
+      router.push({ pathname: '/(student)/scan', params: { mode: 'reconnect' } } as any);
+    } finally {
+      if (!exitStartedRef.current) setReconnectLoading(false);
+    }
+  }, [exitToLanding, router, unlockAfterReconnect]);
   useEffect(() => {
     navigation.setOptions({
       gestureEnabled: false,
@@ -669,11 +760,14 @@ function ExamScreenInner() {
       requestSubmit('proctor_ended');
       return;
     }
-    if (questions.length > 0 && remainingSeconds <= 0) {
+    // If the proctor is unreachable when time expires, keep the reconnect
+    // screen available (including its offline Exit exam action). Once the
+    // connection returns this effect submits the saved answers as usual.
+    if (questions.length > 0 && remainingSeconds <= 0 && !wifiLocked) {
       autoSubmittedRef.current = true;
       requestSubmit('timeout');
     }
-  }, [remainingSeconds, questions.length, roomEnded, requestSubmit]);
+  }, [remainingSeconds, questions.length, roomEnded, wifiLocked, requestSubmit]);
 
   // Answer selection & instant local persistence
   const handleSelectChoice = useCallback(
@@ -823,7 +917,7 @@ function ExamScreenInner() {
       ) : null}
 
       {/* Android Mandatory App Pinning Shield */}
-      {Platform.OS === 'android' && !isKioskActive && !wifiLocked && !roomEnded && remainingSeconds > 0 ? (
+      {Platform.OS === 'android' && !isKioskActive && !wifiLocked && !roomEnded && !isLeavingExam && remainingSeconds > 0 ? (
         <View
           style={[
             styles.pinRequiredBlockingShield,
@@ -1080,8 +1174,9 @@ function ExamScreenInner() {
 
       {/* WiFi Disconnect Overlay */}
       <ExamWifiDisconnectOverlay
-        visible={wifiLocked && !roomEnded}
+        visible={wifiLocked && !roomEnded && !isLeavingExam}
         requiresPin={requiresPin}
+        reconnectFailed={reconnectFailed || manualReconnectFailed}
         loading={reconnectLoading}
         error={reconnectError}
         examinationEnded={false}
@@ -1090,6 +1185,12 @@ function ExamScreenInner() {
         graceSecondsRemaining={graceSecondsRemaining ?? undefined}
         onSubmitCode={handleReconnect}
         onRetry={handleProctorNetworkRetry}
+        onExitExam={() =>
+          void exitToLanding(
+            'proctor_unreachable_exit',
+            'You left the exam because the proctor could not be reached. Your disconnect was saved on this phone for later sync.',
+          )
+        }
         onExitEnded={leaveEndedExam}
       />
     </View>

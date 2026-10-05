@@ -18,7 +18,40 @@ type NativeKioskBridge = {
   setImmersiveMode?: (enabled: boolean) => Promise<void>;
   blockMultiWindow?: (enabled: boolean) => Promise<void>;
   isLocked?: () => Promise<boolean>;
+  startExamHostService?: () => Promise<void>;
+  stopExamHostService?: () => Promise<void>;
+  startStudentExamService?: () => Promise<void>;
+  getExamHostServiceStatus?: () => Promise<{
+    running?: boolean;
+    partialWakeLockHeld?: boolean;
+    wifiLockHeld?: boolean;
+  }>;
+  isIgnoringBatteryOptimizations?: () => Promise<boolean>;
+  requestBatteryOptimizationExemption?: () => Promise<boolean>;
 };
+
+const LOCK_TASK_TIMEOUT_MS = 5000;
+
+async function runLockTaskWithTimeout(
+  operation: (() => Promise<void>) | undefined,
+): Promise<void> {
+  if (!operation) return;
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      operation(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error('Android screen pinning request timed out.')),
+          LOCK_TASK_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 /**
  * Optional native module bridge for Android Device Owner / Lock Task Mode.
@@ -44,7 +77,7 @@ function getNativeBridge(): NativeKioskBridge | null {
 export async function startExamLock(): Promise<void> {
   if (Platform.OS !== 'android') return;
   const bridge = getNativeBridge();
-  await bridge?.startLockTask?.();
+  await runLockTaskWithTimeout(bridge?.startLockTask?.bind(bridge));
 }
 
 /**
@@ -54,7 +87,7 @@ export async function startExamLock(): Promise<void> {
 export async function stopExamLock(): Promise<void> {
   if (Platform.OS !== 'android') return;
   const bridge = getNativeBridge();
-  await bridge?.stopLockTask?.();
+  await runLockTaskWithTimeout(bridge?.stopLockTask?.bind(bridge));
 }
 
 /**
@@ -65,7 +98,18 @@ export async function isExamLocked(): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
   try {
     const bridge = getNativeBridge();
-    return (await bridge?.isLocked?.()) ?? false;
+    if (!bridge?.isLocked) return false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        bridge.isLocked(),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('Lock state query timed out.')), LOCK_TASK_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   } catch {
     return false;
   }
@@ -83,6 +127,99 @@ export async function isExamLocked(): Promise<boolean> {
  * System-level kiosk (Recent Apps / status bar) still needs Device Owner.
  */
 export const ExamSecurityService = {
+  hasExamHostForegroundService(): boolean {
+    return Platform.OS === 'android' && Boolean(getNativeBridge()?.startExamHostService);
+  },
+
+  /** Keep the proctor-hosted LAN server in a foreground service on Android. */
+  async startExamHostKeepAlive(): Promise<void> {
+    if (Platform.OS !== 'android') return;
+    try {
+      const bridge = getNativeBridge();
+      await bridge?.startExamHostService?.();
+      if (__DEV__ && bridge?.getExamHostServiceStatus) {
+        void (async () => {
+          const deadline = Date.now() + 3000;
+          let status = await bridge.getExamHostServiceStatus?.();
+          while (!status?.running && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            status = await bridge.getExamHostServiceStatus?.();
+          }
+          console.info('[EXAM HOST] foreground service status', status);
+        })().catch((error) => {
+          console.warn('[EXAM HOST] Could not verify foreground service:', error);
+        });
+      }
+    } catch (err) {
+      console.warn('[EXAM HOST] Foreground service could not start:', err);
+    }
+  },
+
+  async getExamHostServiceStatus(): Promise<{
+    running: boolean;
+    partialWakeLockHeld: boolean;
+    wifiLockHeld: boolean;
+  }> {
+    if (Platform.OS !== 'android') {
+      return { running: false, partialWakeLockHeld: false, wifiLockHeld: false };
+    }
+    try {
+      const status = await getNativeBridge()?.getExamHostServiceStatus?.();
+      return {
+        running: status?.running === true,
+        partialWakeLockHeld: status?.partialWakeLockHeld === true,
+        wifiLockHeld: status?.wifiLockHeld === true,
+      };
+    } catch {
+      return { running: false, partialWakeLockHeld: false, wifiLockHeld: false };
+    }
+  },
+
+  async stopExamHostKeepAlive(): Promise<void> {
+    if (Platform.OS !== 'android') return;
+    try {
+      await getNativeBridge()?.stopExamHostService?.();
+    } catch {
+      // A service that did not start needs no cleanup.
+    }
+  },
+
+  async startStudentExamKeepAlive(): Promise<void> {
+    if (Platform.OS !== 'android') return;
+    try {
+      await getNativeBridge()?.startStudentExamService?.();
+    } catch (err) {
+      console.warn('[STUDENT EXAM] Foreground service could not start:', err);
+    }
+  },
+
+  async stopStudentExamKeepAlive(): Promise<void> {
+    if (Platform.OS !== 'android') return;
+    try {
+      await getNativeBridge()?.stopExamHostService?.();
+    } catch {
+      // A service that did not start needs no cleanup.
+    }
+  },
+
+  async isIgnoringBatteryOptimizations(): Promise<boolean> {
+    if (Platform.OS !== 'android') return true;
+    try {
+      return (await getNativeBridge()?.isIgnoringBatteryOptimizations?.()) ?? false;
+    } catch {
+      return false;
+    }
+  },
+
+  async requestBatteryOptimizationExemption(): Promise<boolean> {
+    if (Platform.OS !== 'android') return false;
+    try {
+      return (await getNativeBridge()?.requestBatteryOptimizationExemption?.()) ?? false;
+    } catch {
+      return false;
+    }
+  },
+
   async getCapabilities(): Promise<ExamSecurityCapabilities> {
     const captureAvailable = await ScreenCapture.isAvailableAsync().catch(() => false);
     const native = getNativeBridge();
@@ -161,7 +298,7 @@ export const ExamSecurityService = {
     try {
       await native?.setImmersiveMode?.(true);
       await native?.blockMultiWindow?.(true);
-      await native?.startLockTask?.();
+      await startExamLock();
     } catch {
       // Expo Go: native kiosk unavailable — AppState monitoring still applies
     }
@@ -173,7 +310,7 @@ export const ExamSecurityService = {
     const native = getNativeBridge();
 
     try {
-      await native?.stopLockTask?.();
+      await stopExamLock();
       await native?.setImmersiveMode?.(false);
       await native?.blockMultiWindow?.(false);
     } catch {

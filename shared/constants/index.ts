@@ -27,6 +27,8 @@ export const STORAGE_KEYS = {
   proctorToken: 'tcc.proctor.token',
   studentProgress: 'tcc.student.exam.progress',
   participationToken: 'tcc.student.participation',
+  pendingStudentDisconnects: 'tcc.student.pending.disconnects',
+  pendingExamExitNotice: 'tcc.student.pending.exit.notice',
   examinationCode: 'tcc.student.exam.code',
   settings: 'tcc.settings',
   /** Runtime override for Option B LAN exam server (http://IP:8000/api/v1) */

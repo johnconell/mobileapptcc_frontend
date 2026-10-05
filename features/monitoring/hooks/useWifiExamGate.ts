@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { isWifiConnected } from '@/features/monitoring/services/campusWifiGate';
 import * as Network from 'expo-network';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
+import { shouldOfferReconnectExit } from '@/features/monitoring/services/reconnectExitPolicy';
 
 export type WifiDisconnectReason =
   | 'wifi_lost'               // Wi-Fi turned off or disconnected entirely
@@ -52,9 +54,12 @@ export function useWifiExamGate({
   const [wifiConnected, setWifiConnected] = useState(true);
   const [disconnectReason, setDisconnectReason] = useState<WifiDisconnectReason | null>(null);
   const [graceSecondsRemaining, setGraceSecondsRemaining] = useState<number | null>(null);
+  const [reconnectFailed, setReconnectFailed] = useState(false);
   const wasConnected = useRef(true);
   const disconnectStartTime = useRef<number | null>(null);
   const graceExpiredRef = useRef(false);
+  const peerReconnectInFlight = useRef(false);
+  const tickRef = useRef<() => void>(() => {});
 
   const effectiveGraceSeconds =
     typeof gracePeriodSeconds === 'number' && gracePeriodSeconds > 0
@@ -97,6 +102,7 @@ export function useWifiExamGate({
       setWifiLocked(false);
       setDisconnectReason(null);
       setGraceSecondsRemaining(null);
+      setReconnectFailed(false);
       graceExpiredRef.current = false;
       wasConnected.current = true;
       disconnectStartTime.current = null;
@@ -112,6 +118,7 @@ export function useWifiExamGate({
       setRequiresPin(false);
       setDisconnectReason(null);
       setGraceSecondsRemaining(null);
+      setReconnectFailed(false);
       graceExpiredRef.current = false;
       wasConnected.current = true;
       disconnectStartTime.current = null;
@@ -119,6 +126,37 @@ export function useWifiExamGate({
     }
 
     let cancelled = false;
+
+    const retryProctorHost = async () => {
+      if (peerReconnectInFlight.current) return;
+      peerReconnectInFlight.current = true;
+      let delayMs = 1000;
+
+      try {
+        while (!cancelled) {
+          if (AppState.currentState !== 'active') {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            continue;
+          }
+
+          const netState = await Network.getNetworkStateAsync();
+          if (netState.type !== Network.NetworkStateType.WIFI) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            continue;
+          }
+
+          if (await PeerExamClient.ping()) break;
+          await PeerExamClient.refreshHostFromCloud();
+          if (await PeerExamClient.ping()) break;
+
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          delayMs = Math.min(delayMs * 2, 15000);
+        }
+      } finally {
+        peerReconnectInFlight.current = false;
+        if (!cancelled) tickRef.current();
+      }
+    };
 
     const tick = async () => {
       const netState = await Network.getNetworkStateAsync();
@@ -154,16 +192,15 @@ export function useWifiExamGate({
           reason = 'wrong_network';
         } else {
           // SSIDs match (or we can't read them) — check if the proctor is reachable.
-          serverReachable = await PeerExamClient.ping();
-          if (!serverReachable) {
-            // Proctor may have moved Wi‑Fi / got a new DHCP lease — refresh cloud IP once.
-            const refreshed = await PeerExamClient.refreshHostFromCloud();
-            if (refreshed) {
-              serverReachable = await PeerExamClient.ping();
-            }
+          if (peerReconnectInFlight.current) {
+            serverReachable = false;
+            reason = 'proctor_network_change';
+          } else {
+            serverReachable = await PeerExamClient.ping();
             if (!serverReachable) {
-              // Student is on the correct SSID, proctor changed their IP — not the student's fault.
+              // Try the cached host and cloud-resolved host with exponential backoff.
               reason = 'proctor_network_change';
+              void retryProctorHost();
             }
           }
         }
@@ -184,6 +221,7 @@ export function useWifiExamGate({
         const elapsed = (Date.now() - disconnectStartTime.current) / 1000;
         const remaining = Math.max(0, Math.ceil(effectiveGraceSeconds - elapsed));
         setGraceSecondsRemaining(remaining);
+        setReconnectFailed(shouldOfferReconnectExit(elapsed * 1000));
 
         // Only wifi_lost and wrong_network escalate to PIN — proctor change does not.
         const escalatesPin = reason === 'wifi_lost' || reason === 'wrong_network';
@@ -205,6 +243,7 @@ export function useWifiExamGate({
           setWifiLocked(false);
           setDisconnectReason(null);
           setGraceSecondsRemaining(null);
+          setReconnectFailed(false);
           graceExpiredRef.current = false;
           wasConnected.current = true;
           disconnectStartTime.current = null;
@@ -212,12 +251,17 @@ export function useWifiExamGate({
       }
     };
 
+    tickRef.current = () => void tick();
     void tick();
     const id = setInterval(tick, 3000);
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') tickRef.current();
+    });
 
     return () => {
       cancelled = true;
       clearInterval(id);
+      appStateSubscription.remove();
     };
   }, [enabled, requiresPin, effectiveGraceSeconds]);
 
@@ -227,6 +271,7 @@ export function useWifiExamGate({
     wifiConnected,
     disconnectReason,
     graceSecondsRemaining,
+    reconnectFailed,
     unlockAfterReconnect,
     setWifiLocked,
     setRequiresPin,

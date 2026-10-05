@@ -10,11 +10,18 @@ const path = require('path');
 const KIOSK_MODULE_SRC = `package edu.tcc.entranceexam
 
 import android.app.Activity
+import android.Manifest
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import android.net.Uri
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.view.View
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -178,6 +185,101 @@ class ExamKioskModule(private val reactContext: ReactApplicationContext) :
             promise.resolve(false)
         }
     }
+
+    @ReactMethod
+    fun startExamHostService(promise: Promise) {
+        startExamService(false, promise)
+    }
+
+    @ReactMethod
+    fun startStudentExamService(promise: Promise) {
+        startExamService(true, promise)
+    }
+
+    private fun startExamService(studentSession: Boolean, promise: Promise) {
+        try {
+            val activity = reactContext.currentActivity
+            if (Build.VERSION.SDK_INT >= 33 && activity != null &&
+                reactContext.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9778)
+            }
+            val intent = Intent(reactContext, ExamHostForegroundService::class.java)
+                .putExtra(ExamHostForegroundService.EXTRA_STUDENT_SESSION, studentSession)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                reactContext.startForegroundService(intent)
+            } else {
+                reactContext.startService(intent)
+            }
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("EXAM_HOST_SERVICE_START", e)
+        }
+    }
+
+    @ReactMethod
+    fun stopExamHostService(promise: Promise) {
+        try {
+            reactContext.stopService(Intent(reactContext, ExamHostForegroundService::class.java))
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("EXAM_HOST_SERVICE_STOP", e)
+        }
+    }
+
+    @ReactMethod
+    fun getExamHostServiceStatus(promise: Promise) {
+        try {
+            promise.resolve(Arguments.createMap().apply {
+                putBoolean("running", ExamHostForegroundService.isRunning)
+                putBoolean("partialWakeLockHeld", ExamHostForegroundService.isWakeLockHeld)
+                putBoolean("wifiLockHeld", ExamHostForegroundService.isWifiLockHeld)
+            })
+        } catch (e: Exception) {
+            promise.reject("EXAM_HOST_SERVICE_STATUS", e)
+        }
+    }
+
+    @ReactMethod
+    fun isIgnoringBatteryOptimizations(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                promise.resolve(true)
+                return
+            }
+            val powerManager = reactContext.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
+            promise.resolve(powerManager.isIgnoringBatteryOptimizations(reactContext.packageName))
+        } catch (e: Exception) {
+            promise.reject("BATTERY_OPTIMIZATION_STATUS", e)
+        }
+    }
+
+    @ReactMethod
+    fun requestBatteryOptimizationExemption(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                promise.resolve(true)
+                return
+            }
+            val powerManager = reactContext.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
+            if (powerManager.isIgnoringBatteryOptimizations(reactContext.packageName)) {
+                promise.resolve(true)
+                return
+            }
+            val activity = reactContext.currentActivity
+            if (activity == null) {
+                promise.resolve(false)
+                return
+            }
+            val intent = Intent(
+                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                Uri.parse("package:" + reactContext.packageName)
+            )
+            activity.startActivity(intent)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("BATTERY_OPTIMIZATION_REQUEST", e)
+        }
+    }
 }
 `;
 
@@ -196,6 +298,172 @@ class ExamKioskPackage : ReactPackage {
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {
         return emptyList()
     }
+}
+`;
+
+const EXAM_HOST_SERVICE_SRC = `package edu.tcc.entranceexam
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
+import android.os.Build
+import android.os.IBinder
+import android.os.PowerManager
+import android.util.Log
+
+/** Keeps the proctor LAN host process foreground-prioritized during a room. */
+class ExamHostForegroundService : Service() {
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        showOngoingNotification()
+        acquireKeepAliveLocks()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            releaseKeepAliveLocks()
+            isRunning = false
+            stopForeground(true)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        showOngoingNotification(intent?.getBooleanExtra(EXTRA_STUDENT_SESSION, false) == true)
+        return START_STICKY
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        releaseKeepAliveLocks()
+        isRunning = false
+        super.onDestroy()
+    }
+
+    private fun acquireKeepAliveLocks() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$packageName:ExamHostCpu"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            isWakeLockHeld = wakeLock?.isHeld == true
+        } catch (error: Exception) {
+            isWakeLockHeld = false
+            Log.w(TAG, "Could not acquire exam-host partial wake lock", error)
+        }
+
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            wifiLock = wifiManager.createWifiLock(
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                "$packageName:ExamHostWifi"
+            ).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            isWifiLockHeld = wifiLock?.isHeld == true
+        } catch (error: Exception) {
+            isWifiLockHeld = false
+            Log.w(TAG, "Could not acquire exam-host Wi-Fi lock", error)
+        }
+
+        isRunning = true
+    }
+
+    private fun releaseKeepAliveLocks() {
+        try {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        } catch (error: Exception) {
+            Log.w(TAG, "Could not release exam-host partial wake lock", error)
+        } finally {
+            wakeLock = null
+            isWakeLockHeld = false
+        }
+        try {
+            if (wifiLock?.isHeld == true) wifiLock?.release()
+        } catch (error: Exception) {
+            Log.w(TAG, "Could not release exam-host Wi-Fi lock", error)
+        } finally {
+            wifiLock = null
+            isWifiLockHeld = false
+        }
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Active examination room",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Keeps the local exam room available to connected student phones."
+            setShowBadge(false)
+        }
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    private fun showOngoingNotification(isStudentSession: Boolean = false) {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val pendingIntent = launchIntent?.let {
+            PendingIntent.getActivity(
+                this,
+                0,
+                it,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            Notification.Builder(this)
+        }
+        val notification = builder
+            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setContentTitle(applicationInfo.loadLabel(packageManager))
+            .setContentText(
+                if (isStudentSession) "Exam active. Answers are saved on this phone."
+                else "Room is active. Stay connected to exam Wi-Fi."
+            )
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    companion object {
+        private const val TAG = "ExamHostService"
+        const val ACTION_STOP = "edu.tcc.entranceexam.STOP_EXAM_HOST"
+        const val EXTRA_STUDENT_SESSION = "student_exam_session"
+        private const val CHANNEL_ID = "exam_room_host"
+        private const val NOTIFICATION_ID = 9777
+        @Volatile var isRunning = false
+        @Volatile var isWakeLockHeld = false
+        @Volatile var isWifiLockHeld = false
+    }
+
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 }
 `;
 
@@ -238,6 +506,25 @@ function withExamSecurity(config) {
 
     // Permission to hide all non-system overlay windows (chat heads, floating apps)
     AndroidConfig.Permissions.addPermission(manifest, 'android.permission.HIDE_OVERLAY_WINDOWS');
+    AndroidConfig.Permissions.addPermission(manifest, 'android.permission.WAKE_LOCK');
+    AndroidConfig.Permissions.addPermission(manifest, 'android.permission.ACCESS_WIFI_STATE');
+    AndroidConfig.Permissions.addPermission(manifest, 'android.permission.FOREGROUND_SERVICE');
+    AndroidConfig.Permissions.addPermission(manifest, 'android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE');
+    AndroidConfig.Permissions.addPermission(manifest, 'android.permission.POST_NOTIFICATIONS');
+    AndroidConfig.Permissions.addPermission(manifest, 'android.permission.CHANGE_NETWORK_STATE');
+    AndroidConfig.Permissions.addPermission(manifest, 'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS');
+
+    const services = mainApplication.service ?? (mainApplication.service = []);
+    if (!services.some((service) => service.$?.['android:name'] === '.ExamHostForegroundService')) {
+      services.push({
+        $: {
+          'android:name': '.ExamHostForegroundService',
+          'android:enabled': 'true',
+          'android:exported': 'false',
+          'android:foregroundServiceType': 'connectedDevice',
+        },
+      });
+    }
 
     return config;
   });
@@ -256,10 +543,12 @@ function withExamSecurity(config) {
 
       const modulePath = path.join(targetDir, 'ExamKioskModule.kt');
       const packagePath = path.join(targetDir, 'ExamKioskPackage.kt');
+      const servicePath = path.join(targetDir, 'ExamHostForegroundService.kt');
       const mainActivityPath = path.join(targetDir, 'MainActivity.kt');
 
       fs.writeFileSync(modulePath, KIOSK_MODULE_SRC, 'utf8');
       fs.writeFileSync(packagePath, KIOSK_PACKAGE_SRC, 'utf8');
+      fs.writeFileSync(servicePath, EXAM_HOST_SERVICE_SRC, 'utf8');
 
       if (fs.existsSync(mainActivityPath)) {
         let activityContent = fs.readFileSync(mainActivityPath, 'utf8');

@@ -17,6 +17,12 @@ export async function evaluateAndSwitchNetworkMode(): Promise<boolean> {
     const netState = await Network.getNetworkStateAsync();
     const isWifi = netState.type === Network.NetworkStateType.WIFI;
     const isConnected = netState.isConnected === true;
+    if (isConnected && netState.isInternetReachable !== false) {
+      const { syncStudentDisconnects } = await import(
+        '@/features/monitoring/services/studentDisconnectAudit'
+      );
+      void syncStudentDisconnects();
+    }
 
     const { PeerExamClient } = await import('@/features/examinations/services/peerExamClient');
     if (await PeerExamClient.isActive()) {

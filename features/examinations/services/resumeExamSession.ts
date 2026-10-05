@@ -7,7 +7,10 @@ import { ExamPreloader } from '@/features/examinations/services/examPreloader';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { useExamStore } from '@/features/examinations/stores/examStore';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
+import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { clearApplicantExamMaterial } from '@/features/applicants/services/applicantExamCleanup';
+import { isExamLocked, stopExamLock } from '@/features/examinations/services/ExamSecurityService';
+import { hasValidLocalStudentParticipation } from '@/features/monitoring/services/reconnectExitPolicy';
 
 type StoredStudentProgress = {
   registrationId?: number;
@@ -46,12 +49,47 @@ async function probeLiveRoomStatus(): Promise<LiveRoomStatus> {
   return 'unreachable';
 }
 
-async function wipeEndedLocalSession(): Promise<void> {
-  await ExamProgressStore.clear();
-  await ExamLifecycle.clear();
-  await clearApplicantExamMaterial();
+async function wipeEndedLocalSession(notice?: string): Promise<void> {
+  await stopExamLock().catch(() => undefined);
+  if (notice) {
+    await appStorage.setItem(STORAGE_KEYS.pendingExamExitNotice, notice).catch(() => undefined);
+  }
+  await Promise.allSettled([
+    ExamProgressStore.clear(),
+    ExamLifecycle.clear(),
+    clearApplicantExamMaterial(),
+  ]);
   useExamStore.getState().reset();
   useStudentStore.getState().reset();
+  useLobbyStore.getState().reset();
+}
+
+/**
+ * Cold-start safety net for Android Lock Task Mode. A process restart resets JS
+ * state but can leave the system app pinned; only keep it pinned when the
+ * persisted token still matches a complete local participation record.
+ */
+export async function recoverOrphanedStudentKioskAtStartup(): Promise<void> {
+  if (!(await isExamLocked())) return;
+
+  const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+  const progressRaw = await appStorage.getItem(STORAGE_KEYS.studentProgress);
+  let progress: StoredStudentProgress | null = null;
+  try {
+    progress = progressRaw ? (JSON.parse(progressRaw) as StoredStudentProgress) : null;
+  } catch {
+    progress = null;
+  }
+
+  await ExamLifecycle.hydrate();
+  const validParticipation = hasValidLocalStudentParticipation(token, progress);
+  if (!validParticipation || ExamLifecycle.peek().status === 'ENDED') {
+    await wipeEndedLocalSession(
+      validParticipation
+        ? 'This examination session has ended. The app has been unlocked.'
+        : 'No active examination participation was found. The app has been unlocked.',
+    );
+  }
 }
 
 function studentFromProgress(progress: StoredStudentProgress | null): StudentRecord | null {
@@ -102,6 +140,11 @@ function studentFromProgress(progress: StoredStudentProgress | null): StudentRec
 export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
   const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
   if (!token) {
+    if (await isExamLocked()) {
+      await wipeEndedLocalSession('No active examination participation was found. The app has been unlocked.');
+    } else {
+      await stopExamLock().catch(() => undefined);
+    }
     return { ok: false, reason: 'no_token' };
   }
 
@@ -115,7 +158,7 @@ export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
 
   const sessionId = progress?.sessionId ? String(progress.sessionId) : null;
   if (!sessionId) {
-    await wipeEndedLocalSession();
+    await wipeEndedLocalSession('No active examination session was found. The app has been unlocked.');
     return { ok: false, reason: 'no_session' };
   }
 
@@ -123,18 +166,18 @@ export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
   const roomStatus = await probeLiveRoomStatus();
 
   if (roomStatus === 'ended' || roomStatus === 'idle') {
-    await wipeEndedLocalSession();
+    await wipeEndedLocalSession('This examination session has ended. The app has been unlocked.');
     return { ok: false, reason: 'ended' };
   }
 
   if (ExamLifecycle.peek().status === 'ENDED') {
-    await wipeEndedLocalSession();
+    await wipeEndedLocalSession('This examination session has ended. The app has been unlocked.');
     return { ok: false, reason: 'ended' };
   }
 
   const student = studentFromProgress(progress);
   if (!student) {
-    await wipeEndedLocalSession();
+    await wipeEndedLocalSession('The saved examination participation is no longer valid. The app has been unlocked.');
     return { ok: false, reason: 'no_student' };
   }
 

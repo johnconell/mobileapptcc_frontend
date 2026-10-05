@@ -27,9 +27,8 @@ const schema = z.object({
   passkey: z
     .string()
     .trim()
-    .min(6, 'Enter your examination key')
-    .max(12, 'Examination key is too long')
-    .regex(/^[A-Za-z0-9]+$/, 'Letters and numbers only'),
+    .length(8, 'Examination key must be exactly 8 characters')
+    .regex(/^[A-Za-z0-9]{8}$/, 'Use the 8-letter or number examination key'),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -167,7 +166,7 @@ export default function StudentPasskeyScreen() {
         },
       } as any);
     } catch (err) {
-      setError(userFacingError(err, 'Invalid examination key. Please check and try again.'));
+      setError(userFacingError(err, 'Unable to validate the examination key. Please try again.'));
     }
   });
 
@@ -204,7 +203,7 @@ export default function StudentPasskeyScreen() {
                 onChange(text.replace(/[^A-Za-z0-9]/g, '').toUpperCase())
               }
               onBlur={onBlur}
-              maxLength={12}
+              maxLength={8}
               onSubmitEditing={onContinue}
             />
           )}

@@ -27,6 +27,7 @@ import {
   ExamProcessChrome,
 } from '@/features/examinations/components/ExamProcessChrome';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
+import { classifyPeerReconnectError } from '@/features/examinations/services/peerReconnectErrors';
 import { parsePeerQr } from '@/features/examinations/services/peerExamServer';
 import { discoverPeerExamHostByCode } from '@/features/monitoring/services/peerLanDiscovery';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
@@ -55,9 +56,11 @@ const FRAME = Math.min(Dimensions.get('window').width * 0.72, 280);
 export default function JoinExaminationScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ mode?: string }>();
+  const reconnectMode = params.mode === 'reconnect';
   const initialMode: JoinMode = params.mode === 'code' ? 'code' : 'scan';
   const [mode, setMode] = useState<JoinMode>(initialMode);
   const [permission, requestPermission] = useCameraPermissions();
+  const permissionRequestStarted = useRef(false);
   const [scanning, setScanning] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +68,20 @@ export default function JoinExaminationScreen() {
   const setScannedSession = useStudentStore((s) => s.setScannedSession);
   const wifiGate = useCampusWifiJoinGate({ requireServer: true });
   const lastScanAt = useRef(0);
+
+  React.useEffect(() => {
+    if (
+      mode !== 'scan' ||
+      !permission ||
+      permission.granted ||
+      !permission.canAskAgain ||
+      permissionRequestStarted.current
+    ) {
+      return;
+    }
+    permissionRequestStarted.current = true;
+    void requestPermission();
+  }, [mode, permission, requestPermission]);
 
   const {
     control,
@@ -104,7 +121,40 @@ export default function JoinExaminationScreen() {
 
       // 1. OFFLINE PEER QR RESOLUTION: Direct local connection - ZERO internet calls!
       const peerTarget = parsePeerQr(trimmed);
+      if (reconnectMode && !peerTarget) {
+        throw new Error('Scan the proctor QR code for this same examination to reconnect.');
+      }
       if (peerTarget) {
+        if (reconnectMode) {
+          const existingTarget = await PeerExamClient.getTarget();
+          const storedCode = await appStorage.getItem(STORAGE_KEYS.examinationCode);
+          const expectedCode = (existingTarget?.code || storedCode || '').trim().toUpperCase();
+          if (!expectedCode || peerTarget.code.trim().toUpperCase() !== expectedCode) {
+            throw new Error('Scan the QR code for the same examination you were taking.');
+          }
+
+          await PeerExamClient.setTarget(peerTarget);
+          const pulse = await LobbyRepository.sendHeartbeat();
+          if (pulse.removed || pulse.myStatus === 'terminated') {
+            router.back();
+            return;
+          }
+          if (pulse.sessionNotFound) {
+            router.back();
+            return;
+          }
+          if (!pulse.ok) {
+            throw new Error(
+              classifyPeerReconnectError(pulse.message || 'Cannot reach the proctor with this QR code.'),
+            );
+          }
+
+          // A recovery scan changes only the saved host target. Keep the same
+          // applicant, participation token, device ID, answers, and timer.
+          router.back();
+          return;
+        }
+
         await PeerExamClient.setTarget(peerTarget);
 
         let scheduleId = peerTarget.scheduleId;
@@ -316,7 +366,8 @@ export default function JoinExaminationScreen() {
     }
   };
 
-  const close = () => router.replace('/');
+  const close = () =>
+    reconnectMode ? router.back() : router.replace('/');
 
   const modeToggle = (
     <View style={styles.modeToggle}>
