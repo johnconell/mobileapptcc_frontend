@@ -5,6 +5,10 @@ import {
 } from '@/shared/services/apiReachability';
 import { classifyPasskeyMatch, type PasskeyMatchClassification } from '@/features/examinations/services/passkeyClassification';
 import {
+  getPasskeyScheduleWindowState,
+  passkeyScheduleWindowMessage,
+} from '@/features/examinations/services/passkeyScheduleWindow';
+import {
   OfflinePack,
   OfflineQueuedResult,
   OfflineStore,
@@ -858,6 +862,23 @@ export const OfflineExamRepository = {
     const name = (a.name || '').trim() || 'Student';
     const parts = name.trim().split(/\s+/);
     const schedule = pack.schedules.find((s) => Number(s.id) === scheduleId);
+    if (!schedule) return null;
+
+    const windowState = getPasskeyScheduleWindowState(schedule);
+    if (windowState !== 'valid') {
+      return {
+        classification: 'invalid',
+        message: windowState === 'invalid'
+          ? 'This examination key has no valid schedule window.'
+          : passkeyScheduleWindowMessage(schedule, windowState),
+        schedule: {
+          id: schedule.id,
+          title: schedule.title,
+          exam_date: schedule.exam_date,
+          time_slot: schedule.time_slot,
+        },
+      };
+    }
 
     const studentRecord: StudentRecord = {
       id: String(a.id),
@@ -882,14 +903,12 @@ export const OfflineExamRepository = {
       selectable: true,
     };
 
-    const scheduleObj = schedule
-      ? {
-          id: schedule.id,
-          title: schedule.title,
-          exam_date: schedule.exam_date,
-          time_slot: schedule.time_slot,
-        }
-      : undefined;
+    const scheduleObj = {
+      id: schedule.id,
+      title: schedule.title,
+      exam_date: schedule.exam_date,
+      time_slot: schedule.time_slot,
+    };
 
     // Check if this applicant has already completed this examination schedule
     const codeUpper = (a.applicant_code || '').trim().toUpperCase();
