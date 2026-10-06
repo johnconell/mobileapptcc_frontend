@@ -54,6 +54,8 @@ export type OfflinePack = {
     applicant_id: number;
     exam_passkey?: string | null;
     exam_passkey_hash?: string | null;
+    passkey_status?: string | null;
+    passkey_expires_at?: string | null;
   }>;
   question_banks: Array<{
     id: number;

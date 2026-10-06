@@ -135,6 +135,7 @@ export default function StudentConfirmationScreen() {
         await ExamPreloader.downloadAndVerifyExamPackage({
           sessionId: String(scannedSessionId),
           passkey: effectivePasskey,
+          applicantCode: selectedStudent?.studentId,
         });
       } catch (err) {
         setJoinError(

@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { STORAGE_KEYS } from '@/shared/constants';
 import { appStorage } from '@/shared/services/storage';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
+import { normalizeExamPasskey } from '@/features/examinations/services/passkeyNormalization';
 import { encryptJson, decryptJson } from '@/features/synchronization/services/offlineStore';
 import { persistDisconnectGraceSeconds } from '@/shared/utils/gracePeriod';
 import {
@@ -153,6 +154,7 @@ export const ExamPreloader = {
     sessionId: string;
     passkey: string;
     code?: string;
+    applicantCode?: string;
   }): Promise<PreloadPackageResult> {
     if (__DEV__) {
       console.log(`[PRELOADER] Starting package download for session: ${input.sessionId}`);
@@ -206,7 +208,8 @@ export const ExamPreloader = {
             method: 'POST',
             body: {
               code: input.code || (await appStorage.getItem(STORAGE_KEYS.examinationCode)),
-              passkey: input.passkey.trim().toUpperCase(),
+              passkey: normalizeExamPasskey(input.passkey),
+              applicant_code: normalizeExamPasskey(input.applicantCode) || undefined,
             },
             timeoutMs: 25000,
           });

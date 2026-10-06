@@ -13,6 +13,7 @@ import { OfflineStore, computePackHash, computePackHashAsync, type OfflinePack }
 import { resolveWifiLanIp } from '@/features/monitoring/services/wifiLanIp';
 import { clampViolationLimit } from '@/shared/utils/violationLimit';
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
+import { maskedExamPasskey, normalizeExamPasskey } from '@/features/examinations/services/passkeyNormalization';
 import type {
   ExamTerminationReason,
   LobbySnapshot,
@@ -779,29 +780,46 @@ function registerRoutes(mod: HttpServerModule) {
   });
 
   mod.route(p('/passkey'), 'POST', async (request) => {
-    if (__DEV__) {
-      console.log('[PEER SERVER] passkey request reached proctor', {
-        hostIp,
-        port: PEER_PORT,
-      });
-    }
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
-    const passkey = String(body.passkey ?? '').trim().toUpperCase();
+    const passkey = normalizeExamPasskey(body.passkey);
+    const requestCode = String(body.code ?? '').trim().toUpperCase();
     if (!passkey) return fail(422, 'Enter your examination key.');
+    if (requestCode && requestCode !== session.examCode.trim().toUpperCase()) {
+      return fail(409, 'This examination code does not match the active proctor lobby.');
+    }
+    if (__DEV__) {
+      console.debug('[PEER PASSKEY REQUEST]', {
+        hostIp,
+        port: PEER_PORT,
+        codeMatchesSession: !requestCode || requestCode === session.examCode.trim().toUpperCase(),
+        passkey: maskedExamPasskey(passkey),
+        scheduleId: session.scheduleId,
+        applicantCodeProvided: Boolean(body.applicant_code),
+      });
+    }
 
     const validated = await OfflineExamRepository.validatePasskey(
       session.examCode,
       passkey,
       session.scheduleId,
+      String(body.applicant_code ?? ''),
     );
-    if (!validated) return fail(404, 'Key not found.');
+    if (validated.classification === 'invalid') {
+      return fail(404, validated.message || 'This key is not in the proctor’s downloaded roster.');
+    }
     if (validated.classification === 'wrong_schedule') {
       return ok({
         classification: 'wrong_schedule',
         message: validated.message || 'Key not valid for this schedule/date.',
         schedule: validated.schedule,
       });
+    }
+    if (validated.classification === 'wrong_applicant') {
+      return ok({ classification: 'wrong_applicant', message: validated.message });
+    }
+    if (validated.classification === 'already_used') {
+      return ok({ classification: 'already_used', message: validated.message });
     }
     if (validated.classification === 'already_completed') {
       return ok({
@@ -878,7 +896,7 @@ function registerRoutes(mod: HttpServerModule) {
   mod.route(p('/package'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
-    const passkey = String(body.passkey ?? '').trim().toUpperCase();
+    const passkey = normalizeExamPasskey(body.passkey);
 
     // Validate passkey if present and check single attempt
     if (passkey) {
@@ -887,12 +905,19 @@ function registerRoutes(mod: HttpServerModule) {
           session.examCode,
           passkey,
           session.scheduleId,
+          String(body.applicant_code ?? ''),
         );
-        if (!validated || !validated.student) {
-          console.warn('[SERVER] /package passkey check soft-failed');
+        if (validated.classification === 'invalid') {
+          return fail(422, validated.message || 'This key is not in the proctor’s downloaded roster.');
         }
         if (validated?.classification === 'already_completed') {
           return fail(403, 'Examination Already Completed: Multiple attempts are not permitted.');
+        }
+        if (validated.classification === 'already_used') {
+          return fail(403, validated.message || 'This examination key has already been used.');
+        }
+        if (validated.classification === 'wrong_schedule' || validated.classification === 'wrong_applicant') {
+          return fail(422, validated.message || 'This examination key is not assigned to this examinee and schedule.');
         }
         if (validated?.student) {
           const appCode = (validated.student.studentId || '').trim().toUpperCase();
@@ -908,7 +933,12 @@ function registerRoutes(mod: HttpServerModule) {
           }
         }
       } catch (err) {
-        console.warn('[SERVER] /package passkey check error:', err);
+        if (__DEV__) {
+          console.warn('[SERVER] /package passkey check error', {
+            passkey: maskedExamPasskey(passkey),
+            errorType: err instanceof Error ? err.name : typeof err,
+          });
+        }
       }
     }
 
@@ -966,7 +996,7 @@ function registerRoutes(mod: HttpServerModule) {
     }
 
     const body = parseBody(request.body);
-    const passkey = String(body.passkey ?? '').trim().toUpperCase();
+    const passkey = normalizeExamPasskey(body.passkey);
 
     // Compatibility check: track applicant's module hash without blocking valid examinees
     const studentPackHash = String(body.student_pack_hash || body.package_hash || '').trim();
@@ -980,10 +1010,19 @@ function registerRoutes(mod: HttpServerModule) {
       session.examCode,
       passkey,
       session.scheduleId,
+      String(body.applicant_code ?? ''),
     );
-    if (!validated) return fail(404, 'Invalid examination key for this examination.');
+    if (validated.classification === 'invalid') {
+      return fail(404, validated.message || 'This key is not in the proctor’s downloaded roster.');
+    }
     if (validated.classification === 'wrong_schedule') {
       return fail(409, validated.message || 'This examination key belongs to a different schedule.');
+    }
+    if (validated.classification === 'wrong_applicant') {
+      return fail(422, validated.message || 'This examination key belongs to a different applicant.');
+    }
+    if (validated.classification === 'already_used') {
+      return fail(403, validated.message || 'This examination key has already been used.');
     }
 
     if (!validated.student) {

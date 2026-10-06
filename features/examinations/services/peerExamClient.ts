@@ -434,7 +434,7 @@ export const PeerExamClient = {
     const rawMessage =
       (typeof json?.message === 'string' && json.message.trim()) ||
       (!json || !text ? '' : `Request rejected (${res.status})`);
-    const msg = classifyPeerStartupError(rawMessage, path);
+    const msg = path === '/passkey' ? rawMessage : classifyPeerStartupError(rawMessage, path);
     if (__DEV__) {
       console.error('[PEER JOIN] HTTP error response', {
         baseUrl: `${baseUrl(target)}${path}`,

@@ -7,6 +7,7 @@ import {
 } from '@/features/synchronization/services/offlineExamRepository';
 import { OfflineStore, computePackHash, computePackHashAsync } from '@/features/synchronization/services/offlineStore';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
+import { normalizeExamPasskey } from '@/features/examinations/services/passkeyNormalization';
 import { classifyPeerReconnectError } from '@/features/examinations/services/peerReconnectErrors';
 import { parsePeerQr, PeerExamServer, resolveNumericScheduleId } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
@@ -764,14 +765,16 @@ export const LobbyRepository = {
     }
   },
 
-  async validatePasskey(passkey: string): Promise<{
-    classification: 'valid' | 'wrong_schedule' | 'already_completed' | 'already_in_lobby';
+  async validatePasskey(passkey: string, applicantCode?: string | null): Promise<{
+    classification: 'valid' | 'wrong_schedule' | 'already_completed' | 'already_in_lobby' | 'wrong_applicant' | 'already_used';
     message?: string;
     student?: StudentRecord;
     schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
   }> {
     const code = (await getStoredCode()) || '';
     if (!code) throw new Error('Missing examination code. Scan QR again.');
+    const normalizedPasskey = normalizeExamPasskey(passkey);
+    const expectedApplicantCode = normalizeExamPasskey(applicantCode);
 
     if (await PeerExamClient.isActive()) {
       const health = await PeerExamClient.probeHealth();
@@ -788,7 +791,7 @@ export const LobbyRepository = {
       }
 
       const response = await PeerExamClient.request<{
-        classification?: 'valid' | 'wrong_schedule' | 'already_completed' | 'already_in_lobby';
+        classification?: 'valid' | 'wrong_schedule' | 'already_completed' | 'already_in_lobby' | 'wrong_applicant' | 'already_used';
         message?: string;
         student?: StudentRecord;
         schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
@@ -796,7 +799,8 @@ export const LobbyRepository = {
         method: 'POST',
         body: {
           code,
-          passkey: passkey.trim().toUpperCase(),
+          passkey: normalizedPasskey,
+          applicant_code: expectedApplicantCode || undefined,
         },
       });
       if (response.classification === 'wrong_schedule') {
@@ -826,6 +830,18 @@ export const LobbyRepository = {
           schedule: response.schedule,
         };
       }
+      if (response.classification === 'wrong_applicant') {
+        return {
+          classification: 'wrong_applicant',
+          message: response.message || 'This examination key belongs to a different applicant.',
+        };
+      }
+      if (response.classification === 'already_used') {
+        return {
+          classification: 'already_used',
+          message: response.message || 'This examination key has already been used.',
+        };
+      }
       if (__DEV__) {
         console.debug('[LobbyRepository.validatePasskey] peer response', { classification: response.classification, hasStudent: Boolean(response.student), schedule: response.schedule });
       }
@@ -841,8 +857,15 @@ export const LobbyRepository = {
     }
 
     if (await OfflineStore.isOfflineMode()) {
-      const offline = await OfflineExamRepository.validatePasskey(code, passkey);
-      if (!offline) throw new Error('Invalid examination key for this offline session.');
+      const offline = await OfflineExamRepository.validatePasskey(
+        code,
+        normalizedPasskey,
+        undefined,
+        expectedApplicantCode,
+      );
+      if (offline.classification === 'invalid') {
+        throw new Error(offline.message || 'This key is not in the proctor’s downloaded roster.');
+      }
       if (offline.classification === 'wrong_schedule') {
         return {
           classification: 'wrong_schedule',
@@ -855,6 +878,14 @@ export const LobbyRepository = {
           message:
             offline.message ||
             'Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.',
+          student: offline.student,
+          schedule: offline.schedule,
+        };
+      }
+      if (offline.classification === 'wrong_applicant' || offline.classification === 'already_used') {
+        return {
+          classification: offline.classification,
+          message: offline.message,
           student: offline.student,
           schedule: offline.schedule,
         };
@@ -881,7 +912,11 @@ export const LobbyRepository = {
       }>('/exam/passkey/validate', {
         method: 'POST',
         auth: false,
-        body: { code, passkey: passkey.trim().toUpperCase() },
+        body: {
+          code,
+          passkey: normalizedPasskey,
+          applicant_code: expectedApplicantCode || undefined,
+        },
       });
 
       if (!json.data?.student) {
@@ -894,10 +929,22 @@ export const LobbyRepository = {
             schedule: sched,
           };
         }
+        if (String(payload?.message || '').toLowerCase().includes('different applicant')) {
+          return {
+            classification: 'wrong_applicant',
+            message: payload.message,
+          };
+        }
         if (json.message?.toLowerCase().includes('already')) {
           return {
             classification: 'already_completed',
             message: json.message || 'Examination Already Completed\nYou have already taken this examination.',
+          };
+        }
+        if (json.message?.toLowerCase().includes('different applicant')) {
+          return {
+            classification: 'wrong_applicant',
+            message: json.message,
           };
         }
         throw new Error(json.message || 'Invalid examination key.');
@@ -938,6 +985,12 @@ export const LobbyRepository = {
             schedule: sched,
           };
         }
+        if (String(payload?.message || '').toLowerCase().includes('different applicant')) {
+          return {
+            classification: 'wrong_applicant',
+            message: payload.message,
+          };
+        }
       }
       throw e instanceof Error ? e : new Error(String(e));
     }
@@ -963,7 +1016,8 @@ export const LobbyRepository = {
         method: 'POST',
         body: {
           code,
-          passkey: passkey.trim().toUpperCase(),
+          passkey: normalizeExamPasskey(passkey),
+          applicant_code: normalizeExamPasskey(student.studentId) || undefined,
           gmail: student.email || undefined,
           student_pack_hash: preloadedHash,
           package_hash: preloadedHash,
@@ -1024,7 +1078,8 @@ export const LobbyRepository = {
       auth: false,
       body: {
         code,
-        passkey: passkey.trim().toUpperCase(),
+        passkey: normalizeExamPasskey(passkey),
+        applicant_code: normalizeExamPasskey(student.studentId) || undefined,
         gmail: student.email || undefined,
         device_id: deviceId,
       },

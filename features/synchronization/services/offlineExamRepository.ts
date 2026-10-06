@@ -3,7 +3,8 @@ import {
   describeApiReachabilityProblem,
   studentPackDownloadFailureMessage,
 } from '@/shared/services/apiReachability';
-import { classifyPasskeyMatch, type PasskeyMatchClassification } from '@/features/examinations/services/passkeyClassification';
+import type { PasskeyMatchClassification } from '@/features/examinations/services/passkeyClassification';
+import { maskedExamPasskey, normalizeExamPasskey } from '@/features/examinations/services/passkeyNormalization';
 import {
   OfflinePack,
   OfflineQueuedResult,
@@ -16,6 +17,7 @@ import * as Crypto from 'expo-crypto';
 import * as Network from 'expo-network';
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
+import { lookupOfflinePasskey } from './offlinePasskeyLookup';
 
 /** Pull typed exam code from plain text or METCC QR JSON. */
 export function extractExaminationCode(raw: string): string {
@@ -416,7 +418,8 @@ export function grade(
  * 3) Online again: sync queued results to cloud
  */
 export interface OfflinePasskeyValidationResult {
-  classification: PasskeyMatchClassification;
+  classification: PasskeyMatchClassification | 'wrong_applicant' | 'already_used';
+  failureReason?: string;
   message?: string;
   student?: StudentRecord;
   schedule?: {
@@ -783,9 +786,9 @@ export const OfflineExamRepository = {
     examinationCode: string,
     passkey: string,
     scheduleIdOverride?: number | null,
-  ): Promise<OfflinePasskeyValidationResult | null> {
+    applicantCode?: string | null,
+  ): Promise<OfflinePasskeyValidationResult> {
     const pack = await OfflineStore.getPack();
-    if (!pack) return null;
 
     let scheduleId: number | null =
       scheduleIdOverride != null && Number.isFinite(Number(scheduleIdOverride))
@@ -802,63 +805,59 @@ export const OfflineExamRepository = {
       }
     }
 
-    if (scheduleId == null) return null;
-
-    const normalized = passkey.trim().toUpperCase();
-    const normalizedHash = await Crypto.digestStringAsync(
-      Crypto.CryptoDigestAlgorithm.SHA256,
-      normalized,
-    );
-    const matches = pack.registrations.filter(
-      (r) => {
-        const storedHash = String(r.exam_passkey_hash || '').toLowerCase();
-        if (storedHash) return storedHash === normalizedHash.toLowerCase();
-        return String(r.exam_passkey || '').toUpperCase() === normalized;
-      },
-    );
-    if (!matches.length) return null;
-
-    const matchingScheduleIds = matches.map((r) => String(r.examination_schedule_id ?? ''));
-    const classification = classifyPasskeyMatch({
-      currentScheduleId: scheduleId,
-      matchingScheduleIds,
+    const normalized = normalizeExamPasskey(passkey);
+    const normalizedHash = normalized
+      ? await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, normalized)
+      : '';
+    const lookup = lookupOfflinePasskey({
+      pack,
+      scheduleId,
+      normalizedPasskey: normalized,
+      normalizedHash,
+      applicantCode,
+      allowExpiredForTest:
+        __DEV__ && process.env.EXPO_PUBLIC_ALLOW_EXPIRED_PASSKEYS_TEST === 'true',
     });
 
-    if (classification !== 'valid') {
-      const otherScheduleId = matchingScheduleIds.find(
-        (value) => Number(value) !== scheduleId,
-      );
-      const otherSchedule = otherScheduleId
-        ? pack.schedules.find((s) => Number(s.id) === Number(otherScheduleId))
-        : undefined;
+    if (__DEV__) {
+      console.debug('[OFFLINE PASSKEY LOOKUP]', {
+        query: 'pack.registrations by SHA-256; scope examination_schedule_id',
+        scheduleId,
+        passkey: maskedExamPasskey(normalized),
+        packPresent: Boolean(pack),
+        registrationsScanned: pack?.registrations.length ?? 0,
+        result: lookup.kind,
+        reason: lookup.kind === 'invalid' ? lookup.reason : undefined,
+      });
+    }
+
+    if (lookup.kind === 'wrong_schedule') {
       return {
-        classification,
-        message:
-          classification === 'wrong_schedule'
-            ? `This examination key belongs to ${otherSchedule?.title || 'a different examination schedule'}. Use the correct key for this room.`
-            : 'Invalid examination key for this session.',
-        schedule: otherSchedule
+        classification: 'wrong_schedule',
+        message: lookup.message,
+        schedule: lookup.schedule
           ? {
-              id: otherSchedule.id,
-              title: otherSchedule.title,
-              exam_date: otherSchedule.exam_date,
-              time_slot: otherSchedule.time_slot,
+              id: lookup.schedule.id,
+              title: lookup.schedule.title,
+              exam_date: lookup.schedule.exam_date,
+              time_slot: lookup.schedule.time_slot,
             }
           : undefined,
       };
     }
+    if (lookup.kind === 'wrong_applicant') {
+      return { classification: 'wrong_applicant', message: lookup.message };
+    }
+    if (lookup.kind === 'invalid') {
+      return { classification: 'invalid', failureReason: lookup.reason, message: lookup.message };
+    }
+    if (lookup.kind === 'already_used') {
+      return { classification: 'already_used', message: lookup.message };
+    }
 
-    const reg = matches.find(
-      (registration) => Number(registration.examination_schedule_id) === scheduleId,
-    );
-    if (!reg) return null;
-
-    const a = pack.applicants.find((x) => Number(x.id) === Number(reg.applicant_id));
-    if (!a) return null;
+    const { registration: reg, applicant: a, schedule } = lookup;
     const name = (a.name || '').trim() || 'Student';
     const parts = name.trim().split(/\s+/);
-    const schedule = pack.schedules.find((s) => Number(s.id) === scheduleId);
-
     const studentRecord: StudentRecord = {
       id: String(a.id),
       studentId: a.applicant_code || String(a.id),
@@ -882,14 +881,12 @@ export const OfflineExamRepository = {
       selectable: true,
     };
 
-    const scheduleObj = schedule
-      ? {
-          id: schedule.id,
-          title: schedule.title,
-          exam_date: schedule.exam_date,
-          time_slot: schedule.time_slot,
-        }
-      : undefined;
+    const scheduleObj = {
+      id: schedule.id,
+      title: schedule.title,
+      exam_date: schedule.exam_date,
+      time_slot: schedule.time_slot,
+    };
 
     // Check if this applicant has already completed this examination schedule
     const codeUpper = (a.applicant_code || '').trim().toUpperCase();

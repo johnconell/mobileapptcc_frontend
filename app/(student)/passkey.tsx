@@ -22,13 +22,18 @@ import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { appStorage } from '@/shared/services/storage';
 import { examProcess } from '@/shared/theme/examProcess';
 import { userFacingError } from '@/shared/utils/userFacingError';
+import { normalizeExamPasskey } from '@/features/examinations/services/passkeyNormalization';
 
 const schema = z.object({
   passkey: z
     .string()
-    .trim()
-    .length(8, 'Examination key must be exactly 8 characters')
-    .regex(/^[A-Za-z0-9]{8}$/, 'Use the 8-letter or number examination key'),
+    .transform(normalizeExamPasskey)
+    .pipe(
+      z
+        .string()
+        .length(8, 'Examination key must be exactly 8 characters')
+        .regex(/^[A-Za-z0-9]{8}$/, 'Use the 8-letter or number examination key'),
+    ),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -37,6 +42,7 @@ export default function StudentPasskeyScreen() {
   const router = useRouter();
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
+  const selectedStudent = useStudentStore((s) => s.selectedStudent);
   const agreedAt = useStudentStore((s) => s.agreedAt);
   const setSelectedStudent = useStudentStore((s) => s.setSelectedStudent);
   const setExamPasskey = useStudentStore((s) => s.setExamPasskey);
@@ -84,7 +90,10 @@ export default function StudentPasskeyScreen() {
   const onContinue = handleSubmit(async (values) => {
     setError(null);
     try {
-      const result = await LobbyRepository.validatePasskey(values.passkey.trim());
+      const result = await LobbyRepository.validatePasskey(
+        values.passkey,
+        verifiedStudent?.studentId || selectedStudent?.studentId,
+      );
       if (result.classification === 'already_completed') {
         setError(
           result.message ||
@@ -97,6 +106,10 @@ export default function StudentPasskeyScreen() {
           result.message ||
             'Someone is already inside the lobby with this examination key. Please check your key or contact your proctor.',
         );
+        return;
+      }
+      if (result.classification === 'wrong_applicant' || result.classification === 'already_used') {
+        setError(result.message || 'This examination key cannot be used for this applicant.');
         return;
       }
       if (result.classification === 'wrong_schedule') {
@@ -114,7 +127,7 @@ export default function StudentPasskeyScreen() {
         }
         return;
       }
-      const upperKey = values.passkey.trim().toUpperCase();
+      const upperKey = normalizeExamPasskey(values.passkey);
       setExamPasskey(upperKey);
       await appStorage.setItem('tcc.student.exam.passkey', upperKey);
       if (!result.student) {
