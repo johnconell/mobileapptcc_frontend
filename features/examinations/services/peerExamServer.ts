@@ -889,7 +889,7 @@ function registerRoutes(mod: HttpServerModule) {
           session.scheduleId,
         );
         if (!validated || !validated.student) {
-          console.warn(`[SERVER] /package passkey check soft-failed for: ${passkey}`);
+          console.warn('[SERVER] /package passkey check soft-failed');
         }
         if (validated?.classification === 'already_completed') {
           return fail(403, 'Examination Already Completed: Multiple attempts are not permitted.');
