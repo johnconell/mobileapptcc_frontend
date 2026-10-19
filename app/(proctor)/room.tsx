@@ -7,6 +7,7 @@ import { Button } from '@/shared/components/ui/Button';
 import { Card } from '@/shared/components/ui/Card';
 import { Header } from '@/shared/components/ui/Header';
 import { SkeletonDetail } from '@/shared/components/ui/Skeleton';
+import { useSkeletonLoadingTimeout } from '@/components/skeleton';
 import { StatusChip } from '@/shared/components/ui/StatusChip';
 import { useRooms, useSchedules, useSessions } from '@/features/schedules/hooks/useSchedules';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
@@ -51,6 +52,7 @@ export default function RoomDetailScreen() {
   const sessionsQuery = useSessions(selectedSession?.scheduleId);
   const roomsQuery = useRooms(sessionId, Boolean(sessionId));
   const [busy, setBusy] = useState(false);
+  const [retryAttempt, setRetryAttempt] = useState(0);
 
   const session =
     selectedSession ??
@@ -61,8 +63,13 @@ export default function RoomDetailScreen() {
     () => roomsQuery.data?.find((item) => item.id === roomId) ?? null,
     [roomsQuery.data, roomId],
   );
+  const roomLoadingTimedOut = useSkeletonLoadingTimeout(
+    roomsQuery.isLoading && !room,
+    10_000,
+    retryAttempt,
+  );
 
-  if (roomsQuery.isLoading && !room) {
+  if (roomsQuery.isLoading && !room && !roomLoadingTimedOut) {
     return (
       <View style={styles.screen}>
         <Header
@@ -76,6 +83,37 @@ export default function RoomDetailScreen() {
           }
         />
         <SkeletonDetail />
+      </View>
+    );
+  }
+
+  if ((roomsQuery.isError || roomLoadingTimedOut) && !room) {
+    return (
+      <View style={styles.screen}>
+        <Header
+          title="Room"
+          subtitle={session?.timeLabel ?? 'Available Room'}
+          onBack={() =>
+            safeBack(router, {
+              pathname: '/(proctor)/rooms' as any,
+              params: { sessionId: sessionId ?? '' },
+            })
+          }
+        />
+        <View style={styles.empty}>
+          <Text style={styles.emptyTitle}>
+            {roomLoadingTimedOut
+              ? 'Loading this room took too long.'
+              : 'Unable to load this room.'}
+          </Text>
+          <Button
+            title="Retry"
+            onPress={() => {
+              setRetryAttempt((attempt) => attempt + 1);
+              void roomsQuery.refetch();
+            }}
+          />
+        </View>
       </View>
     );
   }

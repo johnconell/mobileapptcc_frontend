@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Pressable,
   Text,
@@ -11,15 +11,12 @@ import {
 } from 'react-native';
 import { CheckCircle2, ChevronDown, ChevronRight, Clock } from 'lucide-react-native';
 import type { ExamSchedule, ExamSession } from '@/shared/types';
-import { colors, shadows } from '@/shared/theme';
+import { shadows } from '@/shared/theme';
 import { Card } from '@/shared/components/ui';
 import { useSessions } from '@/features/schedules/hooks/useSchedules';
-import { useFocusEffect } from 'expo-router';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import {
   deriveExamSlotStatus,
-  examWindowHint,
-  examWindowHintLabel,
   EXAM_STATUS_HINTS,
   EXAM_STATUS_LABELS,
   matchOpenedRoom,
@@ -37,6 +34,7 @@ interface ScheduleCardProps {
   isExpanded?: boolean;
   onToggle?: () => void;
   onSelectTimeSlot?: (session: ExamSession) => void;
+  viewMode?: 'today' | 'next' | 'previous';
   delay?: number;
   openedRooms?: Record<string, { code: string; openedAt: string; status: 'lobby_open' | 'in_progress' | 'ended' }>;
 }
@@ -47,21 +45,13 @@ export function ScheduleCard({
   isExpanded = false,
   onToggle,
   onSelectTimeSlot,
+  viewMode = 'today',
   delay = 0,
   openedRooms,
 }: ScheduleCardProps) {
   const { colors: themeColors, isDark } = useAppTheme();
   const sessionsQuery = useSessions(schedule.id);
   const [headerPressed, setHeaderPressed] = useState(false);
-  const [now, setNow] = useState(() => new Date());
-
-  useFocusEffect(
-    React.useCallback(() => {
-      setNow(new Date());
-      const id = setInterval(() => setNow(new Date()), 15000);
-      return () => clearInterval(id);
-    }, []),
-  );
 
   // Animated rotation for the dropdown chevron
   const rotateAnim = useRef(new Animated.Value(isExpanded ? 1 : 0)).current;
@@ -83,22 +73,23 @@ export function ScheduleCard({
     if (!d) return null;
     const match = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (match) {
-      return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+      return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
     }
     const p = new Date(d);
     return isNaN(p.getTime()) ? null : p;
   };
 
   const parsed = parseDate(schedule.examinationDateIso || schedule.examinationDate);
-  const day = parsed ? String(parsed.getDate()) : '--';
+  const day = parsed ? String(parsed.getUTCDate()) : '--';
   const monthNames = [
     'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
     'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC',
   ];
-  const month = parsed ? monthNames[parsed.getMonth()] : '---';
+  const month = parsed ? monthNames[parsed.getUTCMonth()] : '---';
 
   const formattedDate = parsed
     ? parsed.toLocaleDateString(undefined, {
+        timeZone: 'UTC',
         month: 'long',
         day: 'numeric',
         year: 'numeric',
@@ -119,7 +110,6 @@ export function ScheduleCard({
   };
 
   const sessionCount = sessionsQuery.data?.length ?? schedule.batchCount;
-  const dateIso = schedule.examinationDateIso || schedule.examinationDate;
 
   const openedStatusForSession = (session: ExamSession) =>
     matchOpenedRoom(openedRooms, session)?.status ?? null;
@@ -133,13 +123,6 @@ export function ScheduleCard({
   const headerStatus: ExamSlotVisualStatus = sessions.length
     ? summarizeScheduleStatus(sessions.map((session) => slotStatus(session)))
     : 'not_opened';
-  const windowHint = examWindowHintLabel(
-    examWindowHint({
-      dateIso,
-      timeLabel: schedule.timeLabel,
-      now,
-    }),
-  );
 
   return (
     <Card delay={delay} style={{ ...styles.card, backgroundColor: themeColors.card, borderColor: isExpanded ? '#7A1F2B' : themeColors.cardBorder }}>
@@ -229,13 +212,17 @@ export function ScheduleCard({
             </View>
             <View style={styles.statusRow}>
               <ScheduleStatusBadge status={headerStatus} />
+              {viewMode === 'next' ? (
+                <View style={[styles.offlineReadyBadge, { backgroundColor: themeColors.cardMuted }]}>
+                  <Text style={[styles.offlineReadyText, { color: themeColors.textSecondary }]}>
+                    Not available yet
+                  </Text>
+                </View>
+              ) : null}
               {schedule.offlineReady ? (
                 <View style={[styles.offlineReadyBadge, { backgroundColor: themeColors.successMuted }]}>
                   <Text style={[styles.offlineReadyText, { color: themeColors.success }]}>Ready for offline</Text>
                 </View>
-              ) : null}
-              {windowHint && headerStatus === 'not_opened' ? (
-                <Text style={[styles.windowHint, { color: themeColors.textMuted }]}>{windowHint}</Text>
               ) : null}
             </View>
           </View>
@@ -296,10 +283,17 @@ export function ScheduleCard({
                 const visual = slotStatus(session);
                 const isActive = visual === 'open' || visual === 'in_progress';
                 const isEnded = visual === 'ended';
+                const historyStatus =
+                  session.historyStatus === 'completed' ||
+                  openedStatusForSession(session) === 'ended' ||
+                  schedule.status === 'completed'
+                    ? 'Completed'
+                    : 'Missed';
 
                 return (
                 <Pressable
                   key={session.id || sIdx}
+                  disabled={viewMode !== 'today'}
                   onPress={() => onSelectTimeSlot?.(session)}
                 >
                   {({ pressed }) => (
@@ -339,7 +333,11 @@ export function ScheduleCard({
                           numberOfLines={1}
                           maxFontSizeMultiplier={1.15}
                         >
-                          {EXAM_STATUS_HINTS[visual]}
+                          {viewMode === 'next'
+                            ? 'View-only schedule · Not available yet'
+                            : viewMode === 'previous'
+                              ? `History · ${historyStatus}`
+                              : EXAM_STATUS_HINTS[visual]}
                         </Text>
                         <View style={styles.timeSlotDetails}>
                           <Text
@@ -372,7 +370,9 @@ export function ScheduleCard({
                         <ChevronRight
                           size={18}
                           color={
-                            visual === 'in_progress'
+                            viewMode !== 'today'
+                              ? themeColors.textMuted
+                              : visual === 'in_progress'
                               ? '#2563EB'
                               : isActive
                                 ? '#EA580C'

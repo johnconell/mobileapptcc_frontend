@@ -72,6 +72,7 @@ export interface ExamSchedule {
   packVersion?: number;
   downloadedAt?: string;
   status?: string;
+  serverNow?: string;
 }
 
 export interface ExamSession {
@@ -92,6 +93,7 @@ export interface ExamSession {
   startedAt?: string | null;
   endsAt?: string | null;
   totalQuestions: number;
+  historyStatus?: 'completed' | 'missed';
   questionBankId?: number;
   /** Latest proctor LAN IP (cloud). Examinees refresh this after Wi‑Fi changes. */
   localServerIp?: string | null;

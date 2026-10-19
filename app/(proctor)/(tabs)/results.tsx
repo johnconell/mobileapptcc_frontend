@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useMemo } from 'react';
+import React, { useCallback, useState, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -46,6 +46,8 @@ import {
   AlertTriangle,
 } from 'lucide-react-native';
 import { Button } from '@/shared/components/ui';
+import { Skeleton, SkeletonCard, SkeletonCircle } from '@/shared/components/ui/Skeleton';
+import { useSkeletonLoadingTimeout } from '@/components/skeleton';
 import {
   OfflineStore,
   RESULTS_CHANGED_EVENT,
@@ -226,6 +228,10 @@ export default function ProctorResultsScreen() {
   const profile = useProctorStore((s) => s.profile);
 
   const [refreshing, setRefreshing] = useState(false);
+  const [resultsLoading, setResultsLoading] = useState(true);
+  const [resultsLoadError, setResultsLoadError] = useState<string | null>(null);
+  const [resultsRetryAttempt, setResultsRetryAttempt] = useState(0);
+  const resultsLoadedRef = useRef(false);
   const [pack, setPack] = useState<OfflinePack | null>(null);
   const [rawResults, setRawResults] = useState<OfflineQueuedResult[]>([]);
   const [openedRooms, setOpenedRooms] = useState<
@@ -256,6 +262,8 @@ export default function ProctorResultsScreen() {
   });
 
   const loadData = useCallback(async () => {
+    if (!resultsLoadedRef.current) setResultsLoading(true);
+    setResultsLoadError(null);
     try {
       setRefreshing(true);
       const [cachedPack, queued, opened] = await Promise.all([
@@ -267,8 +275,15 @@ export default function ProctorResultsScreen() {
       setPack(cachedPack);
       setRawResults(queued);
       setOpenedRooms(opened);
+      resultsLoadedRef.current = true;
+    } catch (error) {
+      console.error('Failed to load examination results:', error);
+      setResultsLoadError(
+        error instanceof Error ? error.message : 'Unable to load examination results.',
+      );
     } finally {
       setRefreshing(false);
+      setResultsLoading(false);
     }
   }, []);
 
@@ -279,8 +294,18 @@ export default function ProctorResultsScreen() {
         void loadData();
       });
       return () => sub.remove();
-    }, [loadData]),
+    }, [loadData, resultsRetryAttempt]),
   );
+  const resultsLoadingTimedOut = useSkeletonLoadingTimeout(
+    resultsLoading,
+    10_000,
+    resultsRetryAttempt,
+  );
+  const retryResults = () => {
+    setResultsLoadError(null);
+    setResultsLoading(true);
+    setResultsRetryAttempt((attempt) => attempt + 1);
+  };
 
   // Build examination lobbies list
   const lobbies: ExamLobby[] = useMemo(() => {
@@ -1172,7 +1197,42 @@ export default function ProctorResultsScreen() {
           <Text style={[styles.sectionCount, { color: colors.textSecondary }]}>{filteredLobbies.length} Sessions</Text>
         </View>
 
-        {filteredLobbies.length === 0 ? (
+        {resultsLoading && !resultsLoadingTimedOut ? (
+          <View style={styles.resultsSkeletonList}>
+            {[0, 1, 2].map((item) => (
+              <SkeletonCard
+                key={item}
+                style={[
+                  styles.resultsSkeletonCard,
+                  { backgroundColor: colors.card, borderColor: colors.cardBorder },
+                ]}
+              >
+                <View style={styles.resultsSkeletonRow}>
+                  <SkeletonCircle size={42} />
+                  <View style={styles.resultsSkeletonDetails}>
+                    <Skeleton height={15} width="58%" />
+                    <Skeleton height={12} width="40%" />
+                    <Skeleton height={11} width="72%" />
+                  </View>
+                  <Skeleton height={26} width={64} radius={12} />
+                </View>
+              </SkeletonCard>
+            ))}
+          </View>
+        ) : !resultsLoadedRef.current && (resultsLoadError || resultsLoadingTimedOut) ? (
+          <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <AlertCircle size={36} color={colors.warning} />
+            <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>
+              Unable to load examination records
+            </Text>
+            <Text style={[styles.emptySub, { color: colors.textSecondary }]}>
+              {resultsLoadingTimedOut
+                ? 'Loading took too long. Check your saved exam data and retry.'
+                : resultsLoadError}
+            </Text>
+            <Button title="Retry" onPress={retryResults} />
+          </View>
+        ) : filteredLobbies.length === 0 ? (
           <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
             <FileText size={36} color={colors.textMuted} />
             <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>No examination records found</Text>
@@ -1939,6 +1999,19 @@ const styles = StyleSheet.create({
   },
 
   // Empty State Card
+  resultsSkeletonList: { gap: 10 },
+  resultsSkeletonCard: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+  },
+  resultsSkeletonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minHeight: 66,
+  },
+  resultsSkeletonDetails: { flex: 1, gap: 8 },
   emptyCard: {
     backgroundColor: '#141414',
     borderRadius: 20,

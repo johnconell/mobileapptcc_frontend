@@ -3,6 +3,7 @@ export const SCHOOL_NAME = 'Tagoloan Community College';
 export const SCHOOL_SHORT = 'TCC';
 
 export const EXAM_DURATION_MINUTES = 60;
+export const JOIN_EARLY_MINUTES = 30;
 export const TOTAL_QUESTIONS = 80;
 export const MAX_EXAM_VIOLATIONS = 0;
 export const DEFAULT_DISCONNECT_GRACE_SECONDS = 120;

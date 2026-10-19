@@ -1,31 +1,18 @@
-import React, { useEffect } from 'react';
-import { StyleSheet, View, type DimensionValue, type ViewStyle } from 'react-native';
-import Animated, {
-  Easing,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from 'react-native-reanimated';
-import { colors, radii, spacing } from '@/shared/theme';
-
-/**
- * One shared clock drives every placeholder on screen so the pulses stay in
- * phase instead of shimmering independently.
- */
-function useSkeletonPulse() {
-  const progress = useSharedValue(0);
-
-  useEffect(() => {
-    progress.value = withRepeat(
-      withTiming(1, { duration: 1000, easing: Easing.inOut(Easing.ease) }),
-      -1,
-      true,
-    );
-  }, [progress]);
-
-  return useAnimatedStyle(() => ({ opacity: 0.45 + progress.value * 0.35 }));
-}
+import React from 'react';
+import {
+  StyleSheet,
+  View,
+  type DimensionValue,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
+import { radii, spacing } from '@/shared/theme';
+import {
+  SkeletonBox,
+  SkeletonCard as BaseSkeletonCard,
+  SkeletonCircle as BaseSkeletonCircle,
+  SkeletonText as BaseSkeletonText,
+} from '@/components/skeleton';
 
 interface SkeletonProps {
   width?: DimensionValue;
@@ -35,24 +22,18 @@ interface SkeletonProps {
 }
 
 export function Skeleton({ width = '100%', height = 14, radius, style }: SkeletonProps) {
-  const pulse = useSkeletonPulse();
-
   return (
-    <Animated.View
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
-      style={[
-        styles.block,
-        { width, height, borderRadius: radius ?? Math.min(height / 2, radii.sm) },
-        pulse,
-        style,
-      ]}
+    <SkeletonBox
+      width={width}
+      height={height}
+      borderRadius={radius ?? Math.min(height / 2, radii.sm)}
+      style={style}
     />
   );
 }
 
 export function SkeletonCircle({ size = 44 }: { size?: number }) {
-  return <Skeleton width={size} height={size} radius={radii.full} />;
+  return <BaseSkeletonCircle size={size} />;
 }
 
 export function SkeletonText({
@@ -67,7 +48,7 @@ export function SkeletonText({
   return (
     <View style={{ gap }}>
       {Array.from({ length: lines }).map((_, index) => (
-        <Skeleton
+        <BaseSkeletonText
           key={index}
           height={12}
           width={index === lines - 1 ? lastLineWidth : '100%'}
@@ -77,11 +58,13 @@ export function SkeletonText({
   );
 }
 
-export function SkeletonCard({ children }: { children: React.ReactNode }) {
-  return <View style={styles.card}>{children}</View>;
+export function SkeletonCard({
+  children,
+  style,
+}: React.PropsWithChildren<{ style?: StyleProp<ViewStyle> }>) {
+  return <BaseSkeletonCard style={style}>{children}</BaseSkeletonCard>;
 }
 
-/** Rows with an avatar and two lines — schedules, sessions, rooms, rosters. */
 export function SkeletonList({
   rows = 6,
   showAvatar = true,
@@ -107,7 +90,6 @@ export function SkeletonList({
   );
 }
 
-/** Label + input pairs with a submit button — login, passkey, confirmation. */
 export function SkeletonForm({ fields = 3 }: { fields?: number }) {
   return (
     <View style={styles.form}>
@@ -126,7 +108,6 @@ export function SkeletonForm({ fields = 3 }: { fields?: number }) {
   );
 }
 
-/** A single detail card above an action button — room detail, confirmation. */
 export function SkeletonDetail() {
   return (
     <View style={styles.form}>
@@ -147,7 +128,6 @@ export function SkeletonDetail() {
   );
 }
 
-/** Full page: heading block, then rows. Used for list screens. */
 export function SkeletonScreen({
   rows = 5,
   showAvatar = true,
@@ -167,12 +147,8 @@ export function SkeletonScreen({
 }
 
 const styles = StyleSheet.create({
-  block: {
-    backgroundColor: colors.surfaceMuted,
-  },
   screen: {
     flex: 1,
-    backgroundColor: colors.background,
     padding: spacing.xl,
     gap: spacing.xl,
   },
@@ -180,14 +156,6 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   list: {
-    gap: spacing.md,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.lg,
     gap: spacing.md,
   },
   row: {
@@ -204,7 +172,6 @@ const styles = StyleSheet.create({
   },
   form: {
     flex: 1,
-    backgroundColor: colors.background,
     padding: spacing.xl,
     gap: spacing.xl,
   },

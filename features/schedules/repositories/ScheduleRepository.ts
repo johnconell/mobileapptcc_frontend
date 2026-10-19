@@ -1,3 +1,4 @@
+import * as Network from 'expo-network';
 import { ApiError, apiRequest } from '@/shared/services/api';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { OfflineExamRepository } from '@/features/synchronization/services/offlineExamRepository';
@@ -18,9 +19,27 @@ type BackendSchedule = {
   status?: string;
   expected_examinees?: number;
   registrations_count?: number;
+  rooms_count?: number;
+  completed_rooms_count?: number;
 };
 
 const SCHEDULE_CATALOG_KEY = 'tcc.offline.schedule.catalog';
+let serverClockSample: { serverMs: number; monotonicMs: number | null } | null = null;
+
+function monotonicNow(): number | null {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : null;
+}
+
+export function getServerClockEstimate(): number | null {
+  if (!serverClockSample) return null;
+  const monotonicMs = monotonicNow();
+  if (monotonicMs === null || serverClockSample.monotonicMs === null) {
+    return serverClockSample.serverMs;
+  }
+  return serverClockSample.serverMs + Math.max(0, monotonicMs - serverClockSample.monotonicMs);
+}
 
 type BackendRoom = {
   id: number;
@@ -37,7 +56,8 @@ type BackendRoom = {
 
 function formatDateLabel(iso?: string | null): string {
   if (!iso) return '';
-  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, {
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, {
+    timeZone: 'UTC',
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -77,6 +97,10 @@ function toMobileSession(row: BackendSchedule): ExamSession {
     registeredStudents: Number(row.registrations_count ?? row.expected_examinees ?? 0),
     durationMinutes: 90,
     totalQuestions: 0,
+    historyStatus:
+      Number(row.completed_rooms_count ?? 0) > 0 || row.status === 'completed'
+        ? 'completed'
+        : 'missed',
   };
 }
 
@@ -96,7 +120,7 @@ function toMobileRoom(row: BackendRoom, scheduleId: string): ExamRoom {
   };
 }
 
-function toMobileSchedules(rows: BackendSchedule[]): ExamSchedule[] {
+function toMobileSchedules(rows: BackendSchedule[], serverNow?: string): ExamSchedule[] {
   const map = new Map<string, any>();
   rows.forEach((row) => {
     const date = row.exam_date || 'unknown';
@@ -114,6 +138,7 @@ function toMobileSchedules(rows: BackendSchedule[]): ExamSchedule[] {
         timeLabel: row.time_slot || undefined,
         batchNumber: row.batch_code || undefined,
         venue: row.venue || undefined,
+        serverNow,
       });
     }
     const item = map.get(key)!;
@@ -168,10 +193,19 @@ export const ScheduleRepository = {
   },
 
   async refreshSchedulesFromCloud(): Promise<ExamSchedule[]> {
-    const json = await apiRequest<{ success: boolean; data: BackendSchedule[] }>(
-      '/proctor/schedules?per_page=200',
+    const json = await apiRequest<{
+      success: boolean;
+      data: BackendSchedule[];
+      meta?: { server_now?: string };
+    }>(
+      '/proctor/schedules?per_page=200&include_history=1',
     );
-    const cloud = toMobileSchedules(json.data || []);
+    const serverNow = json.meta?.server_now;
+    const serverMs = serverNow ? Date.parse(serverNow) : NaN;
+    if (Number.isFinite(serverMs)) {
+      serverClockSample = { serverMs, monotonicMs: monotonicNow() };
+    }
+    const cloud = toMobileSchedules(json.data || [], serverNow);
     const cachedPackSchedules = await OfflineExamRepository.getCachedSchedules();
     // Keep a downloaded pack authoritative for offline use. The cloud catalog
     // may omit previously downloaded schedules (for example, after its
@@ -218,6 +252,7 @@ export const ScheduleRepository = {
             venue: row.venue,
             batch_code: row.batch_code,
             course: row.course,
+            status: row.status,
             registrations_count: pack.registrations.filter(
               (r) => Number(r.examination_schedule_id) === Number(row.id),
             ).length,
@@ -226,7 +261,9 @@ export const ScheduleRepository = {
         .sort((a, b) => a.startTime.localeCompare(b.startTime));
     };
 
-    if (await OfflineStore.hasPack()) {
+    const hasPack = await OfflineStore.hasPack();
+    const networkState = await Network.getNetworkStateAsync().catch(() => null);
+    if (hasPack && networkState?.isInternetReachable !== true) {
       return fromPack();
     }
 
@@ -240,7 +277,7 @@ export const ScheduleRepository = {
       }
 
       const json = await apiRequest<{ success: boolean; data: BackendSchedule[] }>(
-        `/proctor/schedules?per_page=200${date ? `&date=${encodeURIComponent(date)}` : ''}`,
+        `/proctor/schedules?per_page=200&include_history=1${date ? `&date=${encodeURIComponent(date)}` : ''}`,
       );
 
       const filtered = title
@@ -254,7 +291,7 @@ export const ScheduleRepository = {
       if (error instanceof ApiError && error.status === 403) {
         throw new Error(error.message || 'This schedule is not in the current academic year and cannot be downloaded.');
       }
-      if (await OfflineStore.hasPack()) {
+      if (hasPack) {
         await OfflineStore.setOfflineMode(true);
         return fromPack();
       }
@@ -360,6 +397,7 @@ function mergeSchedules(
       offlineReady: Boolean(schedule.offlineReady || existing?.offlineReady),
       packVersion: schedule.packVersion ?? existing?.packVersion,
       downloadedAt: schedule.downloadedAt ?? existing?.downloadedAt,
+      serverNow: existing?.serverNow ?? schedule.serverNow,
     });
   }
   return Array.from(merged.values()).sort((a, b) =>

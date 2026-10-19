@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import {
   FlatList,
   Text,
@@ -19,16 +19,23 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
   Bell,
+  ChevronDown,
   CheckCircle2,
   DoorOpen,
+  LockKeyhole,
   LogOut,
   Search,
   X,
 } from 'lucide-react-native';
-import { Card, Button, EmptyState, Breadcrumbs, StatusChip } from '@/shared/components/ui';
-import { ScheduleCard } from '@/features/schedules/components/ScheduleCard';
+import { Card, Button, EmptyState, StatusChip } from '@/shared/components/ui';
+import { Skeleton, SkeletonCard } from '@/shared/components/ui/Skeleton';
+import { useSkeletonLoadingTimeout } from '@/components/skeleton';
+import { ProctorScheduleRow, type ScheduleEntry } from '@/features/schedules/components/ProctorScheduleRow';
 import { useSchedules } from '@/features/schedules/hooks/useSchedules';
-import { ScheduleRepository } from '@/features/schedules/repositories/ScheduleRepository';
+import {
+  getServerClockEstimate,
+  ScheduleRepository,
+} from '@/features/schedules/repositories/ScheduleRepository';
 import { AuthRepository } from '@/features/authentication/repositories/AuthRepository';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { QUERY_KEYS } from '@/shared/constants';
@@ -43,40 +50,17 @@ import { confirmProctorLogout } from '@/features/authentication/utils/confirmPro
 import { useHardwareBack } from '@/shared/hooks/useHardwareBack';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { extractNumericScheduleId, matchOpenedRoom } from '@/features/schedules/utils/examScheduleStatus';
+import {
+  formatManilaMonth,
+  formatManilaScheduleDate,
+  formatScheduleOpeningTime,
+  getManilaDateIso,
+  getProctorScheduleAvailability,
+  splitScheduleDays,
+} from '@/features/schedules/utils/proctorScheduleWindow';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
-}
-
-function LegendSwatch({
-  tone,
-  label,
-}: {
-  tone: 'idle' | 'open' | 'progress' | 'ended';
-  label: string;
-}) {
-  const { colors, isDark } = useAppTheme();
-  return (
-    <View style={styles.legendItem}>
-      {tone === 'ended' ? (
-        <CheckCircle2 size={12} color={isDark ? '#22C55E' : '#16A34A'} strokeWidth={2.4} />
-      ) : (
-        <View
-          style={[
-            styles.legendDot,
-            tone === 'open' && styles.legendDotOpen,
-            tone === 'progress' && styles.legendDotProgress,
-            tone === 'idle' && {
-              backgroundColor: isDark ? '#262626' : '#D4CBB8',
-              borderWidth: 1,
-              borderColor: isDark ? '#52525B' : '#B8AC98',
-            },
-          ]}
-        />
-      )}
-      <Text style={[styles.legendLabel, { color: colors.textSecondary }]}>{label}</Text>
-    </View>
-  );
 }
 
 type PackSummary = Awaited<ReturnType<typeof OfflineStore.getPackSummary>>;
@@ -121,7 +105,18 @@ export default function ProctorExaminationTabScreen() {
   const [busy, setBusy] = useState(false);
 
   // Tracks multiple expanded schedules simultaneously
-  const [expandedScheduleIds, setExpandedScheduleIds] = useState<Set<string>>(new Set());
+  const [scheduleEntries, setScheduleEntries] = useState<ScheduleEntry[]>([]);
+  const [scheduleEntriesLoading, setScheduleEntriesLoading] = useState(false);
+  const [scheduleEntriesError, setScheduleEntriesError] = useState<string | null>(null);
+  const [scheduleEntriesAttempt, setScheduleEntriesAttempt] = useState(0);
+  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
+  const [lockedSchedule, setLockedSchedule] = useState<{
+    date: string;
+    entries: ScheduleEntry[];
+    upcoming: boolean;
+  } | null>(null);
+  const [showLockedDetails, setShowLockedDetails] = useState(false);
+  const scheduleListRef = useRef<FlatList<{ key: string; title: string; kind: string }> | null>(null);
 
   const [todayStatus, setTodayStatus] = useState<{
     downloadedToday: boolean;
@@ -130,7 +125,7 @@ export default function ProctorExaminationTabScreen() {
   }>({
     downloadedToday: false,
     packDate: null,
-    today: new Date().toISOString().slice(0, 10),
+    today: getManilaDateIso(Date.now()),
   });
   const [packNotice, setPackNotice] = useState<{
     updateRequired: boolean;
@@ -188,7 +183,13 @@ export default function ProctorExaminationTabScreen() {
     let active = true;
     const refreshConnection = async () => {
       const state = await Network.getNetworkStateAsync().catch(() => null);
-      if (active) setInternetAvailable(state?.isInternetReachable === true);
+      if (!active) return;
+      if (state?.isInternetReachable === true) setInternetAvailable(true);
+      else if (state?.isInternetReachable === false || state?.isConnected === false) {
+        setInternetAvailable(false);
+      } else {
+        setInternetAvailable(null);
+      }
     };
     void refreshConnection();
     const interval = setInterval(() => void refreshConnection(), 5000);
@@ -197,6 +198,83 @@ export default function ProctorExaminationTabScreen() {
       clearInterval(interval);
     };
   }, []);
+
+  const [clockTick, setClockTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setClockTick((tick) => tick + 1), 15_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const serverClockNowMs = useMemo(() => getServerClockEstimate(), [clockTick]);
+  const scheduleNowMs =
+    internetAvailable === false
+      ? Date.now()
+      : internetAvailable === true
+        ? serverClockNowMs
+        : null;
+  const todayIso = scheduleNowMs === null ? '' : getManilaDateIso(scheduleNowMs);
+
+  useEffect(() => {
+    const schedules = schedulesQuery.data ?? [];
+    let active = true;
+    setScheduleEntriesLoading(schedules.length > 0);
+    setScheduleEntriesError(null);
+    void Promise.all(
+      schedules.map(async (schedule) => {
+        const sessions = await ScheduleRepository.getSessionsBySchedule(schedule.id);
+        return sessions.map((session) => ({ schedule, session }));
+      }),
+    )
+      .then((groups) => {
+        if (active) {
+          setScheduleEntries(groups.flat());
+          setScheduleEntriesLoading(false);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load schedule time slots:', error);
+        if (active) {
+          setScheduleEntries([]);
+          setScheduleEntriesLoading(false);
+          setScheduleEntriesError('Unable to load examination time slots.');
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [schedulesQuery.data, scheduleEntriesAttempt]);
+
+  const scheduleDataLoading =
+    schedulesQuery.isLoading ||
+    schedulesQuery.cloudRefreshState === 'loading' ||
+    (schedulesQuery.cloudRefreshState === 'checking' &&
+      internetAvailable !== false &&
+      !schedulesQuery.data?.length) ||
+    scheduleEntriesLoading;
+  const scheduleLoadingTimedOut = useSkeletonLoadingTimeout(
+    scheduleDataLoading,
+    10_000,
+    scheduleEntriesAttempt,
+  );
+  const showScheduleSkeleton =
+    scheduleDataLoading &&
+    !scheduleLoadingTimedOut &&
+    !(
+      internetAvailable !== true &&
+      schedulesQuery.data?.some((schedule) => schedule.offlineReady)
+    );
+  const scheduleLoadingError =
+    scheduleLoadingTimedOut ||
+    schedulesQuery.isError ||
+    schedulesQuery.cloudRefreshState === 'error' ||
+    Boolean(scheduleEntriesError);
+
+  const retryScheduleLoading = () => {
+    setScheduleEntriesError(null);
+    setScheduleEntriesAttempt((attempt) => attempt + 1);
+    void schedulesQuery.refetch();
+    if (internetAvailable !== false) schedulesQuery.retryCloudRefresh();
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -249,19 +327,6 @@ export default function ProctorExaminationTabScreen() {
     } finally {
       setRefreshing(false);
     }
-  };
-
-  const toggleSchedule = (id: string) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpandedScheduleIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
   };
 
   // When proctor clicks an examination time slot, DIRECTLY open the room modal
@@ -321,6 +386,18 @@ export default function ProctorExaminationTabScreen() {
   // Open Room or Enter Existing Lobby
   const handleConfirmRoomAction = async () => {
     if (!selectedSlot) return;
+
+    const availability = getProctorScheduleAvailability(
+      {
+        date: selectedSlot.schedule.examinationDateIso || selectedSlot.schedule.examinationDate,
+        startTime: selectedSlot.session.startTime,
+        endTime: selectedSlot.session.endTime,
+        timeLabel: selectedSlot.session.timeLabel,
+      },
+      scheduleNowMs,
+      todayIso,
+    );
+    if (!selectedSlot.isOpened && availability !== 'available') return;
 
     // Target route params
     const queryParams: Record<string, string> = {
@@ -467,6 +544,96 @@ export default function ProctorExaminationTabScreen() {
     });
   }, [schedulesQuery.data, searchQuery]);
 
+  const visibleScheduleIds = useMemo(
+    () => new Set(filteredSchedules.map((schedule) => schedule.id)),
+    [filteredSchedules],
+  );
+  const visibleEntries = useMemo(
+    () => scheduleEntries.filter((entry) => visibleScheduleIds.has(entry.schedule.id)),
+    [scheduleEntries, visibleScheduleIds],
+  );
+  const dayGroups = useMemo(() => {
+    const groups = new Map<string, ScheduleEntry[]>();
+    for (const entry of visibleEntries) {
+      const date = String(
+        entry.schedule.examinationDateIso || entry.schedule.examinationDate,
+      ).slice(0, 10);
+      const group = groups.get(date) ?? [];
+      group.push(entry);
+      groups.set(date, group);
+    }
+    for (const group of groups.values()) {
+      group.sort((a, b) => a.session.startTime.localeCompare(b.session.startTime));
+    }
+    return groups;
+  }, [visibleEntries]);
+
+  const orderedDays = splitScheduleDays(dayGroups, todayIso);
+  const todayEntries = orderedDays.today;
+  const upcomingDays = orderedDays.upcoming;
+  const currentMonthDays = orderedDays.currentMonthPrevious;
+  const olderMonthGroups = orderedDays.previousMonths;
+  const hasPreviousDays =
+    currentMonthDays.length > 0 || olderMonthGroups.some(([, days]) => days.length > 0);
+  const scheduleSections = useMemo(
+    () => [
+      { key: 'today', title: 'Today', kind: 'today' },
+      { key: 'upcoming', title: 'Upcoming', kind: 'upcoming' },
+      { key: 'previous', title: 'Previous Schedules', kind: 'previous' },
+    ],
+    [],
+  );
+
+  const lockedDayStatus = (entries: ScheduleEntry[]) =>
+    entries.some(
+      ({ schedule, session }) =>
+        session.historyStatus === 'completed' ||
+        schedule.status === 'completed' ||
+        matchOpenedRoom(openedRooms, session)?.status === 'ended',
+    )
+      ? 'Completed'
+      : 'Missed';
+
+  const selectedAvailability = selectedSlot
+    ? getProctorScheduleAvailability(
+        {
+          date: selectedSlot.schedule.examinationDateIso || selectedSlot.schedule.examinationDate,
+          startTime: selectedSlot.session.startTime,
+          endTime: selectedSlot.session.endTime,
+          timeLabel: selectedSlot.session.timeLabel,
+        },
+        scheduleNowMs,
+        todayIso,
+      )
+    : 'checking';
+  const selectedOpenTime = selectedSlot
+    ? formatScheduleOpeningTime({
+        date: selectedSlot.schedule.examinationDateIso || selectedSlot.schedule.examinationDate,
+        startTime: selectedSlot.session.startTime,
+        timeLabel: selectedSlot.session.timeLabel,
+      })
+    : null;
+
+  const toggleMonth = (month: string) => {
+    setExpandedMonths((previous) => {
+      const next = new Set(previous);
+      if (next.has(month)) next.delete(month);
+      else next.add(month);
+      return next;
+    });
+  };
+
+  const showLockedSchedule = (date: string, entries: ScheduleEntry[]) => {
+    setLockedSchedule({ date, entries, upcoming: date > todayIso });
+    setShowLockedDetails(false);
+  };
+
+  const lockedScheduleMessage = lockedSchedule
+    ? lockedSchedule.upcoming
+      ? `You can only open today's schedule (${formatManilaScheduleDate(todayIso, true)}). This schedule is for ${formatManilaScheduleDate(lockedSchedule.date)}. It will be available on that day.`
+      : `You can only open today's schedule (${formatManilaScheduleDate(todayIso, true)}). This schedule is for ${formatManilaScheduleDate(lockedSchedule.date)}, so it is view only.`
+    : '';
+
   const scheduleName = selectedSlot
     ? selectedSlot.schedule.name.replace(/Entrance\s+Examination/gi, '').trim() ||
       selectedSlot.schedule.name
@@ -521,8 +688,9 @@ export default function ProctorExaminationTabScreen() {
       </View>
 
       <FlatList
-        data={filteredSchedules}
-        keyExtractor={(item) => item.id}
+        ref={scheduleListRef}
+        data={scheduleSections}
+        keyExtractor={(item) => item.key}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View style={styles.headerBlock}>
@@ -726,19 +894,13 @@ export default function ProctorExaminationTabScreen() {
 
             <View style={[styles.legendContainer, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <Text style={[styles.intro, { color: colors.textSecondary }]}>
-                Tap a schedule to see its time slots. Select any slot to open room or inspect lobby.
+                Open Room is available only for today&apos;s schedule. Other dates are locked and view only.
               </Text>
-              <View style={styles.legend}>
-                <LegendSwatch tone="idle" label="Not opened" />
-                <LegendSwatch tone="open" label="Lobby open" />
-                <LegendSwatch tone="progress" label="In progress" />
-                <LegendSwatch tone="ended" label="Ended" />
-              </View>
             </View>
           </View>
         }
         ListEmptyComponent={
-          schedulesQuery.isLoading ? null : searchQuery ? (
+          schedulesQuery.isLoading || schedulesQuery.cloudRefreshState === 'loading' ? null : searchQuery ? (
             <EmptyState title="No matching schedules found" />
           ) : !internetAvailable ? (
             <View style={styles.offlineEmptyState}>
@@ -748,36 +910,198 @@ export default function ProctorExaminationTabScreen() {
               <Button
                 title="Retry"
                 variant="outline"
-                onPress={() => void (async () => {
-                  const state = await Network.getNetworkStateAsync().catch(() => null);
-                  const online = state?.isInternetReachable === true;
-                  setInternetAvailable(online);
-                  if (online) {
-                    try {
-                      const schedules = await ScheduleRepository.refreshSchedulesFromCloud();
-                      queryClient.setQueryData(QUERY_KEYS.schedules, schedules);
-                    } catch {
-                      // Keep the local list after a failed retry.
-                    }
-                  }
-                  await schedulesQuery.refetch();
-                })()}
+                onPress={retryScheduleLoading}
               />
             </View>
           ) : (
             <EmptyState title="No examination schedules available" />
           )
         }
-        renderItem={({ item, index }) => (
-          <ScheduleCard
-            schedule={item}
-            delay={index * 60}
-            isExpanded={expandedScheduleIds.has(item.id)}
-            onToggle={() => toggleSchedule(item.id)}
-            onSelectTimeSlot={(session) => void handleSelectTimeSlot(item, session)}
-            openedRooms={openedRooms}
-          />
-        )}
+        renderItem={({ item: section }) => {
+          if (section.kind === 'today') {
+            return (
+              <View style={styles.scheduleSection}>
+                <Text style={[styles.scheduleSectionTitle, { color: colors.textPrimary }]}>
+                  Today&apos;s Schedule
+                </Text>
+                {todayIso ? (
+                  <Text style={[styles.scheduleSectionDate, { color: colors.textSecondary }]}>
+                    {formatManilaScheduleDate(todayIso, true)}
+                  </Text>
+                ) : null}
+                {scheduleLoadingError ? (
+                  <View style={styles.scheduleLoadError}>
+                    <Text style={[styles.scheduleSectionEmpty, { color: colors.textSecondary }]}>
+                      {scheduleEntriesError ||
+                        (scheduleLoadingTimedOut
+                          ? 'Loading schedules took too long.'
+                          : 'Unable to load examination schedules.')}
+                    </Text>
+                    <Button title="Retry" variant="outline" onPress={retryScheduleLoading} />
+                  </View>
+                ) : showScheduleSkeleton ? (
+                  <View style={styles.scheduleSkeletonGroup}>
+                    {[0, 1].map((item) => (
+                      <SkeletonCard
+                        key={item}
+                        style={[
+                          styles.scheduleSkeletonCard,
+                          { backgroundColor: colors.card, borderColor: colors.cardBorder },
+                        ]}
+                      >
+                        <View style={styles.scheduleSkeletonTop}>
+                          <Skeleton height={17} width="42%" />
+                          <Skeleton height={22} width={58} radius={12} />
+                        </View>
+                        <View style={styles.scheduleSkeletonMiddle}>
+                          <Skeleton height={13} width="30%" />
+                          <Skeleton height={13} width="35%" />
+                        </View>
+                        <View style={styles.scheduleSkeletonBottom}>
+                          <Skeleton height={12} width="25%" />
+                          <Skeleton height={36} width={110} radius={10} />
+                        </View>
+                      </SkeletonCard>
+                    ))}
+                  </View>
+                ) : todayEntries.length ? (
+                  todayEntries.map((entry, index) => {
+                    const opened = matchOpenedRoom(openedRooms, entry.session);
+                    const displayEntry = {
+                      ...entry,
+                      session: { ...entry.session, status: opened?.status ?? entry.session.status },
+                    };
+                    const availability = getProctorScheduleAvailability(
+                      {
+                        date: todayIso,
+                        startTime: entry.session.startTime,
+                        endTime: entry.session.endTime,
+                        timeLabel: entry.session.timeLabel,
+                      },
+                      scheduleNowMs,
+                      todayIso,
+                    );
+                    return (
+                      <ProctorScheduleRow
+                        key={`${entry.schedule.id}:${entry.session.id}:${index}`}
+                        entry={displayEntry}
+                        dateLabel={todayIso}
+                        mode="today"
+                        availability={availability}
+                        status={opened?.status === 'in_progress' ? 'In progress' : opened?.status === 'lobby_open' ? 'Lobby open' : availability === 'ended' ? 'Ended' : 'Scheduled'}
+                        onOpen={() => void handleSelectTimeSlot(entry.schedule, entry.session)}
+                      />
+                    );
+                  })
+                ) : (
+                  <Text style={[styles.scheduleSectionEmpty, { color: colors.textSecondary }]}>
+                    No examination scheduled today.
+                  </Text>
+                )}
+              </View>
+            );
+          }
+
+          if (section.kind === 'upcoming') {
+            return (
+              <View style={styles.scheduleSection}>
+                {upcomingDays.length ? (
+                  <>
+                    <Text style={[styles.scheduleSectionTitle, { color: colors.textPrimary }]}>
+                      Upcoming
+                    </Text>
+                    {upcomingDays.map(([date, entries]) => (
+                      <ProctorScheduleRow
+                        key={date}
+                        entries={entries}
+                        dateLabel={formatManilaScheduleDate(date)}
+                        mode="locked"
+                        badge="Not today"
+                        onLockedPress={() => showLockedSchedule(date, entries)}
+                      />
+                    ))}
+                  </>
+                ) : null}
+              </View>
+            );
+          }
+
+          return (
+            <View style={styles.scheduleSection}>
+              {showScheduleSkeleton && !scheduleLoadingError ? (
+                <>
+                  <Text style={[styles.scheduleSectionTitle, { color: colors.textPrimary }]}>
+                    Previous Schedules
+                  </Text>
+                  <View style={styles.previousSkeletonRows}>
+                    {[0, 1, 2].map((item) => (
+                      <View key={item} style={styles.previousSkeletonRow}>
+                        <Skeleton height={14} width="42%" />
+                        <Skeleton height={12} width="27%" />
+                        <Skeleton height={12} width={48} radius={10} />
+                      </View>
+                    ))}
+                  </View>
+                </>
+              ) : hasPreviousDays ? (
+                <>
+                  <Text style={[styles.scheduleSectionTitle, { color: colors.textPrimary }]}>
+                    Previous Schedules
+                  </Text>
+                  {currentMonthDays.map(([date, entries]) => (
+                    <ProctorScheduleRow
+                      key={date}
+                      entries={entries}
+                      dateLabel={formatManilaScheduleDate(date)}
+                      mode="locked"
+                      status={lockedDayStatus(entries)}
+                      onLockedPress={() => showLockedSchedule(date, entries)}
+                    />
+                  ))}
+                  {olderMonthGroups.map(([month, days]) => {
+                      const expanded = expandedMonths.has(month);
+                      return (
+                        <View key={month} style={styles.monthGroup}>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityState={{ expanded }}
+                            onPress={() => toggleMonth(month)}
+                            style={[
+                              styles.monthHeader,
+                              { backgroundColor: colors.cardMuted, borderColor: colors.cardBorder },
+                            ]}
+                          >
+                            <Text style={[styles.monthTitle, { color: colors.textPrimary }]}>
+                              {formatManilaMonth(`${month}-01`)}
+                            </Text>
+                            <ChevronDown
+                              size={19}
+                              color={colors.textSecondary}
+                              style={{ transform: [{ rotate: expanded ? '180deg' : '0deg' }] }}
+                            />
+                          </Pressable>
+                          {expanded
+                            ? days
+                                .sort(([a], [b]) => b.localeCompare(a))
+                                .map(([date, entries]) => (
+                                  <ProctorScheduleRow
+                                    key={date}
+                                    entries={entries}
+                                    dateLabel={formatManilaScheduleDate(date)}
+                                    mode="locked"
+                                    status={lockedDayStatus(entries)}
+                                    onLockedPress={() => showLockedSchedule(date, entries)}
+                                  />
+                                ))
+                            : null}
+                        </View>
+                      );
+                    })}
+                </>
+              ) : null}
+            </View>
+          );
+        }}
       />
 
       {/* OPEN EXAMINATION ROOM DIRECT MODAL */}
@@ -817,15 +1141,17 @@ export default function ProctorExaminationTabScreen() {
                 <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
                   {selectedSlot?.isOpened
                     ? 'Enter Examination Lobby'
-                    : selectedSlot?.isEnded
-                      ? 'Examination Completed'
+                    : selectedSlot?.isEnded || selectedAvailability === 'ended'
+                      ? 'Examination Ended'
                       : 'Open Examination Room'}
                 </Text>
                 <Text style={[styles.modalSubtitle, { color: colors.textSecondary }]}>
                   {selectedSlot?.isOpened
                     ? 'Room is currently active and broadcasting'
-                    : selectedSlot?.isEnded
+                    : selectedSlot?.isEnded || selectedAvailability === 'ended'
                       ? 'This session has ended and is closed'
+                      : selectedAvailability === 'checking'
+                        ? 'Checking the official schedule time'
                       : 'Confirm details to launch the lobby'}
                 </Text>
               </View>
@@ -887,8 +1213,12 @@ export default function ProctorExaminationTabScreen() {
             <Text style={[styles.modalNotice, { backgroundColor: colors.cardMuted, color: colors.textSecondary }]}>
               {selectedSlot?.isOpened
                 ? 'This room is currently open and broadcasting. Tap Enter Lobby to manage the active session.'
-                : selectedSlot?.isEnded
+                : selectedSlot?.isEnded || selectedAvailability === 'ended'
                   ? 'This examination time slot has ended. Retakes and duplicate sessions are prohibited. Tap View Results to inspect submissions.'
+                  : selectedAvailability === 'too_early' && selectedOpenTime
+                    ? `Opening is available at ${selectedOpenTime}.`
+                    : selectedAvailability === 'checking'
+                      ? 'The app is waiting for the server clock before enabling room access.'
                   : 'Opening this room will generate the examination QR code, start the local Wi-Fi peer server, and allow examinees to enter the lobby.'}
             </Text>
 
@@ -905,17 +1235,104 @@ export default function ProctorExaminationTabScreen() {
                 title={
                   selectedSlot?.isOpened
                     ? 'Enter Lobby'
-                    : selectedSlot?.isEnded
-                      ? 'View Results'
-                      : 'Open Room'
+                    : selectedSlot?.isEnded || selectedAvailability === 'ended'
+                      ? 'Ended'
+                      : selectedAvailability === 'too_early' && selectedOpenTime
+                        ? `Opens at ${selectedOpenTime}`
+                        : selectedAvailability === 'checking'
+                          ? 'Checking time…'
+                          : selectedAvailability === 'not_available'
+                            ? 'Not available yet'
+                            : 'Open Room'
                 }
                 variant="primary"
                 loading={busy}
+                disabled={
+                  Boolean(selectedSlot?.isEnded) ||
+                  (!selectedSlot?.isOpened && selectedAvailability !== 'available')
+                }
                 onPress={handleConfirmRoomAction}
                 style={{
                   flex: 1,
                   backgroundColor: selectedSlot?.isEnded ? '#222222' : '#7A1F2B',
                 }}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={Boolean(lockedSchedule)}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setLockedSchedule(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setLockedSchedule(null)}
+          />
+          <View style={[styles.lockedModalCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <View style={styles.lockedModalTitleRow}>
+              <LockKeyhole size={21} color={isDark ? '#D7BC7A' : '#80621F'} />
+              <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
+                Can&apos;t open this schedule
+              </Text>
+            </View>
+            <Text style={[styles.lockedModalBody, { color: colors.textSecondary }]}>
+              {lockedScheduleMessage}
+            </Text>
+
+            {showLockedDetails && lockedSchedule ? (
+              <View style={[styles.lockedDetails, { backgroundColor: colors.cardMuted, borderColor: colors.cardBorder }]}>
+                <Text style={[styles.lockedDetailsTitle, { color: colors.textPrimary }]}>
+                  Batches and students
+                </Text>
+                <FlatList
+                  data={lockedSchedule.entries}
+                  keyExtractor={(item, index) => `${item.schedule.id}:${item.session.id}:${index}`}
+                  style={styles.lockedDetailsList}
+                  renderItem={({ item }) => (
+                    <View style={styles.lockedDetailsRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.lockedDetailsPrimary, { color: colors.textPrimary }]}>
+                          {item.session.timeLabel}
+                        </Text>
+                        <Text style={[styles.lockedDetailsSecondary, { color: colors.textSecondary }]}>
+                          {item.session.batchNumber}
+                        </Text>
+                      </View>
+                      <Text style={[styles.lockedDetailsSecondary, { color: colors.textSecondary }]}>
+                        {item.session.registeredStudents} students
+                      </Text>
+                    </View>
+                  )}
+                />
+              </View>
+            ) : null}
+
+            <View style={styles.lockedModalActions}>
+              <Button
+                title={showLockedDetails ? 'Hide details' : 'View details'}
+                variant="outline"
+                onPress={() => setShowLockedDetails((visible) => !visible)}
+                style={[styles.lockedModalButton, { borderColor: colors.cardBorder }]}
+              />
+              <Button
+                title="Go to today’s schedule"
+                variant="primary"
+                onPress={() => {
+                  setLockedSchedule(null);
+                  scheduleListRef.current?.scrollToIndex({ index: 0, animated: true });
+                }}
+                style={[styles.lockedModalButton, { backgroundColor: '#7A1F2B' }]}
+              />
+              <Button
+                title="OK"
+                variant="outline"
+                onPress={() => setLockedSchedule(null)}
+                style={[styles.lockedModalButton, { borderColor: colors.cardBorder }]}
               />
             </View>
           </View>
@@ -966,6 +1383,142 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     gap: 12,
     paddingBottom: 100,
+  },
+  scheduleSection: {
+    gap: 10,
+    marginBottom: 12,
+  },
+  scheduleSectionTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.25,
+    marginHorizontal: 2,
+  },
+  scheduleSectionDate: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginHorizontal: 2,
+    marginTop: -7,
+  },
+  scheduleSectionEmpty: {
+    fontSize: 13,
+    paddingHorizontal: 4,
+    paddingVertical: 8,
+  },
+  scheduleSkeletonGroup: {
+    gap: 10,
+  },
+  scheduleSkeletonCard: {
+    minHeight: 116,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    gap: 10,
+  },
+  scheduleSkeletonTop: {
+    minHeight: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  scheduleSkeletonMiddle: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  scheduleSkeletonBottom: {
+    marginTop: 'auto',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  previousSkeletonRows: {
+    gap: 10,
+  },
+  previousSkeletonRow: {
+    minHeight: 52,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  scheduleLoadError: {
+    gap: 8,
+    alignItems: 'flex-start',
+  },
+  monthGroup: {
+    gap: 8,
+  },
+  monthHeader: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  monthTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  lockedModalCard: {
+    width: '92%',
+    maxHeight: '85%',
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 20,
+    gap: 14,
+    alignSelf: 'center',
+  },
+  lockedModalTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  lockedModalBody: {
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  lockedDetails: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    minHeight: 72,
+    maxHeight: 210,
+  },
+  lockedDetailsTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  lockedDetailsList: {
+    flexGrow: 0,
+  },
+  lockedDetailsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#88888855',
+    paddingVertical: 8,
+    gap: 8,
+  },
+  lockedDetailsPrimary: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  lockedDetailsSecondary: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  lockedModalActions: {
+    gap: 8,
+  },
+  lockedModalButton: {
+    minHeight: 42,
   },
   headerBlock: {
     gap: 14,

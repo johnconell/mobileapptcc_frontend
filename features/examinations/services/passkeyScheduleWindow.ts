@@ -1,3 +1,5 @@
+import { JOIN_EARLY_MINUTES } from '@/shared/constants';
+
 const EXAM_TIME_ZONE = 'Asia/Manila';
 
 export type PasskeyScheduleWindow = {
@@ -53,8 +55,8 @@ export function getPasskeyScheduleWindowState(
 ): PasskeyScheduleWindowState {
   const bounds = resolveBounds(schedule);
   if (!bounds) return 'invalid';
-  if (now < bounds.start) return 'not_started';
-  if (now >= bounds.end) return 'expired';
+  if (now < bounds.start - JOIN_EARLY_MINUTES * 60_000) return 'not_started';
+  if (now > bounds.end) return 'expired';
   return 'valid';
 }
 
@@ -88,7 +90,16 @@ export function passkeyScheduleWindowMessage(
   const label = formatPasskeyScheduleWindow(schedule);
   if (!label) return 'This examination key has no valid schedule window.';
   if (state === 'not_started') {
-    return `This examination key is not active yet. This key is for ${label}.`;
+    const bounds = resolveBounds(schedule);
+    if (!bounds) return 'This examination key has no valid schedule window.';
+    const opensAt = formatTime(
+      new Date(
+        bounds.start - JOIN_EARLY_MINUTES * 60_000 + 8 * 60 * 60_000,
+      )
+        .toISOString()
+        .slice(11, 19),
+    );
+    return `Joining opens at ${opensAt.clock} ${opensAt.period}.`;
   }
-  return `This examination key has expired. This key is for ${label}.`;
+  return 'This examination schedule has ended.';
 }

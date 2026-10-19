@@ -1,11 +1,16 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import * as Network from 'expo-network';
 import { QUERY_KEYS } from '@/shared/constants';
 import { ScheduleRepository } from '@/features/schedules/repositories/ScheduleRepository';
+import type { ExamSchedule } from '@/shared/types';
 
 export function useSchedules(enabled = true) {
   const queryClient = useQueryClient();
+  const [cloudRefreshState, setCloudRefreshState] = useState<
+    'checking' | 'loading' | 'error' | 'done'
+  >('checking');
+  const [refreshAttempt, setRefreshAttempt] = useState(0);
   const query = useQuery({
     queryKey: QUERY_KEYS.schedules,
     queryFn: () => ScheduleRepository.getLocalSchedules(),
@@ -15,17 +20,36 @@ export function useSchedules(enabled = true) {
   });
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      setCloudRefreshState('done');
+      return undefined;
+    }
     let active = true;
+    let initialAttempt = true;
     const refresh = async () => {
       const network = await Network.getNetworkStateAsync().catch(() => null);
-      if (!active || network?.isInternetReachable !== true) return;
+      if (!active) return;
+      if (network?.isInternetReachable !== true) {
+        if (initialAttempt) setCloudRefreshState('done');
+        initialAttempt = false;
+        return;
+      }
+      const localSchedules = queryClient.getQueryData<ExamSchedule[]>(QUERY_KEYS.schedules);
+      if (initialAttempt) {
+        setCloudRefreshState(localSchedules?.length ? 'done' : 'loading');
+      }
       try {
         const schedules = await ScheduleRepository.refreshSchedulesFromCloud();
-        if (active) queryClient.setQueryData(QUERY_KEYS.schedules, schedules);
+        if (active) {
+          queryClient.setQueryData(QUERY_KEYS.schedules, schedules);
+          if (initialAttempt) setCloudRefreshState('done');
+        }
       } catch {
-        // Keep the local list; a failed refresh must never replace it.
+        if (active && initialAttempt && !localSchedules?.length) {
+          setCloudRefreshState('error');
+        }
       }
+      initialAttempt = false;
     };
     void refresh();
     const interval = setInterval(() => void refresh(), 30_000);
@@ -33,9 +57,21 @@ export function useSchedules(enabled = true) {
       active = false;
       clearInterval(interval);
     };
-  }, [enabled, queryClient]);
+  }, [enabled, queryClient, refreshAttempt]);
 
-  return query;
+  const retryCloudRefresh = useCallback(
+    () => setRefreshAttempt((attempt) => attempt + 1),
+    [],
+  );
+
+  return {
+    data: query.data,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    refetch: query.refetch,
+    cloudRefreshState,
+    retryCloudRefresh,
+  };
 }
 
 export function useSessions(scheduleId?: string) {

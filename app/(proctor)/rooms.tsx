@@ -17,6 +17,7 @@ import {
   Layers,
 } from 'lucide-react-native';
 import { Header, Card, Button, EmptyState, StatusChip, Breadcrumbs } from '@/shared/components/ui';
+import { useSkeletonLoadingTimeout } from '@/components/skeleton';
 import { SkeletonList } from '@/shared/components/ui/Skeleton';
 import { useRooms, useSchedules, useSessions } from '@/features/schedules/hooks/useSchedules';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
@@ -54,6 +55,12 @@ export default function RoomsScreen() {
   const schedulesQuery = useSchedules();
   const sessionsQuery = useSessions(scheduleId);
   const roomsQuery = useRooms(sessionId);
+  const [retryAttempt, setRetryAttempt] = useState(0);
+  const roomsLoadingTimedOut = useSkeletonLoadingTimeout(
+    roomsQuery.isLoading && !roomsQuery.data,
+    10_000,
+    retryAttempt,
+  );
 
   const [selectedRoom, setSelectedRoom] = useState<ExamRoom | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
@@ -262,7 +269,7 @@ export default function RoomsScreen() {
     }
   };
 
-  if (roomsQuery.isLoading) {
+  if (roomsQuery.isLoading && !roomsQuery.data && !roomsLoadingTimedOut) {
     return (
       <View style={styles.screen}>
         <Header
@@ -273,6 +280,33 @@ export default function RoomsScreen() {
         <Breadcrumbs segments={breadcrumbs} />
         <View style={styles.list}>
           <SkeletonList rows={4} showAvatar={false} />
+        </View>
+      </View>
+    );
+  }
+
+  if ((roomsQuery.isError || roomsLoadingTimedOut) && !roomsQuery.data) {
+    return (
+      <View style={styles.screen}>
+        <Header
+          title="Select Examination Room"
+          subtitle={session?.timeLabel ?? 'Available Rooms'}
+          onBack={() => safeBack(router, '/(proctor)/(tabs)/examination')}
+        />
+        <Breadcrumbs segments={breadcrumbs} />
+        <View style={styles.errorWrap}>
+          <Text style={styles.errorText}>
+            {roomsLoadingTimedOut
+              ? 'Loading examination rooms took too long.'
+              : 'Unable to load examination rooms.'}
+          </Text>
+          <Button
+            title="Retry"
+            onPress={() => {
+              setRetryAttempt((attempt) => attempt + 1);
+              void roomsQuery.refetch();
+            }}
+          />
         </View>
       </View>
     );
@@ -470,6 +504,8 @@ export default function RoomsScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#0D0D0D' },
   list: { padding: 16, gap: 12, paddingBottom: 40 },
+  errorWrap: { padding: 20, gap: 12, alignItems: 'flex-start' },
+  errorText: { fontSize: 14, color: '#A1A1AA' },
   headerBlock: { marginBottom: 4 },
   intro: { fontSize: 13, lineHeight: 20, color: '#A1A1AA', fontWeight: '500' },
   roomCard: {

@@ -1,4 +1,5 @@
 import { STORAGE_KEYS } from '@/shared/constants';
+import * as Network from 'expo-network';
 import { resolveViolationLimit, persistViolationLimit } from '@/shared/utils/violationLimit';
 import { apiRequest, ApiError } from '@/shared/services/api';
 import {
@@ -11,6 +12,10 @@ import { classifyPeerReconnectError } from '@/features/examinations/services/pee
 import { parsePeerQr, PeerExamServer, resolveNumericScheduleId } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
 import { DeviceService } from '@/shared/services/DeviceService';
+import {
+  formatScheduleOpeningTime,
+  getProctorScheduleAvailability,
+} from '@/features/schedules/utils/proctorScheduleWindow';
 import type {
   ExamCodeValidation,
   LobbySnapshot,
@@ -113,6 +118,11 @@ export const LobbyRepository = {
     questionBankId?: number,
     roomId?: string,
   ): Promise<LobbySnapshot> {
+    const hasPack = await OfflineStore.hasPack();
+    const networkState = await Network.getNetworkStateAsync().catch(() => null);
+    const offlineConfirmed =
+      networkState?.isInternetReachable === false || networkState?.isConnected === false;
+
     const { assertProctorWifiForRoomOpen } = await import(
       '@/features/monitoring/services/proctorWifiLock'
     );
@@ -165,7 +175,38 @@ export const LobbyRepository = {
       return hosted;
     };
 
-    if (await OfflineStore.hasPack()) {
+    if (hasPack && offlineConfirmed) {
+      const pack = await OfflineStore.getPack();
+      const sid = String(sessionId).replace(/^offline-/, '');
+      const schedule = pack?.schedules.find((row) => Number(row.id) === Number(sid));
+      if (!schedule) throw new Error('This examination schedule is not available in the offline pack.');
+      const availability = getProctorScheduleAvailability(
+        {
+          date: schedule.exam_date || '',
+          startTime: schedule.start_time,
+          endTime: schedule.end_time,
+          timeLabel: schedule.time_slot,
+        },
+        Date.now(),
+      );
+      if (availability !== 'available') {
+        const opensAt = formatScheduleOpeningTime({
+          date: schedule.exam_date || '',
+          startTime: schedule.start_time,
+          timeLabel: schedule.time_slot,
+        });
+        throw new Error(
+          availability === 'too_early'
+            ? opensAt
+              ? `The room opens at ${opensAt}.`
+              : 'The room is not available yet. Wait until the schedule opens.'
+            : availability === 'ended'
+              ? 'This examination schedule has ended.'
+              : availability === 'not_available'
+                ? "Only today's examination schedule can be opened."
+                : 'This examination schedule has an invalid time window.',
+        );
+      }
       await OfflineStore.setOfflineMode(true);
       return startPeerHost();
     }
@@ -204,8 +245,9 @@ export const LobbyRepository = {
       }
       return json.data;
     } catch (error) {
+      if (error instanceof ApiError || !offlineConfirmed) throw error;
       // Pack already on phone + Laravel unreachable → host on this device.
-      if (await OfflineStore.hasPack()) {
+      if (hasPack) {
         await OfflineStore.setOfflineMode(true);
         return startPeerHost();
       }
@@ -226,8 +268,13 @@ export const LobbyRepository = {
     );
     await assertProctorWifiForRoomOpen();
 
+    const hasPack = await OfflineStore.hasPack();
+    const networkState = await Network.getNetworkStateAsync().catch(() => null);
+    const offlineConfirmed =
+      networkState?.isInternetReachable === false || networkState?.isConnected === false;
+
     // Offline / peer: always (re)start the local server so a QR with a live host IP exists.
-    if (await OfflineStore.hasPack()) {
+    if (hasPack && offlineConfirmed) {
       await OfflineStore.setOfflineMode(true);
       return this.openLobby(sessionId, questionBankId, roomId);
     }
@@ -252,13 +299,14 @@ export const LobbyRepository = {
       }
       return this.openLobby(sessionId, questionBankId, roomId);
     } catch (error) {
+      if (error instanceof ApiError || !offlineConfirmed) throw error;
       if (
         error instanceof Error &&
         /Connect to the examination Wi‑Fi|no Wi‑Fi address/i.test(error.message)
       ) {
         throw error;
       }
-      if (await OfflineStore.hasPack()) {
+      if (hasPack) {
         await OfflineStore.setOfflineMode(true);
         return this.openLobby(sessionId, questionBankId, roomId);
       }

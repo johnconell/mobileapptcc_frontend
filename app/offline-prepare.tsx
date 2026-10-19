@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Header, Button, Card, Skeleton, SkeletonCard, SkeletonText } from '@/shared/components/ui';
+import { Header, Button, Card, Skeleton } from '@/shared/components/ui';
 import { OfflineExamRepository } from '@/features/synchronization/services/offlineExamRepository';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { getCloudApiBaseUrl, getApiBaseUrl } from '@/shared/services/api';
 import { colors } from '@/shared/theme';
 import { safeBack } from '@/shared/utils';
+import { useSkeletonLoadingTimeout } from '@/components/skeleton';
 
 export default function OfflinePrepareScreen() {
   const router = useRouter();
@@ -17,15 +18,38 @@ export default function OfflinePrepareScreen() {
     at: null,
   });
   const [pending, setPending] = useState(0);
+  const [metadataLoading, setMetadataLoading] = useState(true);
+  const [metadataError, setMetadataError] = useState<string | null>(null);
+  const [metadataRetryAttempt, setMetadataRetryAttempt] = useState(0);
+  const metadataTimedOut = useSkeletonLoadingTimeout(
+    metadataLoading,
+    10_000,
+    metadataRetryAttempt,
+  );
 
   const refresh = async () => {
-    setMeta(await OfflineStore.getPackMeta());
-    setPending((await OfflineStore.pendingResults()).length);
+    setMetadataLoading(true);
+    setMetadataError(null);
+    try {
+      const [nextMeta, queuedResults] = await Promise.all([
+        OfflineStore.getPackMeta(),
+        OfflineStore.pendingResults(),
+      ]);
+      setMeta(nextMeta);
+      setPending(queuedResults.length);
+    } catch (error) {
+      console.error('Failed to load offline exam-pack status:', error);
+      setMetadataError(
+        error instanceof Error ? error.message : 'Unable to load exam-pack status.',
+      );
+    } finally {
+      setMetadataLoading(false);
+    }
   };
 
   useEffect(() => {
     void refresh();
-  }, []);
+  }, [metadataRetryAttempt]);
 
   const download = async () => {
     setBusy(true);
@@ -123,10 +147,34 @@ export default function OfflinePrepareScreen() {
           <Text style={styles.meta}>
             Cloud API: {getCloudApiBaseUrl() || getApiBaseUrl()}
           </Text>
-          <Text style={styles.meta}>
-            Cache: {meta.ready ? `Ready${meta.at ? ` · ${new Date(meta.at).toLocaleString()}` : ''}` : 'Not downloaded'}
-          </Text>
-          <Text style={styles.meta}>Pending results to sync: {pending}</Text>
+          {metadataLoading && !metadataTimedOut ? (
+            <View style={styles.metadataSkeletonRows}>
+              <Skeleton height={13} width="68%" />
+              <Skeleton height={13} width="55%" />
+            </View>
+          ) : metadataError || metadataTimedOut ? (
+            <View style={styles.metadataError}>
+              <Text style={styles.meta}>
+                {metadataTimedOut
+                  ? 'Loading exam-pack status took too long.'
+                  : metadataError}
+              </Text>
+              <Button
+                title="Retry"
+                variant="outline"
+                onPress={() => {
+                  setMetadataRetryAttempt((attempt) => attempt + 1);
+                }}
+              />
+            </View>
+          ) : (
+            <>
+              <Text style={styles.meta}>
+                Cache: {meta.ready ? `Ready${meta.at ? ` · ${new Date(meta.at).toLocaleString()}` : ''}` : 'Not downloaded'}
+              </Text>
+              <Text style={styles.meta}>Pending results to sync: {pending}</Text>
+            </>
+          )}
         </Card>
 
         {progress ? (
@@ -138,11 +186,6 @@ export default function OfflinePrepareScreen() {
               <View style={[styles.progressFill, { width: `${Math.max(4, progress.percent)}%` }]} />
             </View>
           </Card>
-        ) : busy ? (
-          <SkeletonCard>
-            <Skeleton height={13} width="50%" />
-            <SkeletonText lines={2} />
-          </SkeletonCard>
         ) : null}
 
         <Button
@@ -169,6 +212,8 @@ export default function OfflinePrepareScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   body: { padding: 20, gap: 14 },
+  metadataSkeletonRows: { gap: 10, paddingTop: 4 },
+  metadataError: { gap: 8, alignItems: 'flex-start' },
   title: { fontSize: 17, fontWeight: '700', color: colors.ink, marginBottom: 8 },
   bodyText: { fontSize: 14, lineHeight: 22, color: colors.inkSecondary },
   meta: { fontSize: 13, color: colors.inkMuted, marginBottom: 6, fontWeight: '600' },

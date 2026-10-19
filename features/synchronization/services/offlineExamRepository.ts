@@ -835,11 +835,20 @@ export const OfflineExamRepository = {
       const otherSchedule = otherScheduleId
         ? pack.schedules.find((s) => Number(s.id) === Number(otherScheduleId))
         : undefined;
+      const currentSchedule = pack.schedules.find((s) => Number(s.id) === scheduleId);
+      const wrongDate = Boolean(
+        otherSchedule?.exam_date &&
+          currentSchedule?.exam_date &&
+          String(otherSchedule.exam_date).slice(0, 10) !==
+            String(currentSchedule.exam_date).slice(0, 10),
+      );
       return {
         classification,
         message:
           classification === 'wrong_schedule'
-            ? `This examination key belongs to ${otherSchedule?.title || 'a different examination schedule'}. Use the correct key for this room.`
+            ? wrongDate
+              ? 'This key is for a different date.'
+              : `This examination key belongs to ${otherSchedule?.title || 'a different examination schedule'}. Use the correct key for this room.`
             : 'Invalid examination key for this session.',
         schedule: otherSchedule
           ? {

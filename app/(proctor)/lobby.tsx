@@ -15,10 +15,9 @@ import { Header } from '@/shared/components/ui/Header';
 import { QrCodePanel } from '@/shared/components/ui/QrCodePanel';
 import {
   Skeleton,
-  SkeletonCard,
-  SkeletonList,
-  SkeletonText,
+  SkeletonCircle,
 } from '@/shared/components/ui/Skeleton';
+import { useSkeletonLoadingTimeout } from '@/components/skeleton';
 import { StatusChip } from '@/shared/components/ui/StatusChip';
 import { StatisticCard } from '@/shared/components/ui/StatisticCard';
 import { useLobby } from '@/features/lobby/hooks/useLobby';
@@ -221,6 +220,7 @@ function ProctorLobbyContent() {
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [allowLeave, setAllowLeave] = useState(false);
   const [ready, setReady] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [openError, setOpenError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [selected, setSelected] = useState<LobbyStudent | null>(null);
@@ -465,7 +465,7 @@ function ProctorLobbyContent() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, roomId, examSessionId, setSnapshot, queryClient]);
+  }, [sessionId, roomId, examSessionId, setSnapshot, queryClient, loadAttempt]);
 
   useEffect(() => {
     let mounted = true;
@@ -743,9 +743,16 @@ function ProctorLobbyContent() {
     () => studentsList.filter((s) => s.status === 'disconnected'),
     [studentsList],
   );
+  const loadingTimedOut = useSkeletonLoadingTimeout(!ready && !openError, 10_000, loadAttempt);
   // ─────────────────────────────────────────────────────────────────────────
 
   if (!ready) {
+    const loadingQrSize = Math.min(340, Math.max(200, windowWidth - 56));
+    const loadingQrValue =
+      storeLobby?.qrValue ||
+      storeLobby?.examinationCode ||
+      cloudQrValue ||
+      cloudCode;
     return (
       <View style={[styles.screen, { backgroundColor: themeColors.background, paddingTop: insets.top }]}>
         <View style={styles.navBar}>
@@ -768,13 +775,105 @@ function ProctorLobbyContent() {
           </View>
           <View style={styles.navActionSpacer} />
         </View>
-        <View style={styles.lobbySkeleton}>
-          <SkeletonCard>
-            <Skeleton height={16} width="50%" />
-            <SkeletonText lines={2} />
-            <Skeleton height={180} radius={16} />
-          </SkeletonCard>
-          <SkeletonList rows={4} />
+        <ScrollView contentContainerStyle={styles.loadingLobbyContent}>
+          {loadingTimedOut ? (
+            <View style={styles.loadingError}>
+              <Text style={[styles.errorTitle, { color: themeColors.textPrimary }]}>
+                Lobby is taking longer than expected
+              </Text>
+              <Text style={[styles.errorBody, { color: themeColors.textSecondary }]}>
+                Check the connection and retry loading the lobby.
+              </Text>
+              <Button
+                title="Retry"
+                onPress={() => {
+                  setReady(false);
+                  setLoadAttempt((attempt) => attempt + 1);
+                }}
+              />
+            </View>
+          ) : null}
+
+          {!loadingTimedOut ? (
+            <View style={styles.scheduleHeroCard}>
+              <View style={styles.scheduleHeroTopRow}>
+                <Text style={styles.scheduleHeroEyebrow}>Current schedule</Text>
+                <Skeleton height={20} width={82} radius={12} />
+              </View>
+              <Skeleton height={20} width="58%" />
+              <Skeleton height={16} width="42%" />
+              <View style={styles.scheduleHeroChipsRow}>
+                <Skeleton height={30} width="30%" radius={12} />
+                <Skeleton height={30} width="36%" radius={12} />
+                <Skeleton height={30} width="24%" radius={12} />
+              </View>
+            </View>
+          ) : null}
+
+          <View style={styles.accessPassCard}>
+            <View style={styles.passHeaderRow}>
+              <Text style={styles.passHeaderTitle}>Examination access pass</Text>
+              <Text style={styles.passHeaderHint}>Students scan this</Text>
+            </View>
+            <View
+              style={[
+                styles.qrWhiteFrame,
+                { width: loadingQrSize, height: loadingQrSize },
+              ]}
+            >
+              {loadingQrValue ? (
+                <QrCodePanel
+                  value={loadingQrValue}
+                  size={loadingQrSize - 30}
+                  frame={false}
+                  note={null}
+                />
+              ) : (
+                <Text style={styles.loadingQrPlaceholder}>
+                  QR code will appear when the room is ready.
+                </Text>
+              )}
+            </View>
+            <Text style={styles.qrHint}>Room access pass</Text>
+          </View>
+
+          {!loadingTimedOut ? (
+            <View style={styles.loadingMonitoring}>
+              <View style={styles.loadingMonitoringGrid}>
+                {['Waiting', 'Answering', 'Submitted', 'Disconnected'].map((label) => (
+                  <View key={label} style={styles.loadingMonitoringTile}>
+                    <Skeleton height={22} width={34} />
+                    <Text style={styles.loadingMonitoringLabel}>{label}</Text>
+                    <Skeleton height={11} width="48%" />
+                  </View>
+                ))}
+              </View>
+              <View style={styles.loadingStudentRows}>
+                {[0, 1, 2].map((item) => (
+                  <View key={item} style={styles.loadingStudentRow}>
+                    <SkeletonCircle size={42} />
+                    <View style={styles.loadingStudentDetails}>
+                      <Skeleton height={14} width="58%" />
+                      <Skeleton height={11} width="39%" />
+                    </View>
+                    <Skeleton height={24} width={72} radius={12} />
+                  </View>
+                ))}
+              </View>
+            </View>
+          ) : null}
+        </ScrollView>
+        <View style={[styles.closeFooter, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <PressableBox
+            accessibilityRole="button"
+            accessibilityLabel="Close lobby"
+            accessibilityState={{ disabled: true, busy: true }}
+            disabled
+            style={[styles.closeLobbyBtn, styles.closeLobbyBtnDisabled]}
+          >
+            <DoorOpen size={20} color={LOBBY.danger} strokeWidth={2.2} />
+            <Text style={styles.closeLobbyBtnText}>Close lobby</Text>
+          </PressableBox>
         </View>
       </View>
     );
@@ -2166,6 +2265,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: LOBBY.border,
   },
+  loadingMonitoringLabel: {
+    color: LOBBY.ink,
+    fontSize: 14,
+    fontWeight: '700',
+  },
   navActionSpacer: { width: 42, height: 42 },
   navCenterBlock: {
     flex: 1,
@@ -2565,7 +2669,47 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
 
-  lobbySkeleton: { padding: 20, gap: 12 },
+  loadingLobbyContent: { padding: 20, gap: 16, paddingBottom: 24 },
+  loadingError: { gap: 8, padding: 14, borderRadius: 12, backgroundColor: LOBBY.card },
+  loadingMonitoring: { gap: 14 },
+  loadingMonitoringGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  loadingMonitoringTile: {
+    flexBasis: '48%',
+    flexGrow: 0,
+    minWidth: 0,
+    minHeight: 110,
+    borderRadius: 16,
+    padding: 12,
+    gap: 10,
+    justifyContent: 'center',
+    backgroundColor: LOBBY.card,
+    borderWidth: 1,
+    borderColor: LOBBY.border,
+  },
+  loadingStudentRows: { gap: 8 },
+  loadingQrPlaceholder: {
+    color: LOBBY.muted,
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  loadingStudentRow: {
+    minHeight: 66,
+    padding: 12,
+    borderRadius: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: LOBBY.card,
+    borderWidth: 1,
+    borderColor: LOBBY.border,
+  },
+  loadingStudentDetails: { flex: 1, gap: 8 },
   list: { padding: 14, gap: 0, paddingBottom: 16 },
   headerBlock: { gap: 0, marginBottom: 8 },
   examHead: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
