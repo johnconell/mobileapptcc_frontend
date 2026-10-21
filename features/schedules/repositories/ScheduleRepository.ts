@@ -45,8 +45,15 @@ type BackendRoom = {
   id: number;
   room_name: string;
   capacity: number;
+  student_count?: number;
   proctor_id?: number | null;
   proctor_name?: string | null;
+  assigned_proctor_id?: number | null;
+  assigned_proctor_name?: string | null;
+  owner_id?: number | null;
+  owner_name?: string | null;
+  can_open?: boolean;
+  can_control?: boolean;
   exam_session_id?: number | null;
   examination_code?: string | null;
   status?: string;
@@ -110,12 +117,19 @@ function toMobileRoom(row: BackendRoom, scheduleId: string): ExamRoom {
     scheduleId,
     roomName: row.room_name,
     capacity: Number(row.capacity ?? 0),
+    studentCount: Number(row.student_count ?? row.capacity ?? 0),
     examSessionId: row.exam_session_id ?? null,
     examinationCode: row.examination_code ?? null,
     status: row.status || 'idle',
     connectedCount: Number(row.connected_count ?? 0),
     proctorId: row.proctor_id ?? null,
     proctorName: row.proctor_name ?? null,
+    assignedProctorId: row.assigned_proctor_id ?? null,
+    assignedProctorName: row.assigned_proctor_name ?? null,
+    ownerId: row.owner_id ?? null,
+    ownerName: row.owner_name ?? null,
+    canOpen: row.can_open ?? true,
+    canControl: row.can_control ?? false,
     canReopen: row.can_reopen !== false,
   };
 }

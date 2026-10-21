@@ -45,6 +45,8 @@ import type { QuestionNavigatorFilter } from '@/shared/components/ui/QuestionNav
 import { useExamTimer } from '@/features/examinations/hooks/useExamTimer';
 import { useExamSecurity } from '@/features/examinations/hooks/useExamSecurity';
 import { useExamLock } from '@/features/examinations/hooks/useExamLock';
+import { useGuidedAccessStatus } from '@/features/examinations/hooks/useGuidedAccessStatus';
+import { SecurityRepository } from '@/features/examinations/repositories/SecurityRepository';
 import { useWifiExamGate } from '@/features/monitoring/hooks/useWifiExamGate';
 import { resolveDisconnectGraceSeconds } from '@/shared/utils/gracePeriod';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
@@ -176,6 +178,40 @@ function ExamScreenInner() {
 
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const securityEnabled = questions.length > 0;
+  const [guidedAccess] = useGuidedAccessStatus();
+  const guidedAccessIncidentOpen = useRef(false);
+
+  useEffect(() => {
+    if (Platform.OS !== 'ios' || !securityEnabled || roomEnded || isLeavingExam) return;
+    if (guidedAccess === 'enabled') {
+      guidedAccessIncidentOpen.current = false;
+      return;
+    }
+    if (guidedAccessIncidentOpen.current) return;
+    guidedAccessIncidentOpen.current = true;
+    const state = useExamStore.getState();
+    const student = useStudentStore.getState().verifiedStudent;
+    if (state.sessionId && student?.id) {
+      void ExamProgressStore.save({
+        sessionId: state.sessionId,
+        studentId: student.id,
+        answers: state.answers,
+        flags: state.flags,
+        navMode: state.navMode,
+        remainingSeconds: state.remainingSeconds,
+        startedAt: state.startedAt,
+      }).catch((error) => console.warn('[GUIDED ACCESS] Checkpoint failed:', error));
+      void SecurityRepository.recordViolation({
+        sessionId: state.sessionId,
+        studentId: student.id,
+        studentName: student.fullName,
+        type: 'guided_access_lost',
+        message: guidedAccess === 'unavailable'
+          ? 'Guided Access verification became unavailable during examination.'
+          : 'Guided Access became inactive during examination.',
+      }).catch((error) => console.warn('[GUIDED ACCESS] Incident log failed:', error));
+    }
+  }, [guidedAccess, securityEnabled, roomEnded, isLeavingExam]);
 
   // Sync mode with local storage
   useEffect(() => {
@@ -607,7 +643,8 @@ function ExamScreenInner() {
   });
 
   const isAndroidUnpinned = Platform.OS === 'android' && !isKioskActive;
-  const paused = wifiLocked || isAndroidUnpinned || roomEnded || isLeavingExam || remainingSeconds <= 0;
+  const isIosUnguided = Platform.OS === 'ios' && guidedAccess !== 'enabled';
+  const paused = wifiLocked || isAndroidUnpinned || isIosUnguided || roomEnded || isLeavingExam || remainingSeconds <= 0;
 
   useEffect(() => {
     setPaused(paused);

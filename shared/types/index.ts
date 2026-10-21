@@ -29,7 +29,8 @@ export type SecurityViolationType =
   | 'leave_attempt'
   | 'kiosk_lock_failed'
   | 'lock_task_state_lost'
-  | 'app_exit_during_lock';
+  | 'app_exit_during_lock'
+  | 'guided_access_lost';
 
 export type ExamTerminationReason =
   | 'submitted'
@@ -106,12 +107,19 @@ export interface ExamRoom {
   scheduleId: string;
   roomName: string;
   capacity: number;
+  studentCount?: number;
   examSessionId?: number | null;
   examinationCode?: string | null;
   status: 'idle' | ExamLifecycleStatus | string;
   connectedCount: number;
   proctorId?: number | null;
   proctorName?: string | null;
+  assignedProctorId?: number | null;
+  assignedProctorName?: string | null;
+  ownerId?: number | null;
+  ownerName?: string | null;
+  canOpen?: boolean;
+  canControl?: boolean;
   canReopen?: boolean;
 }
 

@@ -19,6 +19,8 @@ import { examProcess } from '@/shared/theme/examProcess';
 import { ExamProcessStepper } from '@/features/examinations/components/ExamProcessStepper';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { ExamPreloader } from '@/features/examinations/services/examPreloader';
+import { useGuidedAccessStatus } from '@/features/examinations/hooks/useGuidedAccessStatus';
+import { requireGuidedAccess } from '@/features/examinations/services/guidedAccess';
 import {
   ExamLifecycle,
   type AuthorityStatus,
@@ -42,6 +44,7 @@ type LobbyState = 'DASHBOARD' | 'STARTING' | 'FINISHING_DOWNLOAD' | 'ERROR';
 
 function useLobbyController() {
   const router = useRouter();
+  const [guidedAccess] = useGuidedAccessStatus();
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const storedSnapshot = useLobbyStore((s) => s.snapshot);
@@ -254,6 +257,7 @@ function useLobbyController() {
 
   const enterExamination = useCallback(async () => {
     if (hasEntered.current || entering.current || !scannedSessionId) return;
+    if (guidedAccess !== 'enabled') return;
     if (authority === 'ENDED') return;
     if (authority !== 'ACTIVE') return;
 
@@ -302,6 +306,7 @@ function useLobbyController() {
         throw new Error(userFacingStartupError(gate.code, gate.detail));
       }
 
+      requireGuidedAccess();
       console.log('[STUDENT] Navigation Triggered');
       setSessionId(scannedSessionId);
       setQuestions(questions);
@@ -329,6 +334,7 @@ function useLobbyController() {
     setQuestions,
     setSessionId,
     startExam,
+    guidedAccess,
   ]);
 
   useEffect(() => {
@@ -353,7 +359,7 @@ function useLobbyController() {
       return;
     }
     void enterExamination();
-  }, [authority, progress.moduleReady, progress.hashVerified, progress.percent, enterExamination]);
+  }, [authority, progress.moduleReady, progress.hashVerified, progress.percent, enterExamination, guidedAccess]);
 
   // Registration is completed on Confirm after agreement and successful pinning.
   useEffect(() => {

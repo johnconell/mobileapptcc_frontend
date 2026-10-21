@@ -12,6 +12,7 @@ import { classifyPeerReconnectError } from '@/features/examinations/services/pee
 import { parsePeerQr, PeerExamServer, resolveNumericScheduleId } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
 import { DeviceService } from '@/shared/services/DeviceService';
+import { requireGuidedAccess } from '@/features/examinations/services/guidedAccess';
 import {
   formatScheduleOpeningTime,
   getProctorScheduleAvailability,
@@ -996,6 +997,7 @@ export const LobbyRepository = {
     sessionId: string,
     passkey: string,
   ): Promise<LobbySnapshot> {
+    requireGuidedAccess();
     const code = (await getStoredCode()) || '';
     if (!code) throw new Error('Missing examination code. Scan QR again.');
     const deviceId = await DeviceService.getDeviceId();
@@ -1101,6 +1103,7 @@ export const LobbyRepository = {
   },
 
   async joinStudent(student: StudentRecord, sessionId: string): Promise<LobbySnapshot> {
+    requireGuidedAccess();
     const code = (await getStoredCode()) || '';
     if (!code) throw new Error('Missing examination code. Scan QR again.');
 

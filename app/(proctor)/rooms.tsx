@@ -346,6 +346,20 @@ export default function RoomsScreen() {
           return (
             <Pressable
               onPress={() => {
+                if (item.ownerName && !item.canControl) {
+                  Alert.alert(
+                    'Room Currently Managed',
+                    `${item.roomName} is currently managed by ${item.ownerName}.`,
+                  );
+                  return;
+                }
+                if (!item.canOpen && item.assignedProctorName && !item.canControl) {
+                  Alert.alert(
+                    'Restricted Room Assignment',
+                    `${item.roomName} is assigned to ${item.assignedProctorName}.`,
+                  );
+                  return;
+                }
                 setSelectedRoom(item);
                 setModalVisible(true);
               }}
@@ -369,21 +383,21 @@ export default function RoomsScreen() {
                     <View style={styles.infoRow}>
                       <Users size={14} color="#71717A" />
                       <Text style={styles.capacity} numberOfLines={1} maxFontSizeMultiplier={1.15}>
-                        Capacity: {item.capacity} Applicants
+                        {item.studentCount ?? item.capacity} students assigned · Capacity: {item.capacity}
                       </Text>
                     </View>
 
                     <View style={styles.infoRow}>
                       <Layers size={14} color="#7A1F2B" />
                       <Text style={styles.applicants} numberOfLines={1} maxFontSizeMultiplier={1.15}>
-                        Current Applicants: {item.connectedCount ?? 0}
+                        {item.ownerName ? `Managing: ${item.ownerName}` : `Assigned: ${item.assignedProctorName || 'Any available proctor'}`}
                       </Text>
                     </View>
 
                     <View style={styles.badgeRow}>
                       <StatusChip
-                        label={roomStatusLabel(item.status)}
-                        tone={roomTone(item.status)}
+                        label={item.ownerName ? `Managed by ${item.ownerName}` : roomStatusLabel(item.status)}
+                        tone={item.ownerName ? (item.canControl ? 'success' : 'warning') : roomTone(item.status)}
                       />
                     </View>
                   </View>
@@ -448,17 +462,33 @@ export default function RoomsScreen() {
               </View>
 
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Capacity</Text>
+                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Assigned Proctor</Text>
                 <Text style={styles.detailValue} maxFontSizeMultiplier={1.15}>
-                  {selectedRoom?.capacity ?? 60} Applicants
+                  {selectedRoom?.assignedProctorName || 'Any available proctor'}
+                </Text>
+              </View>
+
+              {selectedRoom?.ownerName ? (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Managing Proctor</Text>
+                  <Text style={styles.detailValueBold} maxFontSizeMultiplier={1.15}>
+                    {selectedRoom.ownerName}
+                  </Text>
+                </View>
+              ) : null}
+
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Students / Capacity</Text>
+                <Text style={styles.detailValue} maxFontSizeMultiplier={1.15}>
+                  {selectedRoom?.studentCount ?? selectedRoom?.capacity ?? 0} students (Max {selectedRoom?.capacity ?? 60})
                 </Text>
               </View>
 
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Status</Text>
                 <StatusChip
-                  label={roomStatusLabel(selectedRoom?.status || 'idle')}
-                  tone={roomTone(selectedRoom?.status || 'idle')}
+                  label={selectedRoom?.ownerName ? `Managed by ${selectedRoom.ownerName}` : roomStatusLabel(selectedRoom?.status || 'idle')}
+                  tone={selectedRoom?.ownerName ? (selectedRoom.canControl ? 'success' : 'warning') : roomTone(selectedRoom?.status || 'idle')}
                 />
               </View>
             </View>

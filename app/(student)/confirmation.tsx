@@ -34,6 +34,9 @@ import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { examProcess } from '@/shared/theme/examProcess';
 import { userFacingError } from '@/shared/utils/userFacingError';
+import { useGuidedAccessStatus } from '@/features/examinations/hooks/useGuidedAccessStatus';
+import { GuidedAccessBlocked } from '@/features/examinations/components/GuidedAccessBlocked';
+import { readGuidedAccessStatus, requireGuidedAccess } from '@/features/examinations/services/guidedAccess';
 
 const gmailSchema = z.object({
   email: z
@@ -73,6 +76,9 @@ export default function StudentConfirmationScreen() {
   const [showAgreement, setShowAgreement] = React.useState(Boolean(verifiedStudent));
   const [agreed, setAgreed] = React.useState(false);
   const [pinDeclined, setPinDeclined] = React.useState(false);
+  const [guidedAccessRequired, setGuidedAccessRequired] = React.useState(false);
+  const [guidedAccess, refreshGuidedAccess] = useGuidedAccessStatus();
+  const pendingGuidedJoin = React.useRef(false);
 
   const hasGmail = Boolean(selectedStudent?.email?.trim());
 
@@ -89,7 +95,13 @@ export default function StudentConfirmationScreen() {
 
   React.useEffect(() => {
     if (verifiedStudent && scannedSessionId) {
-      if (agreedAt) router.replace('/(student)/lobby');
+      if (agreedAt) {
+        if (Platform.OS !== 'ios' || readGuidedAccessStatus() === 'enabled') {
+          router.replace('/(student)/lobby');
+        } else {
+          setGuidedAccessRequired(true);
+        }
+      }
       else setShowAgreement(true);
       return;
     }
@@ -106,15 +118,8 @@ export default function StudentConfirmationScreen() {
     router.replace('/(student)/passkey');
   }, [router, setSelectedStudent, setVerifiedStudent, setAgreedAt]);
 
-  if (!selectedStudent || !scannedSessionId) {
-    return (
-      <ExamProcessChrome step={2} title="Confirm Identity" stepLabel="Step 3 of 6 · Confirm">
-        <Text style={styles.hint}>Loading…</Text>
-      </ExamProcessChrome>
-    );
-  }
-
   const confirmIdentity = async (email: string) => {
+    if (!selectedStudent) return;
     setJoinError(null);
     setJoining(true);
     try {
@@ -166,6 +171,18 @@ export default function StudentConfirmationScreen() {
     setJoinError(null);
     setPinDeclined(false);
 
+    if (Platform.OS === 'ios') {
+      try {
+        requireGuidedAccess();
+        setGuidedAccessRequired(false);
+      } catch {
+        pendingGuidedJoin.current = true;
+        setGuidedAccessRequired(true);
+        setJoining(false);
+        return;
+      }
+    }
+
     if (Platform.OS === 'android') {
       try {
         const { startExamLock, isExamLocked } = await import(
@@ -208,6 +225,7 @@ export default function StudentConfirmationScreen() {
       const lobby = effectivePasskey
         ? await LobbyRepository.joinWithPasskey(verifiedStudent, scannedSessionId, effectivePasskey)
         : await LobbyRepository.joinStudent(verifiedStudent, scannedSessionId);
+      requireGuidedAccess();
       const updatedVerified = { ...verifiedStudent };
       const regId = lobby.registration_id || lobby.students?.find((s) => s.studentId === updatedVerified.studentId)?.id;
       if (regId) updatedVerified.registration_id = Number(regId);
@@ -225,13 +243,41 @@ export default function StudentConfirmationScreen() {
     }
   };
 
+  React.useEffect(() => {
+    if (Platform.OS !== 'ios' || !guidedAccessRequired || guidedAccess !== 'enabled') return;
+    if (agreedAt) {
+      setGuidedAccessRequired(false);
+      router.replace('/(student)/lobby');
+    } else if (pendingGuidedJoin.current) {
+      pendingGuidedJoin.current = false;
+      setGuidedAccessRequired(false);
+      void handleProceed();
+    }
+  }, [guidedAccessRequired, guidedAccess, agreedAt, router]);
+
   const onConfirmWithForm = handleSubmit(async (values) => {
     await confirmIdentity(values.email);
   });
 
   const onConfirmExisting = async () => {
-    await confirmIdentity(selectedStudent.email);
+    if (selectedStudent) await confirmIdentity(selectedStudent.email);
   };
+
+  if (!selectedStudent || !scannedSessionId) {
+    return (
+      <ExamProcessChrome step={2} title="Confirm Identity" stepLabel="Step 3 of 6 · Confirm">
+        <Text style={styles.hint}>Loading…</Text>
+      </ExamProcessChrome>
+    );
+  }
+
+  if (Platform.OS === 'ios' && guidedAccessRequired && guidedAccess !== 'enabled') {
+    return (
+      <View style={styles.flex}>
+        <GuidedAccessBlocked status={guidedAccess} onCheck={refreshGuidedAccess} />
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView
