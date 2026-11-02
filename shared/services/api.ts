@@ -1,6 +1,8 @@
 import { STORAGE_KEYS } from '@/shared/constants';
 import { isLoopbackApiHost, requiresLanApiHost } from '@/shared/services/apiReachability';
 import { appStorage } from '@/shared/services/storage';
+import { authStorageKeys, isLocalApiMode } from '@/features/local-testing/localMode';
+import { localApiRequest } from '@/features/local-testing/localApiTransport';
 
 const DEFAULT_API_URL = 'https://api.masterexam.pro/api/v1';
 /** Must match server ADMIN_SYNC_TOKEN (same value as eas.json production env). */
@@ -108,13 +110,23 @@ type RequestOptions = {
 };
 
 async function readToken(): Promise<string | null> {
-  return appStorage.getItem(STORAGE_KEYS.proctorToken);
+  return appStorage.getItem(authStorageKeys().token);
 }
 
 export async function apiRequest<T = unknown>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
+  const method = options.method ?? (options.body !== undefined ? 'POST' : 'GET');
+  const useAuth = options.auth !== false;
+  const token = options.token ?? (useAuth ? await readToken() : null);
+  if (isLocalApiMode()) {
+    const result = await localApiRequest({ path, method, body: options.body, token });
+    if (result.status >= 400) {
+      throw new ApiError(result.body?.message || `Request failed (${result.status}).`, result.status, result.body);
+    }
+    return result.body as T;
+  }
   const base = normalizeBase(options.baseUrl || getApiBaseUrl());
   const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
   const headers: Record<string, string> = {
@@ -126,8 +138,6 @@ export async function apiRequest<T = unknown>(
     headers['Content-Type'] = 'application/json';
   }
 
-  const useAuth = options.auth !== false;
-  const token = options.token ?? (useAuth ? await readToken() : null);
   if (useAuth && !token) {
     throw new ApiError('Session expired. Please sign in again.', 401);
   }
@@ -141,7 +151,7 @@ export async function apiRequest<T = unknown>(
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 5000);
   try {
     response = await fetch(url, {
-      method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
+      method,
       headers,
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,

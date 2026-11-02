@@ -1,4 +1,4 @@
-import { getCloudApiBaseUrl, getApiBaseUrl, getSyncToken } from '@/shared/services/api';
+import { apiRequest, getCloudApiBaseUrl, getApiBaseUrl, getSyncToken } from '@/shared/services/api';
 import {
   describeApiReachabilityProblem,
   studentPackDownloadFailureMessage,
@@ -20,6 +20,10 @@ import * as Crypto from 'expo-crypto';
 import * as Network from 'expo-network';
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
+import {
+  validateOfflineRoomAssignment,
+  type OfflineRoomAuthority,
+} from '@/features/examinations/services/offlineRoomAssignment';
 
 /** Pull typed exam code from plain text or METCC QR JSON. */
 export function extractExaminationCode(raw: string): string {
@@ -431,6 +435,10 @@ export interface OfflinePasskeyValidationResult {
   };
 }
 
+export type OfflinePasskeyAuthority =
+  | number
+  | (OfflineRoomAuthority & { source: 'peer_session' });
+
 export const OfflineExamRepository = {
   async downloadPackFromCloud(
     examDate?: string,
@@ -449,14 +457,8 @@ export const OfflineExamRepository = {
 
     report(5, 'Connecting…');
 
-    // Pack export requires ADMIN_SYNC_TOKEN (or admin Sanctum). A proctor
-    // login token must NOT be preferred — it causes 401 Unauthorized.
-    const syncToken = getSyncToken();
-    if (!syncToken) {
-      throw new Error(
-        'Missing EXPO_PUBLIC_SYNC_TOKEN in the app .env (must match ADMIN_SYNC_TOKEN on the server). Restart Expo after changing it.',
-      );
-    }
+    // The authenticated proctor endpoint returns only this account's assigned
+    // schedules, rooms, registrations, and applicants.
     const currentYear = new Date().getFullYear();
     if (examDate) {
       const dateYear = parseInt(examDate.slice(0, 4), 10);
@@ -471,10 +473,13 @@ export const OfflineExamRepository = {
     const q = params.toString() ? `?${params.toString()}` : '';
 
     report(20, 'Downloading exam pack…');
-    const json = await cloudFetch<{
+    const json = await apiRequest<{
       success: boolean;
       data: OfflinePack & { proctors?: unknown };
-    }>(`/sync/exam-day-pack${q}`, { token: syncToken, timeoutMs: 5000 });
+    }>(`/proctor/exam-day-pack${q}`, {
+      baseUrl: getCloudApiBaseUrl() || getApiBaseUrl(),
+      timeoutMs: 12000,
+    });
     if (!json.data) throw new Error('Cloud returned an empty exam pack.');
 
     report(55, 'Processing students and questions…');
@@ -507,26 +512,23 @@ export const OfflineExamRepository = {
     }
     report(100, 'Download complete');
     try {
-      const syncToken = getSyncToken();
-      if (syncToken) {
-        const params = new URLSearchParams();
-        if (examDate) params.set('exam_date', examDate);
-        const at = await appStorage.getItem(STORAGE_KEYS.offlinePackAt);
-        if (at) params.set('since', at);
-        const q = params.toString() ? `?${params.toString()}` : '';
-        const json = await cloudFetch<{
-          success: boolean;
-          data?: { content_fingerprint?: string };
-        }>(`/sync/exam-day-pack-status${q}`, {
-          token: syncToken,
-          timeoutMs: 12000,
-        });
-        if (json.data?.content_fingerprint) {
-          await appStorage.setItem(
-            'tcc.offline.pack.content_fingerprint',
-            json.data.content_fingerprint,
-          );
-        }
+      const params = new URLSearchParams();
+      if (examDate) params.set('exam_date', examDate);
+      const at = await appStorage.getItem(STORAGE_KEYS.offlinePackAt);
+      if (at) params.set('since', at);
+      const q = params.toString() ? `?${params.toString()}` : '';
+      const statusJson = await apiRequest<{
+        success: boolean;
+        data?: { content_fingerprint?: string };
+      }>(`/proctor/exam-day-pack-status${q}`, {
+        baseUrl: getCloudApiBaseUrl() || getApiBaseUrl(),
+        timeoutMs: 12000,
+      });
+      if (statusJson.data?.content_fingerprint) {
+        await appStorage.setItem(
+          'tcc.offline.pack.content_fingerprint',
+          statusJson.data.content_fingerprint,
+        );
       }
     } catch {
       // Fingerprint cache is optional.
@@ -578,20 +580,6 @@ export const OfflineExamRepository = {
       };
     }
 
-    const syncToken = getSyncToken();
-    if (!syncToken) {
-      return {
-        updateRequired: false,
-        rescheduledSince: 0,
-        rescheduledToday: 0,
-        questionsChangedSince: 0,
-        questionsChangedToday: 0,
-        registrationCount: 0,
-        reason: null,
-        message: 'Unable to check cloud updates (missing sync token).',
-      };
-    }
-
     const since = (await appStorage.getItem(STORAGE_KEYS.offlinePackAt)) || undefined;
     const fingerprint =
       (await appStorage.getItem('tcc.offline.pack.content_fingerprint')) || undefined;
@@ -603,7 +591,7 @@ export const OfflineExamRepository = {
     const q = params.toString() ? `?${params.toString()}` : '';
 
     try {
-      const json = await cloudFetch<{
+      const json = await apiRequest<{
         success: boolean;
         data?: {
           update_required?: boolean;
@@ -615,9 +603,9 @@ export const OfflineExamRepository = {
           reason?: 'reschedule' | 'questions' | 'fingerprint' | null;
           content_fingerprint?: string;
         };
-      }>(`/sync/exam-day-pack-status${q}`, {
-        token: syncToken,
-          timeoutMs: 5000,
+      }>(`/proctor/exam-day-pack-status${q}`, {
+        baseUrl: getCloudApiBaseUrl() || getApiBaseUrl(),
+        timeoutMs: 5000,
       });
 
       const data = json.data ?? {};
@@ -779,30 +767,40 @@ export const OfflineExamRepository = {
   /**
    * Validate a student examination key against the offline pack.
    * Resolves the schedule from (in order):
-   * 1) explicit scheduleIdOverride (peer host session)
+   * 1) explicit peer host authority (schedule + room)
    * 2) opened-room map for modern codes like K7M2P9QX
    * 3) legacy OFF-{scheduleId}[-R{roomId}] codes
    */
   async validatePasskey(
     examinationCode: string,
     passkey: string,
-    scheduleIdOverride?: number | null,
+    authorityOverride?: OfflinePasskeyAuthority | null,
   ): Promise<OfflinePasskeyValidationResult | null> {
     const pack = await OfflineStore.getPack();
     if (!pack) return null;
 
     let scheduleId: number | null =
-      scheduleIdOverride != null && Number.isFinite(Number(scheduleIdOverride))
-        ? Number(scheduleIdOverride)
+      typeof authorityOverride === 'number' && Number.isFinite(authorityOverride)
+        ? Number(authorityOverride)
+        : authorityOverride && typeof authorityOverride === 'object'
+          ? Number(authorityOverride.scheduleId)
+          : null;
+    let targetRoomId: number | null =
+      authorityOverride && typeof authorityOverride === 'object'
+        ? authorityOverride.roomId
         : null;
 
     if (scheduleId == null) {
       const opened = await OfflineStore.findOpenedRoomByCode(examinationCode);
       if (opened) {
         scheduleId = opened.scheduleId;
+        targetRoomId = opened.roomId;
       } else {
         const parsed = this.parseOfflineCode(examinationCode);
-        if (parsed) scheduleId = parsed.scheduleId;
+        if (parsed) {
+          scheduleId = parsed.scheduleId;
+          targetRoomId = parsed.roomId;
+        }
       }
     }
 
@@ -873,6 +871,25 @@ export const OfflineExamRepository = {
     const schedule = pack.schedules.find((s) => Number(s.id) === scheduleId);
     if (!schedule) return null;
 
+    const roomDecision = validateOfflineRoomAssignment({
+      schedule,
+      registration: reg,
+      authority: { scheduleId, roomId: targetRoomId },
+    });
+    if (!roomDecision.ok) {
+      return {
+        classification:
+          roomDecision.code === 'wrong_schedule' ? 'wrong_schedule' : 'invalid',
+        message: roomDecision.message,
+        schedule: {
+          id: schedule.id,
+          title: schedule.title,
+          exam_date: schedule.exam_date,
+          time_slot: schedule.time_slot,
+        },
+      };
+    }
+
     const windowState = getPasskeyScheduleWindowState(schedule);
     if (windowState !== 'valid') {
       return {
@@ -942,6 +959,39 @@ export const OfflineExamRepository = {
       student: studentRecord,
       schedule: scheduleObj,
     };
+  },
+
+  /** Re-check a previously admitted peer student before resume/content access. */
+  async validateRegistrationRoom(
+    registrationId: number,
+    authority: OfflineRoomAuthority,
+  ) {
+    const pack = await OfflineStore.getPack();
+    if (!pack) {
+      return {
+        ok: false as const,
+        code: 'assignment_data_unavailable' as const,
+        recoveryRequired: true,
+        message:
+          'The examination pack is unavailable on the proctor phone. Ask the proctor to update the examination pack and reopen this room.',
+      };
+    }
+    const schedule = pack.schedules.find(
+      (candidate) => Number(candidate.id) === Number(authority.scheduleId),
+    );
+    const registration = pack.registrations.find(
+      (candidate) => Number(candidate.id) === Number(registrationId),
+    );
+    if (!registration) {
+      return {
+        ok: false as const,
+        code: 'assignment_data_unavailable' as const,
+        recoveryRequired: true,
+        message:
+          'This registration is not present in the proctor phone’s examination pack. Ask the proctor to update the examination pack and reopen this room.',
+      };
+    }
+    return validateOfflineRoomAssignment({ schedule, registration, authority });
   },
 
   async getLobbyStudentsForSchedule(_scheduleId: string) {

@@ -23,15 +23,23 @@ export function GuidedAccessBlocked({ status, onCheck, inExam = false }: {
           <Text style={styles.warning}>This app build cannot verify Guided Access. Install the latest iOS build or contact your proctor.</Text>
         ) : (
           <View style={styles.steps}>
-            <Text style={styles.step}>1. Open Settings, then Accessibility, then Guided Access. Turn it on.</Text>
-            <Text style={styles.step}>2. Return to this app and triple-click the Side Button.</Text>
-            <Text style={styles.step}>3. Tap Start. This screen will unlock after verification.</Text>
+            <Text style={styles.step}>1. Open Settings, tap Accessibility, then Guided Access. Turn it on.</Text>
+            <Text style={styles.step}>2. Return to this app and triple-click your device button:</Text>
+            <View style={styles.substeps}>
+              <Text style={styles.substep}>• Home Button on iPhone 7, 8, SE, and classic iPads</Text>
+              <Text style={styles.substep}>• Side Button on iPhones with Face ID (iPhone X or newer)</Text>
+              <Text style={styles.substep}>• Top Button on iPads without a Home Button</Text>
+            </View>
+            <Text style={styles.step}>3. Tap Start in the top-right corner.</Text>
           </View>
         )}
         <Pressable accessibilityRole="button" onPress={onCheck} style={styles.button}>
           <Text style={styles.buttonText}>Check Guided Access</Text>
         </Pressable>
-        <View style={styles.waiting}><ActivityIndicator size="small" color={examProcess.accent} /><Text style={styles.waitingText}>Waiting for iPhone verification</Text></View>
+        <View style={styles.waiting}>
+          <ActivityIndicator size="small" color={examProcess.accent} />
+          <Text style={styles.waitingText}>Waiting for Apple device verification</Text>
+        </View>
       </View>
     </View>
   );
@@ -43,10 +51,13 @@ const styles = StyleSheet.create({
   title: { fontSize: 23, fontFamily: examProcess.fontSemiBold, color: examProcess.ink },
   body: { fontSize: 15, lineHeight: 23, fontFamily: examProcess.fontRegular, color: examProcess.ink },
   warning: { fontSize: 14, lineHeight: 21, color: '#9b2c2c', fontFamily: examProcess.fontMedium },
-  steps: { gap: 11 },
+  steps: { gap: 10 },
   step: { fontSize: 14, lineHeight: 21, color: examProcess.ink, fontFamily: examProcess.fontRegular },
+  substeps: { paddingLeft: 12, gap: 4 },
+  substep: { fontSize: 13, lineHeight: 19, color: examProcess.muted, fontFamily: examProcess.fontRegular },
   button: { minHeight: 48, borderRadius: 12, backgroundColor: examProcess.accent, alignItems: 'center', justifyContent: 'center' },
   buttonText: { color: '#fff', fontSize: 15, fontFamily: examProcess.fontMedium },
   waiting: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   waitingText: { fontSize: 12, color: examProcess.muted, fontFamily: examProcess.fontRegular },
 });
+

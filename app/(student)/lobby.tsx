@@ -309,8 +309,12 @@ function useLobbyController() {
       requireGuidedAccess();
       console.log('[STUDENT] Navigation Triggered');
       setSessionId(scannedSessionId);
-      setQuestions(questions);
-      startExam(duration);
+      const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      startExam({
+        durationMinutes: duration,
+        attemptId: token ?? undefined,
+        startedAt: new Date().toISOString(),
+      });
       await ExamLifecycle.apply('ACTIVE', { sessionId: scannedSessionId });
       void LobbyRepository.acknowledgeStart('entered');
       router.replace('/(student)/exam');

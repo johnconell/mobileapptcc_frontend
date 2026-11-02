@@ -13,6 +13,7 @@ import { OfflineStore, computePackHash, computePackHashAsync, type OfflinePack }
 import { resolveWifiLanIp } from '@/features/monitoring/services/wifiLanIp';
 import { clampViolationLimit } from '@/shared/utils/violationLimit';
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
+import { validateOfflineHostRoom } from '@/features/examinations/services/offlineRoomAssignment';
 import type {
   ExamTerminationReason,
   LobbySnapshot,
@@ -112,6 +113,7 @@ type PeerSessionState = {
   openedAt: string;
   startedAt: string | null;
   endedAt: string | null;
+  endsAt?: string | null;
   durationMinutes: number;
   /** Auto-warn / auto-submit threshold from admin examination settings (pack). */
   violationLimit: number;
@@ -193,6 +195,40 @@ function fail(status: number, message: string): JsonResponse {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ success: false, message }),
   };
+}
+
+function peerAuthority(state: PeerSessionState) {
+  return {
+    scheduleId: state.scheduleId,
+    roomId: state.roomId,
+    source: 'peer_session' as const,
+  };
+}
+
+async function enforceStudentRoom(
+  state: PeerSessionState,
+  student: PeerStudentState,
+): Promise<JsonResponse | null> {
+  const decision = await OfflineExamRepository.validateRegistrationRoom(
+    student.registrationId,
+    peerAuthority(state),
+  );
+  if (decision.ok) return null;
+  return fail(decision.recoveryRequired ? 409 : 403, decision.message);
+}
+
+function passkeyAdmissionFailure(
+  validated: Awaited<ReturnType<typeof OfflineExamRepository.validatePasskey>>,
+): JsonResponse | null {
+  if (!validated) return fail(404, 'Invalid examination key for this examination.');
+  if (validated.classification === 'already_completed') return null;
+  if (validated.classification !== 'valid' || !validated.student) {
+    const recovery = /missing or outdated|not present in the proctor phone/i.test(
+      validated.message ?? '',
+    );
+    return fail(recovery ? 409 : 403, validated.message || 'This examination key cannot be admitted to the room currently open.');
+  }
+  return null;
 }
 
 function parseBody(raw: string): Record<string, unknown> {
@@ -412,8 +448,10 @@ function applyStartAck(student: PeerStudentState, phase: 'received' | 'entered')
 
 function remainingSeconds(state: PeerSessionState): number | null {
   if (state.status !== 'in_progress' || !state.startedAt) return null;
-  const elapsed = (Date.now() - new Date(state.startedAt).getTime()) / 1000;
-  return Math.max(0, Math.round(state.durationMinutes * 60 - elapsed));
+  const endsAtMs = state.endsAt
+    ? new Date(state.endsAt).getTime()
+    : new Date(state.startedAt).getTime() + state.durationMinutes * 60_000;
+  return Math.max(0, Math.round((endsAtMs - Date.now()) / 1000));
 }
 
 function allStudentsFinished(state: PeerSessionState): boolean {
@@ -732,6 +770,8 @@ function registerRoutes(mod: HttpServerModule) {
     );
     const student = studentByToken(token);
     if (student) {
+      const roomFailure = await enforceStudentRoom(session, student);
+      if (roomFailure) return roomFailure;
       student.lastActivityAt = new Date().toISOString();
     }
     return ok(statusPayload(student, token));
@@ -793,7 +833,7 @@ function registerRoutes(mod: HttpServerModule) {
     const validated = await OfflineExamRepository.validatePasskey(
       session.examCode,
       passkey,
-      session.scheduleId,
+      peerAuthority(session),
     );
     if (!validated) return fail(404, 'Key not found.');
     if (validated.classification === 'wrong_schedule') {
@@ -813,6 +853,8 @@ function registerRoutes(mod: HttpServerModule) {
         schedule: validated.schedule,
       });
     }
+    const admissionFailure = passkeyAdmissionFailure(validated);
+    if (admissionFailure) return admissionFailure;
 
     // Authoritative check on Proctor Server:
     const registrationId = Number(validated.student?.registration_id ?? 0);
@@ -880,35 +922,28 @@ function registerRoutes(mod: HttpServerModule) {
     const body = parseBody(request.body);
     const passkey = String(body.passkey ?? '').trim().toUpperCase();
 
-    // Validate passkey if present and check single attempt
-    if (passkey) {
-      try {
-        const validated = await OfflineExamRepository.validatePasskey(
-          session.examCode,
-          passkey,
-          session.scheduleId,
-        );
-        if (!validated || !validated.student) {
-          console.warn(`[SERVER] /package passkey check soft-failed for: ${passkey}`);
-        }
-        if (validated?.classification === 'already_completed') {
-          return fail(403, 'Examination Already Completed: Multiple attempts are not permitted.');
-        }
-        if (validated?.student) {
-          const appCode = (validated.student.studentId || '').trim().toUpperCase();
-          const queued = await OfflineStore.getResults();
-          if (
-            queued.some(
-              (r) =>
-                (r.applicant_code || '').trim().toUpperCase() === appCode &&
-                Number(r.examination_schedule_id) === Number(session?.scheduleId),
-            )
-          ) {
-            return fail(403, 'Examination Already Completed: Multiple attempts are not permitted.');
-          }
-        }
-      } catch (err) {
-        console.warn('[SERVER] /package passkey check error:', err);
+    if (!passkey) return fail(422, 'Enter your examination key before downloading the examination package.');
+    const validated = await OfflineExamRepository.validatePasskey(
+      session.examCode,
+      passkey,
+      peerAuthority(session),
+    );
+    if (validated?.classification === 'already_completed') {
+      return fail(403, 'Examination Already Completed: Multiple attempts are not permitted.');
+    }
+    const packageAdmissionFailure = passkeyAdmissionFailure(validated);
+    if (packageAdmissionFailure) return packageAdmissionFailure;
+    if (validated?.student) {
+      const appCode = (validated.student.studentId || '').trim().toUpperCase();
+      const queued = await OfflineStore.getResults();
+      if (
+        queued.some(
+          (r) =>
+            (r.applicant_code || '').trim().toUpperCase() === appCode &&
+            Number(r.examination_schedule_id) === Number(session!.scheduleId),
+        )
+      ) {
+        return fail(403, 'Examination Already Completed: Multiple attempts are not permitted.');
       }
     }
 
@@ -979,16 +1014,16 @@ function registerRoutes(mod: HttpServerModule) {
     const validated = await OfflineExamRepository.validatePasskey(
       session.examCode,
       passkey,
-      session.scheduleId,
+      peerAuthority(session),
     );
     if (!validated) return fail(404, 'Invalid examination key for this examination.');
     if (validated.classification === 'wrong_schedule') {
       return fail(409, validated.message || 'This examination key belongs to a different schedule.');
     }
 
-    if (!validated.student) {
-      return fail(404, 'Unable to continue with that examination key.');
-    }
+    const joinAdmissionFailure = passkeyAdmissionFailure(validated);
+    if (joinAdmissionFailure) return joinAdmissionFailure;
+    if (!validated.student) return fail(403, validated.message || 'Unable to continue with that examination key.');
 
     if (validated.classification === 'already_completed') {
       return fail(
@@ -1145,6 +1180,8 @@ function registerRoutes(mod: HttpServerModule) {
       console.warn(`[SERVER] Token not found: ${token.slice(0, 10)}...`);
       return fail(403, 'You are no longer joined to this examination.');
     }
+    const roomFailure = await enforceStudentRoom(session, student);
+    if (roomFailure) return roomFailure;
 
     student.lastActivityAt = new Date().toISOString();
 
@@ -1184,6 +1221,8 @@ function registerRoutes(mod: HttpServerModule) {
     const params = parseParams(request);
     const student = studentByToken(params.participation_token ?? '');
     if (!student) return fail(404, 'You are no longer joined to this examination.');
+    const roomFailure = await enforceStudentRoom(session, student);
+    if (roomFailure) return roomFailure;
     if (student.submittedAt || student.status === 'finished') {
       return fail(403, 'Examination Already Completed: This examination has already been completed.');
     }
@@ -1223,6 +1262,8 @@ function registerRoutes(mod: HttpServerModule) {
     const token = String(body.participation_token ?? parseParams(request).participation_token ?? '');
     const student = studentByToken(token);
     if (!student) return fail(404, 'You are no longer joined to this examination.');
+    const roomFailure = await enforceStudentRoom(session, student);
+    if (roomFailure) return roomFailure;
     if (student.submittedAt || student.status === 'finished') {
       return fail(403, 'Examination Already Completed: This examination has already been completed.');
     }
@@ -1253,6 +1294,8 @@ function registerRoutes(mod: HttpServerModule) {
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
     if (!student) return fail(404, 'You are no longer joined to this examination.');
+    const roomFailure = await enforceStudentRoom(session, student);
+    if (roomFailure) return roomFailure;
     if (student.submittedAt || student.status === 'finished') {
       return fail(403, 'Examination Already Completed: Cannot modify answers for a submitted examination.');
     }
@@ -1278,6 +1321,8 @@ function registerRoutes(mod: HttpServerModule) {
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
     if (!student) return fail(404, 'You are no longer joined to this examination.');
+    const roomFailure = await enforceStudentRoom(session, student);
+    if (roomFailure) return roomFailure;
     if (student.submissionConfirmed) {
       // A previous submit may have reached the host even if its reply was lost.
       // Return a receipt so the student can safely retry until it gets an ACK.
@@ -1347,9 +1392,10 @@ function registerRoutes(mod: HttpServerModule) {
       synced: false,
     };
 
-    // FIX 2 & FIX 3: Hard integrity validation before queueing
     if (!Number.isInteger(queuedRow.examination_schedule_id) || queuedRow.examination_schedule_id <= 0) {
-      console.error('[CRITICAL INTEGRITY ERROR] Refusing to queue result with non-positive schedule ID:', queuedRow);
+      console.error(
+        `[CRITICAL INTEGRITY ERROR] Refusing to queue result with non-positive schedule ID (applicant: ${queuedRow.applicant_code}, schedule: ${queuedRow.examination_schedule_id})`,
+      );
       return fail(500, 'Critical Integrity Failure: Refused to store result with invalid schedule ID.');
     }
 
@@ -1409,6 +1455,8 @@ function registerRoutes(mod: HttpServerModule) {
       });
     }
     if (!student) return fail(403, 'You are no longer joined to this examination.');
+    const roomFailure = await enforceStudentRoom(session, student);
+    if (roomFailure) return roomFailure;
     if (providedDeviceId && student.deviceId && providedDeviceId !== student.deviceId) {
       return fail(403, 'This examination participation is reserved for another device.');
     }
@@ -1452,6 +1500,11 @@ function registerRoutes(mod: HttpServerModule) {
       notify();
     }
 
+    const serverNow = new Date().toISOString();
+    const effectiveEndsAt = session.endsAt ?? (session.startedAt && session.durationMinutes
+      ? new Date(new Date(session.startedAt).getTime() + session.durationMinutes * 60_000).toISOString()
+      : null);
+
     return ok({
       status: session.status,
       roomStatus: session.status,
@@ -1460,6 +1513,10 @@ function registerRoutes(mod: HttpServerModule) {
       authorityStatus: authorityOf(session.status),
       startPhase: student.startPhase,
       startSeq: session.startSeq ?? 0,
+      serverTime: serverNow,
+      startedAt: session.startedAt,
+      endsAt: effectiveEndsAt,
+      durationMinutes: session.durationMinutes,
     });
   });
 
@@ -1468,6 +1525,8 @@ function registerRoutes(mod: HttpServerModule) {
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
     if (!student) return fail(404, 'You are no longer joined to this examination.');
+    const roomFailure = await enforceStudentRoom(session, student);
+    if (roomFailure) return roomFailure;
     const phase = String(body.phase ?? 'received') === 'entered' ? 'entered' : 'received';
     applyStartAck(student, phase);
     student.lastActivityAt = new Date().toISOString();
@@ -1488,6 +1547,8 @@ function registerRoutes(mod: HttpServerModule) {
     const registrationId = Number(body.registration_id ?? 0);
     const student = session.students[registrationId];
     if (!student) return fail(404, 'Student not found.');
+    const roomFailure = await enforceStudentRoom(session, student);
+    if (roomFailure) return roomFailure;
 
     const pin = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 15 * 60000).toISOString(); // 15 mins
@@ -1516,6 +1577,8 @@ function registerRoutes(mod: HttpServerModule) {
 
     const student = studentByToken(token);
     if (!student) return fail(404, 'Session not found. Please scan the QR again.');
+    const roomFailure = await enforceStudentRoom(session, student);
+    if (roomFailure) return roomFailure;
 
     if (!student.reconnectCode || student.reconnectCode !== pin) {
       return fail(403, 'Invalid reconnect PIN. Please ask the Proctor for a new PIN.');
@@ -1759,6 +1822,14 @@ export const PeerExamServer = {
       input.roomId != null && String(input.roomId).trim() !== ''
         ? Number(input.roomId)
         : null;
+    const schedule = pack.schedules.find((candidate) => Number(candidate.id) === scheduleId);
+    const hostRoomDecision = validateOfflineHostRoom({
+      schedule,
+      authority: { scheduleId, roomId },
+    });
+    if (!hostRoomDecision.ok) {
+      throw new Error(hostRoomDecision.message);
+    }
 
     const lan = await resolveWifiLanIp();
     hostIp = lan.ip;
@@ -1857,10 +1928,23 @@ export const PeerExamServer = {
 
   async startExam(): Promise<LobbySnapshot> {
     if (!session) throw new Error('Open the room lobby first.');
+    for (const student of Object.values(session.students)) {
+      const roomDecision = await OfflineExamRepository.validateRegistrationRoom(
+        student.registrationId,
+        peerAuthority(session),
+      );
+      if (!roomDecision.ok) {
+        throw new Error(roomDecision.message);
+      }
+    }
     console.log('[PROCTOR] Examination Started');
-    const now = new Date().toISOString();
+    const now = new Date();
+    const nowIso = now.toISOString();
     session.status = 'in_progress';
-    session.startedAt = session.startedAt ?? now;
+    session.startedAt = session.startedAt ?? nowIso;
+    if (!session.endsAt && session.durationMinutes) {
+      session.endsAt = new Date(new Date(session.startedAt).getTime() + session.durationMinutes * 60_000).toISOString();
+    }
     session.startSeq = (session.startSeq ?? 0) + 1;
     for (const student of Object.values(session.students)) {
       if (!student.startPhase) student.startPhase = 'waiting';
@@ -1963,6 +2047,11 @@ export const PeerExamServer = {
     if (!session) return null;
     const student = session.students[Number(registrationId)];
     if (!student) return null;
+    const roomDecision = await OfflineExamRepository.validateRegistrationRoom(
+      student.registrationId,
+      peerAuthority(session),
+    );
+    if (!roomDecision.ok) throw new Error(roomDecision.message);
 
     const pin = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 15 * 60000).toISOString();

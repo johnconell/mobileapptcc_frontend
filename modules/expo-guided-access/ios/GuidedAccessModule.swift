@@ -12,6 +12,14 @@ public final class GuidedAccessModule: Module {
       return UIAccessibility.isGuidedAccessEnabled
     }
 
+    AsyncFunction("requestGuidedAccess") { (enabled: Bool, promise: Promise) in
+      DispatchQueue.main.async {
+        UIAccessibility.requestGuidedAccessSession(enabled: enabled) { success in
+          promise.resolve(success)
+        }
+      }
+    }
+
     OnCreate {
       self.observer = NotificationCenter.default.addObserver(
         forName: UIAccessibility.guidedAccessStatusDidChangeNotification,

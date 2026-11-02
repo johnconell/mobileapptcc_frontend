@@ -9,7 +9,15 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "edu.tcc.entranceexam"
+      "bundleIdentifier": "edu.tcc.entranceexam",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIRequiresFullScreen": true,
+        "NSLocalNetworkUsageDescription": "MasterExam connects to the local proctor examination server on the campus Wi-Fi network to synchronize examination schedules, download exam questions, and submit your answers offline.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
     },
     "android": {
       "adaptiveIcon": {

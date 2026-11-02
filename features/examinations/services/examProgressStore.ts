@@ -1,38 +1,53 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import { Platform } from 'react-native';
 import { STORAGE_KEYS } from '@/shared/constants';
-import { appStorage } from '@/shared/services/storage';
 import type { ChoiceKey, ExamAnswer } from '@/shared/types';
+import type { TimeSyncMetadata } from '@/features/examinations/services/examTimerCoordinator';
+import {
+  writeEncryptedFile,
+  readEncryptedFile,
+  deleteEncryptedFile,
+  StorageFileNotFoundError,
+} from '@/shared/services/encryptedStorage';
 
 export type ExamCheckpoint = {
   sessionId: string;
   studentId: string;
+  attemptId?: string;
   answers: Record<string, ExamAnswer>;
   flags?: Record<string, boolean>;
   navMode?: 'scroll' | 'one_at_a_time';
   remainingSeconds: number;
+  totalDurationSeconds?: number;
   startedAt: string | null;
+  deadline?: string | null;
+  scheduleClosingTime?: string | null;
+  timeSync?: TimeSyncMetadata;
   savedAt: string;
 };
 
-const CHECKPOINT_FILE = `${FileSystem.documentDirectory ?? ''}metcc-exam-checkpoint.json`;
-const WEB_KEY = STORAGE_KEYS.examCheckpoint;
+const CHECKPOINT_ENC_FILE = `${FileSystem.documentDirectory ?? ''}metcc-exam-checkpoint.enc`;
+const WEB_ENC_KEY = `${STORAGE_KEYS.examCheckpoint}.enc`;
+const CHECKPOINT_LEGACY_FILE = `${FileSystem.documentDirectory ?? ''}metcc-exam-checkpoint.json`;
+const WEB_LEGACY_KEY = STORAGE_KEYS.examCheckpoint;
+
 let saveQueue: Promise<void> = Promise.resolve();
 
 /**
- * Local exam checkpoint (FileSystem / web storage — not SecureStore).
- * SecureStore has a ~2048 byte limit and flooded LogBox during exams.
+ * Local exam checkpoint storage.
+ *
+ * Security:
+ * - Checkpoints containing answers and time tracking are stored encrypted at rest
+ *   using AES-256-GCM authenticated encryption.
+ * - Atomic write operations prevent corrupted partial saves during sudden battery loss or app kill.
+ * - Logs do not output answers, questions, or student identification.
  */
 export const ExamProgressStore = {
   async save(checkpoint: Omit<ExamCheckpoint, 'savedAt'>): Promise<void> {
     const row: ExamCheckpoint = { ...checkpoint, savedAt: new Date().toISOString() };
     const write = async () => {
-      const text = JSON.stringify(row);
-      if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
-        await appStorage.setItem(WEB_KEY, text);
-        return;
-      }
-      await FileSystem.writeAsStringAsync(CHECKPOINT_FILE, text);
+      await writeEncryptedFile(CHECKPOINT_ENC_FILE, WEB_ENC_KEY, row, {
+        meta: { type: 'exam_checkpoint' },
+      });
     };
 
     // Keep rapid answer and flag changes ordered so an older disk write cannot
@@ -43,28 +58,36 @@ export const ExamProgressStore = {
 
   async load(): Promise<ExamCheckpoint | null> {
     try {
-      if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
-        const raw = await appStorage.getItem(WEB_KEY);
-        return raw ? (JSON.parse(raw) as ExamCheckpoint) : null;
+      const res = await readEncryptedFile<ExamCheckpoint>(
+        CHECKPOINT_ENC_FILE,
+        WEB_ENC_KEY,
+        {
+          legacyPlaintextPath: CHECKPOINT_LEGACY_FILE,
+          legacyWebKey: WEB_LEGACY_KEY,
+          type: 'exam_checkpoint',
+        },
+      );
+      return res.data ?? null;
+    } catch (err) {
+      if (err instanceof StorageFileNotFoundError) {
+        return null;
       }
-      const info = await FileSystem.getInfoAsync(CHECKPOINT_FILE);
-      if (!info.exists) return null;
-      const raw = await FileSystem.readAsStringAsync(CHECKPOINT_FILE);
-      return JSON.parse(raw) as ExamCheckpoint;
-    } catch {
-      return null;
+      // Never return an empty record silently when existing data cannot be decrypted
+      console.error(
+        '[ExamProgressStore] Failed to decrypt examination checkpoint:',
+        err instanceof Error ? err.name : 'StorageError',
+      );
+      throw err;
     }
   },
 
   async clear(): Promise<void> {
     try {
       await saveQueue.catch(() => undefined);
-      if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
-        await appStorage.deleteItem(WEB_KEY);
-        return;
-      }
-      const info = await FileSystem.getInfoAsync(CHECKPOINT_FILE);
-      if (info.exists) await FileSystem.deleteAsync(CHECKPOINT_FILE, { idempotent: true });
+      await deleteEncryptedFile(CHECKPOINT_ENC_FILE, WEB_ENC_KEY, {
+        legacyPlaintextPath: CHECKPOINT_LEGACY_FILE,
+        legacyWebKey: WEB_LEGACY_KEY,
+      });
     } catch {
       // ignore
     }

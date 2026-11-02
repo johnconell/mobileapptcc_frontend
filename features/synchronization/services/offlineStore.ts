@@ -5,6 +5,19 @@ import { gcm } from '@noble/ciphers/aes.js';
 import { bytesToHex, hexToBytes } from '@noble/ciphers/utils.js';
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
+import { authStorageKeys } from '@/features/local-testing/localMode';
+
+import {
+  writeEncryptedFile,
+  readEncryptedFile,
+  deleteEncryptedFile,
+  encryptJson,
+  decryptJson,
+  isEncryptedEnvelope,
+  StorageFileNotFoundError,
+} from '@/shared/services/encryptedStorage';
+
+export { encryptJson, decryptJson };
 
 export const RESULTS_CHANGED_EVENT = 'tcc.offline.results.changed';
 
@@ -15,10 +28,12 @@ export function emitResultsChanged(): void {
 const PACK_FILE = `${FileSystem.documentDirectory ?? ''}metcc-offline-pack.json`;
 const PACK_ENC_FILE = `${FileSystem.documentDirectory ?? ''}metcc-offline-pack.enc`;
 const RESULTS_FILE = `${FileSystem.documentDirectory ?? ''}metcc-offline-results.json`;
+const RESULTS_ENC_FILE = `${FileSystem.documentDirectory ?? ''}metcc-offline-results.enc`;
 const PEER_FILE = `${FileSystem.documentDirectory ?? ''}metcc-peer-session.enc`;
 const WEB_PACK_KEY = 'tcc.offline.pack.json';
 const WEB_PACK_ENC_KEY = 'tcc.offline.pack.enc';
 const WEB_RESULTS_KEY = 'tcc.offline.results.json';
+const WEB_RESULTS_ENC_KEY = 'tcc.offline.results.enc';
 const WEB_PEER_KEY = 'tcc.peer.session.enc';
 const PACK_KEY_STORAGE = 'tcc.offline.pack.aes.key';
 
@@ -26,6 +41,11 @@ export type OfflinePack = {
   pack_version: number;
   exported_at?: string;
   downloaded_at?: string;
+  authorization?: {
+    actor_id: number | null;
+    scope: 'assigned_rooms' | 'administrator';
+    schedule_ids: number[];
+  };
   schedules: Array<{
     id: number;
     title: string;
@@ -38,7 +58,16 @@ export type OfflinePack = {
     batch_code?: string;
     course?: string;
     status?: string;
-    rooms?: Array<{ id: number; room_name: string; capacity: number }>;
+    rooms_managed?: boolean;
+    rooms_revision?: number;
+    rooms_published_at?: string | null;
+    rooms?: Array<{
+      id: number;
+      examination_schedule_id?: number;
+      room_name: string;
+      capacity: number;
+      proctor_id?: number | null;
+    }>;
   }>;
   applicants: Array<{
     id: number;
@@ -52,6 +81,7 @@ export type OfflinePack = {
     id: number;
     examination_schedule_id: number;
     applicant_id: number;
+    assigned_room_id?: number | null;
     exam_passkey?: string | null;
     exam_passkey_hash?: string | null;
   }>;
@@ -112,85 +142,7 @@ export type OfflineQueuedResult = {
   synced: boolean;
 };
 
-type EncryptedBlob = {
-  v: 1;
-  alg: 'AES-256-GCM';
-  iv: string;
-  ct: string;
-};
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
-  return globalThis.btoa(binary);
-}
-
-function base64ToBytes(b64: string): Uint8Array {
-  const binary = globalThis.atob(b64);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-  return out;
-}
-
-async function getOrCreatePackKey(): Promise<Uint8Array> {
-  const existing = await appStorage.getItem(PACK_KEY_STORAGE);
-  if (existing && /^[0-9a-f]{64}$/i.test(existing)) {
-    return hexToBytes(existing);
-  }
-  const random = await Crypto.getRandomBytesAsync(32);
-  const key = new Uint8Array(random);
-  await appStorage.setItem(PACK_KEY_STORAGE, bytesToHex(key));
-  return key;
-}
-
-export async function encryptJson(payload: unknown): Promise<string> {
-  const key = await getOrCreatePackKey();
-  const iv = new Uint8Array(await Crypto.getRandomBytesAsync(12));
-  const plaintext = new TextEncoder().encode(JSON.stringify(payload));
-  const cipher = gcm(key, iv);
-  const ciphertext = cipher.encrypt(plaintext);
-  const blob: EncryptedBlob = {
-    v: 1,
-    alg: 'AES-256-GCM',
-    iv: bytesToBase64(iv),
-    ct: bytesToBase64(ciphertext),
-  };
-  return JSON.stringify(blob);
-}
-
-export async function decryptJson<T>(raw: string): Promise<T | null> {
-  try {
-    const parsed = JSON.parse(raw) as EncryptedBlob | OfflinePack;
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      'v' in parsed &&
-      (parsed as EncryptedBlob).v === 1 &&
-      (parsed as EncryptedBlob).alg === 'AES-256-GCM'
-    ) {
-      const blob = parsed as EncryptedBlob;
-      const key = await getOrCreatePackKey();
-      const iv = base64ToBytes(blob.iv);
-      const ct = base64ToBytes(blob.ct);
-      const cipher = gcm(key, iv);
-      const plain = cipher.decrypt(ct);
-      return JSON.parse(new TextDecoder().decode(plain)) as T;
-    }
-    // Legacy plaintext pack — return in memory; caller may re-encrypt.
-    return parsed as T;
-  } catch {
-    return null;
-  }
-}
-
-function isEncryptedBlob(raw: string): boolean {
-  try {
-    const parsed = JSON.parse(raw) as EncryptedBlob;
-    return parsed?.v === 1 && parsed?.alg === 'AES-256-GCM' && Boolean(parsed.iv && parsed.ct);
-  } catch {
-    return false;
-  }
-}
+const isEncryptedBlob = isEncryptedEnvelope;
 
 async function writeEncrypted(path: string, webKey: string, data: unknown): Promise<void> {
   const text = await encryptJson(data);
@@ -402,6 +354,19 @@ export function sanitizePackToActiveBanks(pack: OfflinePack): OfflinePack {
   };
 }
 
+async function packBelongsToCurrentAccount(pack: OfflinePack): Promise<boolean> {
+  const actorId = Number(pack.authorization?.actor_id ?? 0);
+  if (!Number.isInteger(actorId) || actorId <= 0) return false;
+  try {
+    const raw = await appStorage.getItem(authStorageKeys().session);
+    if (!raw) return false;
+    const session = JSON.parse(raw) as { id?: string | number };
+    return Number(session.id) === actorId;
+  } catch {
+    return false;
+  }
+}
+
 export const OfflineStore = {
   // In-memory pack avoids AES decrypt + JSON.parse on every navigation (was 3–6 min).
   _packCache: null as OfflinePack | null,
@@ -432,6 +397,25 @@ export const OfflineStore = {
     // The pack is authoritative for schedules available offline. Drop any older
     // cloud schedule catalog so archived entries cannot survive a successful sync.
     await appStorage.deleteItem('tcc.offline.schedule.catalog');
+    const allowedRoomKeys = new Set(
+      safe.schedules.flatMap((schedule) =>
+        (schedule.rooms ?? []).map((room) => this.roomKey(schedule.id, room.id)),
+      ),
+    );
+    const openedRooms = await this.getOpenedRooms();
+    let openedRoomsChanged = false;
+    for (const key of Object.keys(openedRooms)) {
+      if (allowedRoomKeys.has(key)) continue;
+      delete openedRooms[key];
+      openedRoomsChanged = true;
+    }
+    if (openedRoomsChanged) {
+      if (Object.keys(openedRooms).length) {
+        await appStorage.setItem(STORAGE_KEYS.offlineOpenedRooms, JSON.stringify(openedRooms));
+      } else {
+        await appStorage.deleteItem(STORAGE_KEYS.offlineOpenedRooms);
+      }
+    }
     await appStorage.setItem(STORAGE_KEYS.offlinePackReady, '1');
     await appStorage.setItem(STORAGE_KEYS.offlinePackAt, downloadedAt);
     try {
@@ -525,6 +509,7 @@ export const OfflineStore = {
   async getPack(): Promise<OfflinePack | null> {
     if (this._packCache) {
       const cached = sanitizePackToActiveBanks(this._packCache);
+      if (!await packBelongsToCurrentAccount(cached)) return null;
       this._packCache = cached;
       return cached;
     }
@@ -538,6 +523,7 @@ export const OfflineStore = {
     if (!data) return null;
 
     const safe = sanitizePackToActiveBanks(data);
+    if (!await packBelongsToCurrentAccount(safe)) return null;
     const hadInactive =
       (data.question_banks?.length ?? 0) !== (safe.question_banks?.length ?? 0);
 
@@ -552,9 +538,6 @@ export const OfflineStore = {
   },
 
   async hasPack(): Promise<boolean> {
-    if (this._packCache) return true;
-    const flag = await appStorage.getItem(STORAGE_KEYS.offlinePackReady);
-    if (flag === '1') return true;
     const pack = await this.getPack();
     return Boolean(pack?.schedules?.length);
   },
@@ -791,21 +774,55 @@ export const OfflineStore = {
   },
 
   async getResults(): Promise<OfflineQueuedResult[]> {
-    return (await readJson<OfflineQueuedResult[]>(RESULTS_FILE, WEB_RESULTS_KEY)) ?? [];
+    try {
+      const res = await readEncryptedFile<OfflineQueuedResult[]>(
+        RESULTS_ENC_FILE,
+        WEB_RESULTS_ENC_KEY,
+        {
+          legacyPlaintextPath: RESULTS_FILE,
+          legacyWebKey: WEB_RESULTS_KEY,
+          type: 'offline_results',
+        },
+      );
+      return Array.isArray(res.data) ? res.data : [];
+    } catch (err) {
+      if (err instanceof StorageFileNotFoundError) {
+        return [];
+      }
+      console.error(
+        '[OfflineStore] Failed to decrypt offline results queue:',
+        err instanceof Error ? err.name : 'StorageError',
+      );
+      throw err;
+    }
   },
 
   async saveResults(rows: OfflineQueuedResult[]): Promise<void> {
-    // FIX 2 & FIX 3: Filter out any corrupted records before serializing to disk
     const validRows = rows.filter((r) => {
       const validSched = Number.isInteger(Number(r.examination_schedule_id)) && Number(r.examination_schedule_id) > 0;
       const validCode = Boolean(r.applicant_code && typeof r.applicant_code === 'string' && r.applicant_code.trim());
       if (!validSched || !validCode) {
-        console.error('[OfflineStore] Discarding corrupted row from saveResults:', r);
+        console.error(
+          '[OfflineStore] Discarding corrupted row from saveResults: local_id=' +
+            r?.local_id +
+            ', schedule_id=' +
+            r?.examination_schedule_id,
+        );
         return false;
       }
       return true;
     });
-    await writeJson(RESULTS_FILE, WEB_RESULTS_KEY, validRows);
+    await writeEncryptedFile(RESULTS_ENC_FILE, WEB_RESULTS_ENC_KEY, validRows, {
+      meta: { type: 'offline_results' },
+    });
+  },
+
+  async clearResults(): Promise<void> {
+    await deleteEncryptedFile(RESULTS_ENC_FILE, WEB_RESULTS_ENC_KEY, {
+      legacyPlaintextPath: RESULTS_FILE,
+      legacyWebKey: WEB_RESULTS_KEY,
+    });
+    emitResultsChanged();
   },
 
   async queueResult(row: OfflineQueuedResult): Promise<void> {

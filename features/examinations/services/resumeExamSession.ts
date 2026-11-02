@@ -11,6 +11,7 @@ import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { clearApplicantExamMaterial } from '@/features/applicants/services/applicantExamCleanup';
 import { isExamLocked, stopExamLock } from '@/features/examinations/services/ExamSecurityService';
 import { hasValidLocalStudentParticipation } from '@/features/monitoring/services/reconnectExitPolicy';
+import { ExamSubmissionStore } from '@/features/examinations/services/examSubmissionStore';
 
 type StoredStudentProgress = {
   registrationId?: number;
@@ -23,7 +24,7 @@ type StoredStudentProgress = {
 };
 
 export type ResumeExamResult =
-  | { ok: true; route: '/(student)/exam' | '/(student)/lobby' }
+  | { ok: true; route: '/(student)/exam' | '/(student)/lobby' | '/(student)/submitting' }
   | { ok: false; reason: string };
 
 type LiveRoomStatus = 'in_progress' | 'lobby_open' | 'ended' | 'idle' | 'unreachable';
@@ -138,6 +139,12 @@ function studentFromProgress(progress: StoredStudentProgress | null): StudentRec
  * reports the room as in progress. Ended / closed / idle rooms exit cleanly.
  */
 export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
+  // 1. Resume unconfirmed finalized submissions straight to submitting screen
+  const pendingSubmission = await ExamSubmissionStore.load().catch(() => null);
+  if (pendingSubmission && pendingSubmission.status !== 'confirmed') {
+    return { ok: true, route: '/(student)/submitting' };
+  }
+
   const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
   if (!token) {
     if (await isExamLocked()) {

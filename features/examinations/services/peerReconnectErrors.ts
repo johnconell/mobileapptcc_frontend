@@ -23,11 +23,19 @@ export function classifyPeerReconnectError(raw: string): string {
     return 'Session ended';
   }
   if (
+    text.includes('local network') ||
+    text.includes('local-network') ||
+    text.includes('network permission')
+  ) {
+    return 'Local network access denied. Please allow Local Network in iOS Settings > TCC Entrance Exam.';
+  }
+  if (text.includes('timeout') || text.includes('timed out')) {
+    return 'Connection to proctor timed out. Please check your Wi-Fi signal.';
+  }
+  if (
     text.includes('cannot reach') ||
     text.includes('network request failed') ||
-    text.includes('failed to fetch') ||
-    text.includes('timeout') ||
-    text.includes('timed out')
+    text.includes('failed to fetch')
   ) {
     return 'Cannot reach the proctor';
   }

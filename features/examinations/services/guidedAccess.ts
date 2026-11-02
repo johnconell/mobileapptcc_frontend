@@ -39,8 +39,27 @@ export function requireGuidedAccess(): void {
   throw new Error(
     status === 'unavailable'
       ? 'Guided Access verification is unavailable. Install the latest iOS app build and try again.'
-      : 'Guided Access is required. Enable it in Settings > Accessibility > Guided Access, then triple-click the Side Button and tap Start.',
+      : 'Guided Access is required. Enable it in Settings > Accessibility > Guided Access, then triple-click your device button (Home button on iPhone 7/8/SE, Side button on Face ID iPhones, or Top button on iPads) and tap Start.',
   );
+}
+
+/**
+ * Attempts to programmatically lock/unlock the app using UIKit's
+ * UIAccessibility.requestGuidedAccessSession(enabled:).
+ *
+ * Supported ONLY on managed/supervised devices with an MDM Autonomous Single App Mode
+ * profile installed. On personal BYOD devices, this completes with `false` without crashing,
+ * and the app falls back to manual Guided Access.
+ */
+export async function requestAutonomousSingleAppMode(enabled: boolean): Promise<boolean> {
+  if (Platform.OS !== 'ios') return false;
+  const module = nativeModule();
+  if (!module || typeof (module as any).requestGuidedAccess !== 'function') return false;
+  try {
+    return await (module as any).requestGuidedAccess(enabled);
+  } catch {
+    return false;
+  }
 }
 
 export function observeGuidedAccessChange(onChange: (status: GuidedAccessStatus) => void): () => void {

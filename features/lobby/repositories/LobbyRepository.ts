@@ -1491,6 +1491,10 @@ export const LobbyRepository = {
     removed?: boolean;
     sessionNotFound?: boolean;
     myStatus?: string;
+    serverTime?: string;
+    startedAt?: string;
+    endsAt?: string;
+    durationMinutes?: number;
   }> {
     // Peer LAN is the exam network. Never skip it because cloud is offline.
     if (await PeerExamClient.isActive()) {
@@ -1519,6 +1523,10 @@ export const LobbyRepository = {
           remainingSeconds?: number;
           removed?: boolean;
           myStatus?: string;
+          serverTime?: string;
+          startedAt?: string;
+          endsAt?: string;
+          durationMinutes?: number;
         }>('/heartbeat', {
           method: 'POST',
           body: {
@@ -1540,6 +1548,10 @@ export const LobbyRepository = {
           remainingSeconds: pulse?.remainingSeconds,
           removed: pulse?.removed,
           myStatus: pulse?.myStatus,
+          serverTime: pulse?.serverTime,
+          startedAt: pulse?.startedAt,
+          endsAt: pulse?.endsAt,
+          durationMinutes: pulse?.durationMinutes,
         };
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Lost the proctor phone.';

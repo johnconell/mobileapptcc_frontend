@@ -1,8 +1,13 @@
 import bcrypt from 'bcryptjs';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Platform } from 'react-native';
 import { STORAGE_KEYS } from '@/shared/constants';
 import { appStorage } from '@/shared/services/storage';
+import {
+  writeEncryptedFile,
+  readEncryptedFile,
+  deleteEncryptedFile,
+  StorageFileNotFoundError,
+} from '@/shared/services/encryptedStorage';
 
 export type CachedProctorAccount = {
   id: number | string;
@@ -12,50 +17,52 @@ export type CachedProctorAccount = {
   status?: string | null;
 };
 
-const AUTH_FILE = `${FileSystem.documentDirectory ?? ''}metcc-proctor-auth-cache.json`;
+const AUTH_ENC_FILE = `${FileSystem.documentDirectory ?? ''}metcc-proctor-auth-cache.enc`;
+const WEB_AUTH_ENC_KEY = 'tcc.proctor.auth.cache.enc';
+const AUTH_LEGACY_FILE = `${FileSystem.documentDirectory ?? ''}metcc-proctor-auth-cache.json`;
+const WEB_AUTH_LEGACY_KEY = STORAGE_KEYS.proctorAuthCache;
 
 async function writeAuth(rows: CachedProctorAccount[]): Promise<void> {
-  const text = JSON.stringify(rows);
-  if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
-    await appStorage.setItem(STORAGE_KEYS.proctorAuthCache, text);
-    return;
-  }
-  await FileSystem.writeAsStringAsync(AUTH_FILE, text);
+  await writeEncryptedFile(AUTH_ENC_FILE, WEB_AUTH_ENC_KEY, rows, {
+    meta: { type: 'proctor_auth' },
+  });
 }
 
 async function readAuth(): Promise<CachedProctorAccount[]> {
   try {
-    if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
-      const raw = await appStorage.getItem(STORAGE_KEYS.proctorAuthCache);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw) as CachedProctorAccount[];
-      return Array.isArray(parsed) ? parsed : [];
-    }
-    const info = await FileSystem.getInfoAsync(AUTH_FILE);
-    if (!info.exists) {
-      // Migrate legacy SecureStore cache if present.
-      const legacy = await appStorage.getItem(STORAGE_KEYS.proctorAuthCache);
-      if (legacy) {
-        const parsed = JSON.parse(legacy) as CachedProctorAccount[];
-        if (Array.isArray(parsed) && parsed.length) {
-          await writeAuth(parsed);
-          await appStorage.deleteItem(STORAGE_KEYS.proctorAuthCache);
-          return parsed;
-        }
-      }
+    const res = await readEncryptedFile<CachedProctorAccount[]>(
+      AUTH_ENC_FILE,
+      WEB_AUTH_ENC_KEY,
+      {
+        legacyPlaintextPath: AUTH_LEGACY_FILE,
+        legacyWebKey: WEB_AUTH_LEGACY_KEY,
+        type: 'proctor_auth',
+      },
+    );
+    return Array.isArray(res.data) ? res.data : [];
+  } catch (err) {
+    if (err instanceof StorageFileNotFoundError) {
       return [];
     }
-    const raw = await FileSystem.readAsStringAsync(AUTH_FILE);
-    const parsed = JSON.parse(raw) as CachedProctorAccount[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
+    // Never silently return empty on decryption or corruption failure
+    console.error(
+      '[ProctorAuthCache] Failed to decrypt proctor credentials cache:',
+      err instanceof Error ? err.name : 'StorageError',
+    );
+    throw err;
   }
 }
 
 /**
  * Local cache of proctor accounts (bcrypt hashes) for offline login.
- * Stored in FileSystem — SecureStore's 2KB limit is too small for hash lists.
+ *
+ * Security Architecture & Offline Limitations:
+ * - Records are stored encrypted at rest with AES-256-GCM using device-bound keys
+ *   held in platform secure storage (iOS Keychain / Android EncryptedSharedPreferences).
+ * - Hashes are only cached for proctors explicitly assigned to the exported schedule/rooms.
+ * - Limitation: Offline authentication verifies credentials against the snapshot captured at download.
+ *   Immediate cloud account revocations, suspensions, or password changes cannot take effect on an offline
+ *   device until the device synchronizes with the central server.
  */
 export const ProctorAuthCache = {
   async saveFromPackProctors(proctors: unknown): Promise<number> {
@@ -77,7 +84,7 @@ export const ProctorAuthCache = {
     }
     await writeAuth(rows);
     await appStorage.setItem(STORAGE_KEYS.proctorAuthCacheAt, new Date().toISOString());
-    // Clear legacy SecureStore blob if any.
+    // Clear legacy unencrypted keys
     await appStorage.deleteItem(STORAGE_KEYS.proctorAuthCache).catch(() => undefined);
     return rows.length;
   },
@@ -136,5 +143,13 @@ export const ProctorAuthCache = {
       await writeAuth(accounts);
       return true;
     }
+  },
+
+  async clear(): Promise<void> {
+    await deleteEncryptedFile(AUTH_ENC_FILE, WEB_AUTH_ENC_KEY, {
+      legacyPlaintextPath: AUTH_LEGACY_FILE,
+      legacyWebKey: WEB_AUTH_LEGACY_KEY,
+    });
+    await appStorage.deleteItem(STORAGE_KEYS.proctorAuthCacheAt).catch(() => undefined);
   },
 };

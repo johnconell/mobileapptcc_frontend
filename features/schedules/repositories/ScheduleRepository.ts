@@ -102,7 +102,7 @@ function toMobileSession(row: BackendSchedule): ExamSession {
     venue: row.venue || 'TBD',
     batchNumber: row.batch_code || `Batch ${row.id}`,
     registeredStudents: Number(row.registrations_count ?? row.expected_examinees ?? 0),
-    durationMinutes: 90,
+    durationMinutes: 60,
     totalQuestions: 0,
     historyStatus:
       Number(row.completed_rooms_count ?? 0) > 0 || row.status === 'completed'

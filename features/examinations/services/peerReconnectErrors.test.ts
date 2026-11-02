@@ -8,4 +8,12 @@ test('reconnect errors preserve the reason the proctor returned', () => {
   assert.equal(classifyPeerReconnectError('You have been removed from this examination.'), 'Removed by proctor');
   assert.equal(classifyPeerReconnectError('Session not found.'), 'Session ended');
   assert.equal(classifyPeerReconnectError('Cannot reach the proctor phone.'), 'Cannot reach the proctor');
+  assert.equal(
+    classifyPeerReconnectError('Local network access was blocked'),
+    'Local network access denied. Please allow Local Network in iOS Settings > TCC Entrance Exam.',
+  );
+  assert.equal(
+    classifyPeerReconnectError('Connection timed out'),
+    'Connection to proctor timed out. Please check your Wi-Fi signal.',
+  );
 });

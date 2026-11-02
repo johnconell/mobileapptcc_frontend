@@ -1,42 +1,84 @@
 import { Platform } from 'react-native';
-import * as SecureStore from 'expo-secure-store';
+import { isLocalApiMode } from '@/features/local-testing/localMode';
 
 const isWeb = Platform.OS === 'web';
+const storageKey = (key: string) => isLocalApiMode() && !key.startsWith('tcc.local-api.')
+  ? `tcc.local-api.${key}`
+  : key;
+
+let secureStoreModule: typeof import('expo-secure-store') | null = null;
+async function getSecureStore() {
+  if (!secureStoreModule && !isWeb) {
+    try {
+      secureStoreModule = await import('expo-secure-store');
+    } catch {
+      secureStoreModule = null;
+    }
+  }
+  return secureStoreModule;
+}
+
+const memoryStore = new Map<string, string>();
 
 /**
  * Cross-platform key/value storage.
- * SecureStore is unavailable on web; use localStorage there for local testing.
+ * SecureStore is unavailable on web and test runners; uses localStorage or memory fallback there.
  */
 export const appStorage = {
   async getItem(key: string): Promise<string | null> {
+    key = storageKey(key);
     try {
       if (isWeb) {
-        return globalThis.localStorage?.getItem(key) ?? null;
+        if (typeof globalThis.localStorage !== 'undefined' && globalThis.localStorage) {
+          return globalThis.localStorage.getItem(key) ?? null;
+        }
+        return memoryStore.get(key) ?? null;
       }
-      return await SecureStore.getItemAsync(key);
+      const ss = await getSecureStore();
+      if (ss) {
+        return await ss.getItemAsync(key);
+      }
+      return memoryStore.get(key) ?? null;
     } catch {
       return null;
     }
   },
 
   async setItem(key: string, value: string): Promise<void> {
+    key = storageKey(key);
     if (isWeb) {
-      if (!globalThis.localStorage) {
-        throw new Error('localStorage is not available in this browser.');
+      if (typeof globalThis.localStorage !== 'undefined' && globalThis.localStorage) {
+        globalThis.localStorage.setItem(key, value);
+        return;
       }
-      globalThis.localStorage.setItem(key, value);
+      memoryStore.set(key, value);
       return;
     }
-    await SecureStore.setItemAsync(key, value);
+    const ss = await getSecureStore();
+    if (ss) {
+      await ss.setItemAsync(key, value);
+      return;
+    }
+    memoryStore.set(key, value);
   },
 
   async deleteItem(key: string): Promise<void> {
+    key = storageKey(key);
     try {
       if (isWeb) {
-        globalThis.localStorage?.removeItem(key);
+        if (typeof globalThis.localStorage !== 'undefined' && globalThis.localStorage) {
+          globalThis.localStorage.removeItem(key);
+          return;
+        }
+        memoryStore.delete(key);
         return;
       }
-      await SecureStore.deleteItemAsync(key);
+      const ss = await getSecureStore();
+      if (ss) {
+        await ss.deleteItemAsync(key);
+        return;
+      }
+      memoryStore.delete(key);
     } catch {
       // no-op on delete failures
     }

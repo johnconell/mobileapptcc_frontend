@@ -1,6 +1,7 @@
 import { STORAGE_KEYS } from '@/shared/constants';
 import { PEER_PATH_PREFIX, PEER_PORT, type PeerQrTarget } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
+import { Platform } from 'react-native';
 
 export type PeerTarget = {
   host: string;
@@ -389,6 +390,17 @@ export const PeerExamClient = {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+      const isTimeout =
+        err instanceof Error &&
+        (err.name === 'AbortError' || err.message.toLowerCase().includes('timeout'));
+      if (isTimeout) {
+        throw new Error('Connection to the proctor phone timed out. Please check your Wi-Fi signal.');
+      }
+      if (Platform.OS === 'ios') {
+        throw new Error(
+          'Cannot reach the proctor phone. Please ensure you are connected to the exam Wi-Fi and have allowed "Local Network" access in iOS Settings > TCC Entrance Exam.',
+        );
+      }
       throw new Error(
         'Cannot reach the proctor, check you are on the same WiFi. The WiFi may block device-to-device connections.',
       );
@@ -445,7 +457,10 @@ export const PeerExamClient = {
         mapped: msg,
       });
     }
-    throw new Error(msg);
+    const err = new Error(msg);
+    (err as any).status = res.status;
+    (err as any).statusCode = res.status;
+    throw err;
   },
 };
 

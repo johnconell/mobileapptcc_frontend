@@ -8,6 +8,7 @@ import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import type { AuthResult, ProctorProfile } from '@/shared/types';
+import { authStorageKeys, isLocalApiMode } from '@/features/local-testing/localMode';
 
 type LoginResponse = {
   success: boolean;
@@ -20,11 +21,12 @@ type LoginResponse = {
 };
 
 async function persistSession(profile: ProctorProfile, token: string): Promise<AuthResult> {
+  const authKeys = authStorageKeys();
   const stored: ProctorProfile = { ...profile, token };
-  await appStorage.setItem(STORAGE_KEYS.proctorSession, JSON.stringify(stored));
-  await appStorage.setItem(STORAGE_KEYS.proctorToken, token);
+  await appStorage.setItem(authKeys.session, JSON.stringify(stored));
+  await appStorage.setItem(authKeys.token, token);
 
-  const verified = await appStorage.getItem(STORAGE_KEYS.proctorToken);
+  const verified = await appStorage.getItem(authKeys.token);
   if (verified !== token) {
     return {
       success: false,
@@ -121,8 +123,9 @@ export const AuthRepository = {
    */
   async getCachedSessionFast(): Promise<ProctorProfile | null> {
     try {
-      const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
-      const raw = await appStorage.getItem(STORAGE_KEYS.proctorSession);
+      const authKeys = authStorageKeys();
+      const token = await appStorage.getItem(authKeys.token);
+      const raw = await appStorage.getItem(authKeys.session);
       if (token && raw && token.trim() && raw.trim()) {
         return { ...(JSON.parse(raw) as ProctorProfile), token };
       }
@@ -140,8 +143,9 @@ export const AuthRepository = {
 
   async getSession(): Promise<ProctorProfile | null> {
     try {
-      const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
-      const raw = await appStorage.getItem(STORAGE_KEYS.proctorSession);
+      const authKeys = authStorageKeys();
+      const token = await appStorage.getItem(authKeys.token);
+      const raw = await appStorage.getItem(authKeys.session);
       if (!token || !raw || !token.trim() || !raw.trim()) {
         const bundled = await OfflineStore.getBundledProctorSession();
         if (bundled) {
@@ -166,7 +170,7 @@ export const AuthRepository = {
         );
         if (me.data?.profile) {
           const profile = { ...me.data.profile, token, offlineSession: false };
-          await appStorage.setItem(STORAGE_KEYS.proctorSession, JSON.stringify(profile));
+          await appStorage.setItem(authKeys.session, JSON.stringify(profile));
           return profile;
         }
       } catch (error) {
@@ -180,20 +184,21 @@ export const AuthRepository = {
   },
 
   async hasToken(): Promise<boolean> {
-    const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
+    const token = await appStorage.getItem(authStorageKeys().token);
     return Boolean(token);
   },
 
   async logout(): Promise<void> {
     try {
-      const token = await appStorage.getItem(STORAGE_KEYS.proctorToken);
+      const authKeys = authStorageKeys();
+      const token = await appStorage.getItem(authKeys.token);
 
       // 1. Immediately delete all local credentials from storage FIRST
       await Promise.allSettled([
-        appStorage.setItem(STORAGE_KEYS.proctorSession, ''),
-        appStorage.setItem(STORAGE_KEYS.proctorToken, ''),
-        appStorage.deleteItem(STORAGE_KEYS.proctorSession),
-        appStorage.deleteItem(STORAGE_KEYS.proctorToken),
+        appStorage.setItem(authKeys.session, ''),
+        appStorage.setItem(authKeys.token, ''),
+        appStorage.deleteItem(authKeys.session),
+        appStorage.deleteItem(authKeys.token),
         appStorage.deleteItem('tcc.proctor.login_logs'),
         appStorage.deleteItem(STORAGE_KEYS.participationToken),
         appStorage.deleteItem(STORAGE_KEYS.examinationCode),
@@ -211,7 +216,7 @@ export const AuthRepository = {
       useLobbyStore.getState().reset();
 
       // 3. Best-effort server invalidate with a 1000ms max race timeout (never hangs offline/LAN)
-      if (token && !token.startsWith('offline-local-')) {
+      if (token && !token.startsWith('offline-local-') && !isLocalApiMode()) {
         try {
           const timer = new Promise((resolve) => setTimeout(resolve, 1000));
           await Promise.race([
@@ -227,8 +232,9 @@ export const AuthRepository = {
         }
       }
     } catch {
-      await appStorage.deleteItem(STORAGE_KEYS.proctorSession).catch(() => undefined);
-      await appStorage.deleteItem(STORAGE_KEYS.proctorToken).catch(() => undefined);
+      const authKeys = authStorageKeys();
+      await appStorage.deleteItem(authKeys.session).catch(() => undefined);
+      await appStorage.deleteItem(authKeys.token).catch(() => undefined);
       useProctorStore.getState().reset();
       useStudentStore.getState().reset();
       useExamStore.getState().reset();

@@ -21,6 +21,7 @@ import {
   Bell,
   ChevronDown,
   CheckCircle2,
+  Database,
   DoorOpen,
   LockKeyhole,
   LogOut,
@@ -40,6 +41,8 @@ import { AuthRepository } from '@/features/authentication/repositories/AuthRepos
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { QUERY_KEYS } from '@/shared/constants';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { isLocalApiMode } from '@/features/local-testing/localMode';
+import { seedLocalTestData } from '@/features/local-testing/localApiStore';
 import { ensureExamPackCached } from '@/features/synchronization/services/ensureExamPack';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { OfflineExamRepository } from '@/features/synchronization/services/offlineExamRepository';
@@ -103,6 +106,7 @@ export default function ProctorExaminationTabScreen() {
   const [openModalVisible, setOpenModalVisible] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<SelectedSlotDetails | null>(null);
   const [busy, setBusy] = useState(false);
+  const [seeding, setSeeding] = useState(false);
 
   // Tracks multiple expanded schedules simultaneously
   const [scheduleEntries, setScheduleEntries] = useState<ScheduleEntry[]>([]);
@@ -327,6 +331,40 @@ export default function ProctorExaminationTabScreen() {
     } finally {
       setRefreshing(false);
     }
+  };
+
+  const handleSeedTestData = () => {
+    Alert.alert(
+      'Seed Test Examination Data',
+      'This will populate a live Manila examination schedule for today (active right now), assign 15 examinees, and prepare the local offline pack for Peer LAN hosting.\n\nExisting candidate attempts will be preserved.\n\nProceed?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Seed Data',
+          onPress: async () => {
+            setSeeding(true);
+            try {
+              const res = await seedLocalTestData({
+                useCurrentTimeWindow: true,
+                proctorId: profile?.id ? Number(profile.id) : 901,
+              });
+              await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.schedules });
+              await schedulesQuery.refetch();
+              await refreshPackData();
+              Alert.alert(
+                'Test Data Seeded Successfully',
+                `Schedule: ${res.scheduleTitle}\nTime Window: ${res.timeSlot}\nRoom: ${res.roomName} (Cap: ${res.capacity})\nExaminees: ${res.examineesCount}\nQuestions: ${res.questionsCount}\nProctor: ${res.proctorName}\n\nThe room is ready to open immediately or host over Peer LAN.`,
+              );
+            } catch (err) {
+              console.error('Failed to seed local test data:', err);
+              Alert.alert('Seeding Failed', err instanceof Error ? err.message : 'Unable to seed test data.');
+            } finally {
+              setSeeding(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   // When proctor clicks an examination time slot, DIRECTLY open the room modal
@@ -876,20 +914,35 @@ export default function ProctorExaminationTabScreen() {
                 </View>
               </View>
 
-              <Button
-                title={
-                  refreshing
-                    ? 'Updating…'
-                    : todayStatus.downloadedToday || (pack?.questions ?? 0) > 0
-                      ? 'Update Examination'
-                      : 'Download Examination'
-                }
-                variant="primary"
-                size="md"
-                loading={refreshing}
-                onPress={() => void downloadPack()}
-                style={styles.packUpdateBtn}
-              />
+              <View style={styles.packActionsRow}>
+                <Button
+                  title={
+                    refreshing
+                      ? 'Updating…'
+                      : todayStatus.downloadedToday || (pack?.questions ?? 0) > 0
+                        ? 'Update Examination'
+                        : 'Download Examination'
+                  }
+                  variant="primary"
+                  size="md"
+                  loading={refreshing}
+                  disabled={seeding}
+                  onPress={() => void downloadPack()}
+                  style={styles.packUpdateBtn}
+                />
+                {isLocalApiMode() && (
+                  <Button
+                    title={seeding ? 'Seeding…' : 'Seed Test Data'}
+                    variant="outline"
+                    size="md"
+                    loading={seeding}
+                    disabled={refreshing || seeding}
+                    icon={<Database size={16} color={colors.accent} />}
+                    onPress={handleSeedTestData}
+                    style={styles.seedDataBtn}
+                  />
+                )}
+              </View>
             </View>
 
             <View style={[styles.legendContainer, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
@@ -1662,10 +1715,23 @@ const styles = StyleSheet.create({
     color: '#A1A1AA',
     lineHeight: 16,
   },
+  packActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 4,
+    flexWrap: 'wrap',
+  },
   packUpdateBtn: {
     backgroundColor: '#7A1F2B',
     borderColor: '#7A1F2B',
-    alignSelf: 'stretch',
+    flex: 1,
+    minWidth: 150,
+    minHeight: 48,
+  },
+  seedDataBtn: {
+    flex: 1,
+    minWidth: 150,
     minHeight: 48,
   },
   legendContainer: {

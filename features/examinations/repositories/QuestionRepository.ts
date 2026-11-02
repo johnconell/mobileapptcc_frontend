@@ -137,21 +137,42 @@ export const QuestionRepository = {
     sessionId: string;
     studentId: string;
     answers: Record<string, string | null>;
-  }): Promise<{ success: true; submittedAt: string }> {
+    idempotencyKey?: string;
+    attemptId?: string;
+  }): Promise<{
+    success: true;
+    submittedAt: string;
+    destination: 'proctor_peer' | 'cloud' | 'local_offline';
+    alreadySubmitted?: boolean;
+  }> {
     // Peer mode: the proctor phone grades and holds the result for later sync.
     if (await PeerExamClient.isActive()) {
       const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
       if (!token) throw new Error('Missing participation token.');
 
       console.log('[OFFLINE] Submitting answers to Proctor...');
-      await PeerExamClient.request('/submit', {
+      const response = await PeerExamClient.request<{
+        submitted: boolean;
+        alreadySubmitted?: boolean;
+        items_total?: number;
+      }>('/submit', {
         method: 'POST',
-        body: { participation_token: token, answers: payload.answers },
+        body: {
+          participation_token: token,
+          answers: payload.answers,
+          idempotency_key: payload.idempotencyKey,
+          attempt_id: payload.attemptId,
+        },
         timeoutMs: 15000,
       });
 
       console.log('[OFFLINE] Submission confirmed. Safe to delete temporary data.');
-      return { success: true, submittedAt: new Date().toISOString() };
+      return {
+        success: true,
+        submittedAt: new Date().toISOString(),
+        destination: 'proctor_peer',
+        alreadySubmitted: Boolean(response?.alreadySubmitted),
+      };
     }
 
     if (await OfflineStore.isOfflineMode()) {
@@ -168,7 +189,11 @@ export const QuestionRepository = {
         applicantCode,
         answers: payload.answers,
       });
-      return { success: true, submittedAt: result.submitted_at };
+      return {
+        success: true,
+        submittedAt: result.submitted_at,
+        destination: 'local_offline',
+      };
     }
 
     const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
@@ -179,22 +204,40 @@ export const QuestionRepository = {
       selected_answer: selected,
     }));
 
-    const json = await apiRequest<{
-      success: boolean;
-      submittedAt?: string;
-      message?: string;
-    }>('/exam/submit', {
-      method: 'POST',
-      auth: false,
-      body: {
-        participation_token: token,
-        answers,
-      },
-    });
+    try {
+      const json = await apiRequest<{
+        success: boolean;
+        submittedAt?: string;
+        message?: string;
+        already_submitted?: boolean;
+      }>('/exam/submit', {
+        method: 'POST',
+        auth: false,
+        body: {
+          participation_token: token,
+          answers,
+          idempotency_key: payload.idempotencyKey,
+          attempt_id: payload.attemptId,
+        },
+      });
 
-    return {
-      success: true,
-      submittedAt: json.submittedAt || new Date().toISOString(),
-    };
+      return {
+        success: true,
+        submittedAt: json.submittedAt || new Date().toISOString(),
+        destination: 'cloud',
+        alreadySubmitted: Boolean(json.already_submitted),
+      };
+    } catch (err: any) {
+      const msg = String(err?.message || '').toLowerCase();
+      if (msg.includes('already submitted') || msg.includes('already confirmed')) {
+        return {
+          success: true,
+          submittedAt: new Date().toISOString(),
+          destination: 'cloud',
+          alreadySubmitted: true,
+        };
+      }
+      throw err;
+    }
   },
 };

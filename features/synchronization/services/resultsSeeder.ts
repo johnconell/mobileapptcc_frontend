@@ -4,6 +4,7 @@ import {
   type OfflinePack,
   toLocalDateString,
 } from '@/features/synchronization/services/offlineStore';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 
 export interface SeedResultsReport {
   success: boolean;
@@ -43,6 +44,10 @@ const SEED_APPLICANTS = [
  * - Complete applicant profile metadata (names, courses, applicant codes)
  */
 export async function seedSampleResults(): Promise<SeedResultsReport> {
+  const actorId = Number(useProctorStore.getState().profile?.id ?? 0);
+  if (!Number.isInteger(actorId) || actorId <= 0) {
+    throw new Error('Sign in as a proctor before creating local test results.');
+  }
   const todayStr = toLocalDateString();
   const existingPack = await OfflineStore.getPack();
 
@@ -56,7 +61,8 @@ export async function seedSampleResults(): Promise<SeedResultsReport> {
       end_time: '09:30:00',
       time_slot: '08:00 AM - 09:30 AM',
       venue: 'Testing Center · Room 101',
-      rooms: [{ id: 1, room_name: 'Room 101', capacity: 40 }],
+      rooms_managed: false,
+      rooms: [{ id: 1, examination_schedule_id: 1, room_name: 'Room 101', capacity: 40 }],
     },
     {
       id: 2,
@@ -66,7 +72,8 @@ export async function seedSampleResults(): Promise<SeedResultsReport> {
       end_time: '11:30:00',
       time_slot: '10:00 AM - 11:30 AM',
       venue: 'Testing Center · Room 102',
-      rooms: [{ id: 2, room_name: 'Room 102', capacity: 40 }],
+      rooms_managed: false,
+      rooms: [{ id: 2, examination_schedule_id: 2, room_name: 'Room 102', capacity: 40 }],
     },
     {
       id: 3,
@@ -76,7 +83,8 @@ export async function seedSampleResults(): Promise<SeedResultsReport> {
       end_time: '14:30:00',
       time_slot: '01:00 PM - 02:30 PM',
       venue: 'Testing Center · Room 103',
-      rooms: [{ id: 3, room_name: 'Room 103', capacity: 40 }],
+      rooms_managed: false,
+      rooms: [{ id: 3, examination_schedule_id: 3, room_name: 'Room 103', capacity: 40 }],
     },
   ];
 
@@ -118,6 +126,11 @@ export async function seedSampleResults(): Promise<SeedResultsReport> {
   const packToSave: OfflinePack = {
     pack_version: existingPack?.pack_version || 1,
     exported_at: existingPack?.exported_at || new Date().toISOString(),
+    authorization: existingPack?.authorization || {
+      actor_id: actorId,
+      scope: 'assigned_rooms',
+      schedule_ids: schedules.map((schedule) => schedule.id),
+    },
     schedules: existingPack?.schedules?.length ? existingPack.schedules : schedules,
     applicants: existingPack?.applicants?.length ? existingPack.applicants : applicants,
     registrations: existingPack?.registrations?.length ? existingPack.registrations : registrations,

@@ -8,7 +8,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "generate:mock": "npx ts-node --compiler-options \"{\\\"module\\\":\\\"commonjs\\\"}\" scripts/generate-mock-data.ts",
-    "test": "npx --yes tsx --test features/examinations/services/examStartCoordinator.test.ts features/examinations/services/passkeyClassification.test.ts features/examinations/services/passkeyScheduleWindow.test.ts features/examinations/services/submitGate.test.ts features/examinations/services/peerReconnectErrors.test.ts features/monitoring/services/reconnectExitPolicy.test.ts features/schedules/utils/examScheduleStatus.test.ts tests/integration/exam-flow.test.ts tests/integration/sync-logic.test.ts tests/unit/exam-features.test.ts",
+    "test": "npx --yes tsx -r ./scripts/register-test-env.cjs --test features/examinations/services/examStartCoordinator.test.ts features/examinations/services/offlineRoomAssignment.test.ts features/examinations/services/passkeyClassification.test.ts features/examinations/services/passkeyScheduleWindow.test.ts features/examinations/services/submitGate.test.ts features/examinations/services/peerReconnectErrors.test.ts features/examinations/services/examTimerCoordinator.test.ts features/examinations/services/examSubmissionCoordinator.test.ts features/examinations/services/guidedAccess.test.ts features/monitoring/services/reconnectExitPolicy.test.ts features/schedules/utils/examScheduleStatus.test.ts features/synchronization/services/sensitiveLocalStorage.test.ts tests/integration/exam-flow.test.ts tests/integration/sync-logic.test.ts tests/integration/local-api-contract.test.ts tests/integration/e2e-examination-lifecycle.test.ts tests/unit/exam-features.test.ts",
+    "check:local-contract": "node scripts/check-local-contract.cjs",
     "typecheck": "tsc --noEmit",
     "postinstall": "patch-package"
   },

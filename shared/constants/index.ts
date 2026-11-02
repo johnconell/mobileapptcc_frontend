@@ -26,6 +26,9 @@ export const QUERY_KEYS = {
 export const STORAGE_KEYS = {
   proctorSession: 'tcc.proctor.session',
   proctorToken: 'tcc.proctor.token',
+  /** Isolated credentials for the development-only local API substitute. */
+  localProctorSession: 'tcc.local-api.proctor.session',
+  localProctorToken: 'tcc.local-api.proctor.token',
   studentProgress: 'tcc.student.exam.progress',
   participationToken: 'tcc.student.participation',
   pendingStudentDisconnects: 'tcc.student.pending.disconnects',
@@ -54,6 +57,7 @@ export const STORAGE_KEYS = {
   activeCloudSessionId: 'tcc.cloud.session.id',
   activeCloudSessionCode: 'tcc.cloud.session.code',
   activeCloudQrToken: 'tcc.cloud.qr.token',
+  finalizedSubmission: 'tcc.student.finalized.submission',
 } as const;
 
 export const STATUS_LABELS = {

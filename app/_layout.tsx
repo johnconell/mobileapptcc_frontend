@@ -21,6 +21,7 @@ import { startNetworkMonitoring } from '@/features/monitoring/services/networkMo
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
 import { recoverOrphanedStudentKioskAtStartup } from '@/features/examinations/services/resumeExamSession';
 import { PeerExamServer } from '@/features/examinations/services/peerExamServer';
+import { LocalTestingBanner } from '@/features/local-testing/LocalTestingBanner';
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
@@ -160,6 +161,7 @@ export default function RootLayout() {
           <Stack.Screen name="(student)" />
           <Stack.Screen name="(proctor)" />
         </Stack>
+        <LocalTestingBanner />
       </AppProviders>
     </GestureHandlerRootView>
   );

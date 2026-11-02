@@ -53,6 +53,12 @@ import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { QuestionRepository } from '@/features/examinations/repositories/QuestionRepository';
 import { clearApplicantExamMaterial } from '@/features/applicants/services/applicantExamCleanup';
 import { ExamProgressStore } from '@/features/examinations/services/examProgressStore';
+import {
+  ExamSubmissionStore,
+  type FinalizedSubmission,
+} from '@/features/examinations/services/examSubmissionStore';
+import { SUBMISSION_RETRY_CONFIG } from '@/features/examinations/services/examSubmissionCoordinator';
+import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { ExamLifecycle } from '@/features/examinations/services/examLifecycle';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { parseStartPulse } from '@/features/examinations/services/examStartCoordinator';
@@ -170,6 +176,8 @@ function ExamScreenInner() {
   const markSubmitting = useExamStore((s) => s.markSubmitting);
   const markSubmitted = useExamStore((s) => s.markSubmitted);
   const restoreProgress = useExamStore((s) => s.restoreProgress);
+  const timerStatus = useExamStore((s) => s.timerStatus);
+  const isReconciling = timerStatus === 'reconciliation_required';
 
   const restoredRef = useRef(false);
   const lowTimeWarnedRef = useRef(false);
@@ -195,11 +203,16 @@ function ExamScreenInner() {
       void ExamProgressStore.save({
         sessionId: state.sessionId,
         studentId: student.id,
+        attemptId: state.attemptId ?? undefined,
         answers: state.answers,
         flags: state.flags,
         navMode: state.navMode,
         remainingSeconds: state.remainingSeconds,
+        totalDurationSeconds: state.totalDurationSeconds,
         startedAt: state.startedAt,
+        deadline: state.deadline,
+        scheduleClosingTime: state.scheduleClosingTime,
+        timeSync: state.timeSync ?? undefined,
       }).catch((error) => console.warn('[GUIDED ACCESS] Checkpoint failed:', error));
       void SecurityRepository.recordViolation({
         sessionId: state.sessionId,
@@ -275,11 +288,16 @@ function ExamScreenInner() {
       void ExamProgressStore.save({
         sessionId: state.sessionId,
         studentId: student.id,
+        attemptId: state.attemptId ?? undefined,
         answers: state.answers,
         flags: state.flags,
         navMode: state.navMode,
         remainingSeconds: state.remainingSeconds,
+        totalDurationSeconds: state.totalDurationSeconds,
         startedAt: state.startedAt,
+        deadline: state.deadline,
+        scheduleClosingTime: state.scheduleClosingTime,
+        timeSync: state.timeSync ?? undefined,
       });
     };
     const onVisibility = () => {
@@ -392,14 +410,20 @@ function ExamScreenInner() {
   useEffect(() => {
     if (!questions.length || !sessionId || !verifiedStudent?.id) return;
     const timer = setTimeout(() => {
+      const state = useExamStore.getState();
       void ExamProgressStore.save({
         sessionId,
         studentId: verifiedStudent.id,
+        attemptId: state.attemptId ?? undefined,
         answers,
         flags,
         navMode,
-        remainingSeconds: useExamStore.getState().remainingSeconds,
-        startedAt,
+        remainingSeconds: state.remainingSeconds,
+        totalDurationSeconds: state.totalDurationSeconds,
+        startedAt: state.startedAt,
+        deadline: state.deadline,
+        scheduleClosingTime: state.scheduleClosingTime,
+        timeSync: state.timeSync ?? undefined,
       });
     }, 2000);
     return () => clearTimeout(timer);
@@ -418,7 +442,12 @@ function ExamScreenInner() {
         flags: checkpoint.flags,
         navMode: checkpoint.navMode,
         remainingSeconds: checkpoint.remainingSeconds,
+        totalDurationSeconds: checkpoint.totalDurationSeconds,
         startedAt: checkpoint.startedAt,
+        deadline: checkpoint.deadline,
+        scheduleClosingTime: checkpoint.scheduleClosingTime,
+        attemptId: checkpoint.attemptId,
+        timeSync: checkpoint.timeSync,
       });
       markAutoSaved(checkpoint.savedAt);
     });
@@ -455,8 +484,14 @@ function ExamScreenInner() {
         setRoomEnded(true);
         return;
       }
-      if (typeof pulse.remainingSeconds === 'number' && pulse.remainingSeconds >= 0) {
-        useExamStore.getState().setRemainingSeconds(pulse.remainingSeconds);
+      if (pulse.serverTime || typeof pulse.remainingSeconds === 'number') {
+        useExamStore.getState().reconcileWithServerTime({
+          serverTime: pulse.serverTime,
+          startedAt: pulse.startedAt,
+          endsAt: pulse.endsAt,
+          remainingSeconds: pulse.remainingSeconds,
+          durationMinutes: pulse.durationMinutes,
+        });
       }
       if (!pulse.ok) {
         const global = await PeerExamClient.getGlobalStatus();
@@ -506,82 +541,55 @@ function ExamScreenInner() {
         Object.values(answers).map((answer) => [answer.questionId, answer.selectedAnswer]),
       );
 
+      // 1. Freeze answering and mark submitting
       markSubmitting(true);
-      // Timer expiry, proctor end, and manual submission all leave kiosk mode
-      // before the network confirmation loop begins.
+
+      // 2. Leave kiosk lock before navigating
       await stopExamLock().catch(() => undefined);
+
+      // 3. Durably persist finalized submission record BEFORE attempting network delivery
+      try {
+        const state = useExamStore.getState();
+        const sid = sessionId ?? 'unknown';
+        const stid = verifiedStudent?.id ?? 'unknown';
+        const appCode = verifiedStudent?.studentId || verifiedStudent?.id || 'unknown';
+        const currentAttemptId =
+          state.attemptId || `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+        const idempotencyKey = `sub_${sid}_${appCode}_${currentAttemptId}`;
+
+        const destination = (await PeerExamClient.isActive())
+          ? 'proctor_peer'
+          : (await OfflineStore.isOfflineMode())
+            ? 'local_offline'
+            : 'cloud';
+
+        const finalizedRecord: FinalizedSubmission = {
+          submissionId: `sub_${Date.now()}`,
+          attemptId: currentAttemptId,
+          idempotencyKey,
+          sessionId: sid,
+          studentId: stid,
+          applicantCode: appCode,
+          studentName: verifiedStudent?.fullName,
+          answers: payload,
+          finalReason,
+          status: 'pending',
+          destination,
+          attemptCount: 0,
+          maxAttempts: SUBMISSION_RETRY_CONFIG.maxAttempts,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        await ExamSubmissionStore.save(finalizedRecord);
+      } catch (error) {
+        console.warn('[SUBMIT] Finalized submission pre-save failed:', error);
+      }
+
+      // 4. Navigate to submitting screen which drives the bounded retry coordinator
       router.replace('/(student)/submitting');
-      try {
-        await ExamProgressStore.save({
-          sessionId: sessionId ?? 'unknown',
-          studentId: verifiedStudent?.id ?? 'unknown',
-          answers,
-          flags,
-          navMode,
-          remainingSeconds: useExamStore.getState().remainingSeconds,
-          startedAt,
-        });
-      } catch (error) {
-        console.warn('[SUBMIT] Final local checkpoint failed; continuing with saved progress:', error);
-      }
-
-      let failedAttempts = 0;
-      while (true) {
-        try {
-          await QuestionRepository.submitAnswers({
-            sessionId: sessionId ?? 'unknown',
-            studentId: verifiedStudent?.id ?? 'unknown',
-            answers: payload,
-          });
-          break;
-        } catch (error) {
-          failedAttempts += 1;
-          const retryDelayMs = Math.min(1000 * 2 ** Math.min(failedAttempts - 1, 4), 15000);
-          console.warn(
-            `[SUBMIT] Server has not confirmed the submission; retrying in ${retryDelayMs}ms.`,
-            error,
-          );
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-        }
-      }
-
-      try {
-        if (verifiedStudent?.id) {
-          await LobbyRepository.finishStudent(verifiedStudent.id, finalReason);
-        }
-      } catch (error) {
-        console.warn('[SUBMIT] Result was confirmed; final lobby update will be retried by sync:', error);
-      }
-      await ExamProgressStore.clear().catch((error) => {
-        console.warn('[SUBMIT] Result was confirmed; local checkpoint cleanup failed:', error);
-      });
-      await clearApplicantExamMaterial().catch((error) => {
-        console.warn('[SUBMIT] Result was confirmed; exam material cleanup failed:', error);
-      });
-      markSubmitted(finalReason);
-      try {
-        const appCode = verifiedStudent?.studentId || verifiedStudent?.id;
-        if (appCode && sessionId) {
-          const sid = String(sessionId).replace(/^offline-/, '').split('-')[0];
-          await appStorage.setItem(`tcc.student.completed.${sid}.${appCode}`, '1');
-        }
-      } catch {
-        // Completion marker is best effort.
-      }
-      await stopExamLock().catch(() => undefined);
-      await ExamLifecycle.clear().catch(() => undefined);
-      useExamStore.getState().reset();
-      useStudentStore.getState().reset();
-      useLobbyStore.getState().reset();
-      const exitNotice =
-        finalReason === 'time_expired'
-          ? 'Your time ended and your answers were submitted.'
-          : finalReason === 'proctor_terminated'
-            ? 'The proctor ended the examination and your answers were submitted.'
-            : 'Your answers were submitted successfully.';
-      router.replace({ pathname: '/', params: { examExitNotice: exitNotice } } as any);
     },
-    [answers, flags, navMode, sessionId, startedAt, verifiedStudent, markSubmitting, markSubmitted, router],
+    [answers, sessionId, verifiedStudent, markSubmitting, router],
   );
   const finalizeSubmissionRef = useRef(finalizeSubmission);
   finalizeSubmissionRef.current = finalizeSubmission;
@@ -644,7 +652,14 @@ function ExamScreenInner() {
 
   const isAndroidUnpinned = Platform.OS === 'android' && !isKioskActive;
   const isIosUnguided = Platform.OS === 'ios' && guidedAccess !== 'enabled';
-  const paused = wifiLocked || isAndroidUnpinned || isIosUnguided || roomEnded || isLeavingExam || remainingSeconds <= 0;
+  const paused =
+    wifiLocked ||
+    isAndroidUnpinned ||
+    isIosUnguided ||
+    roomEnded ||
+    isLeavingExam ||
+    remainingSeconds <= 0 ||
+    isReconciling;
 
   useEffect(() => {
     setPaused(paused);
@@ -1002,6 +1017,29 @@ function ExamScreenInner() {
           disabled={paused}
         />
       </View>
+
+      {/* Time Verification Alert Banner */}
+      {isReconciling ? (
+        <View
+          style={{
+            marginHorizontal: 16,
+            marginTop: 8,
+            marginBottom: 4,
+            padding: 12,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: theme.accent,
+            backgroundColor: theme.accentSoft,
+          }}
+        >
+          <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 13, marginBottom: 2 }}>
+            Time Verification Required
+          </Text>
+          <Text style={{ color: theme.textSecondary, fontSize: 12, lineHeight: 16 }}>
+            A system clock change was detected. Your examination answers are safely preserved. Please stay connected to the exam Wi‑Fi to synchronize time with the proctor.
+          </Text>
+        </View>
+      ) : null}
 
       {/* 2. Info Row: "X of 100 answered" on left, "Scroll | One by one" on right */}
       <Row style={styles.infoRow}>
