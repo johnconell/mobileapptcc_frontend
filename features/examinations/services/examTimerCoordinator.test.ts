@@ -195,6 +195,16 @@ test('timer: useExamStore locks answering when expired or reconciling and preser
       correctAnswer: 'A',
       explanation: '',
     },
+    {
+      id: 'q2',
+      number: 2,
+      subjectId: 'sub-1',
+      type: 'multiple_choice',
+      question: 'Question 2',
+      choices: { A: 'A', B: 'B', C: 'C', D: 'D' },
+      correctAnswer: 'A',
+      explanation: '',
+    },
   ]);
 
   store.startExam({
@@ -206,6 +216,7 @@ test('timer: useExamStore locks answering when expired or reconciling and preser
 
   // Answer while active
   store.selectAnswer('q1', 'B');
+  store.setCurrentIndex(1);
   assert.equal(useExamStore.getState().answers.q1?.selectedAnswer, 'B');
 
   // Simulate expiry (timer hits 0)
@@ -223,6 +234,7 @@ test('timer: useExamStore locks answering when expired or reconciling and preser
     studentId: 'student-test',
     attemptId: 'att-101',
     answers: useExamStore.getState().answers,
+    currentIndex: useExamStore.getState().currentIndex,
     remainingSeconds: 0,
     startedAt: '2026-11-02T08:00:00.000Z',
     deadline: '2026-11-02T09:00:00.000Z',
@@ -234,4 +246,13 @@ test('timer: useExamStore locks answering when expired or reconciling and preser
   assert.equal(loaded?.answers.q1?.selectedAnswer, 'B');
   assert.equal(loaded?.attemptId, 'att-101');
   assert.equal(loaded?.deadline, '2026-11-02T09:00:00.000Z');
+  assert.equal(loaded?.currentIndex, 1);
+  useExamStore.getState().restoreProgress({
+    answers: loaded!.answers,
+    currentIndex: loaded!.currentIndex,
+    remainingSeconds: loaded!.remainingSeconds,
+    startedAt: loaded!.startedAt,
+    deadline: loaded!.deadline,
+  });
+  assert.equal(useExamStore.getState().currentIndex, 1);
 });

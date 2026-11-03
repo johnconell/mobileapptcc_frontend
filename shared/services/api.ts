@@ -1,12 +1,14 @@
 import { STORAGE_KEYS } from '@/shared/constants';
-import { isLoopbackApiHost, requiresLanApiHost } from '@/shared/services/apiReachability';
+import {
+  assertSecureApiBase,
+  isLoopbackApiHost,
+  requiresLanApiHost,
+} from '@/shared/services/apiReachability';
 import { appStorage } from '@/shared/services/storage';
 import { authStorageKeys, isLocalApiMode } from '@/features/local-testing/localMode';
 import { localApiRequest } from '@/features/local-testing/localApiTransport';
 
 const DEFAULT_API_URL = 'https://api.masterexam.pro/api/v1';
-/** Must match server ADMIN_SYNC_TOKEN (same value as eas.json production env). */
-const DEFAULT_SYNC_TOKEN = 'metcc-lan-sync-secret';
 
 /** In-memory cache of LAN API override (exam-day campus server). */
 let lanApiOverride: string | null | undefined;
@@ -47,11 +49,6 @@ export function getCloudApiBaseUrl(): string | null {
  */
 export function getAuthApiBaseUrl(): string {
   return getCloudApiBaseUrl() || getApiBaseUrl();
-}
-
-/** Admin sync token for exam-day pack download + result upload. */
-export function getSyncToken(): string {
-  return process.env.EXPO_PUBLIC_SYNC_TOKEN?.trim() || DEFAULT_SYNC_TOKEN;
 }
 
 /** Call once on app start so SecureStore override is applied. */
@@ -128,6 +125,7 @@ export async function apiRequest<T = unknown>(
     return result.body as T;
   }
   const base = normalizeBase(options.baseUrl || getApiBaseUrl());
+  assertSecureApiBase(base);
   const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
   const headers: Record<string, string> = {
     Accept: 'application/json',

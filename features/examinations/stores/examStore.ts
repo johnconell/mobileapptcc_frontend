@@ -27,6 +27,7 @@ export type RestoreProgressPayload = {
   answers: Record<string, ExamAnswer>;
   flags?: Record<string, boolean>;
   navMode?: ExamNavMode;
+  currentIndex?: number;
   remainingSeconds?: number;
   totalDurationSeconds?: number;
   startedAt?: string | null;
@@ -208,6 +209,10 @@ export const useExamStore = create<ExamState>((set, get) => ({
       answers,
       flags: flags ?? state.flags,
       navMode: navMode ?? state.navMode,
+      currentIndex:
+        typeof payload.currentIndex === 'number'
+          ? Math.min(Math.max(0, payload.currentIndex), Math.max(0, state.questions.length - 1))
+          : state.currentIndex,
       remainingSeconds: recalculated.remainingSeconds,
       totalDurationSeconds: totalDurationSeconds ?? durationMinutes * 60,
       startedAt,

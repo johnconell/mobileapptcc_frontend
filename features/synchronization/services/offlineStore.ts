@@ -73,9 +73,13 @@ export type OfflinePack = {
     id: number;
     applicant_code: string;
     name: string;
+    first_name?: string | null;
+    middle_name?: string | null;
+    last_name?: string | null;
     course_applied?: string;
     gmail?: string;
     email?: string;
+    status?: string | null;
   }>;
   registrations: Array<{
     id: number;
@@ -84,6 +88,15 @@ export type OfflinePack = {
     assigned_room_id?: number | null;
     exam_passkey?: string | null;
     exam_passkey_hash?: string | null;
+    attendance_status?: string | null;
+    result_status?: string | null;
+    passkey_status?: string | null;
+    passkey_sent_to_email?: string | null;
+    passkey_used_at?: string | null;
+    passkey_expires_at?: string | null;
+    previous_schedule_id?: number | null;
+    reschedule_reason?: string | null;
+    rescheduled_at?: string | null;
   }>;
   question_banks: Array<{
     id: number;
@@ -547,18 +560,39 @@ export const OfflineStore = {
    * Default rooms stay Closed until an entry exists here.
    */
   async getOpenedRooms(): Promise<
-    Record<string, { code: string; openedAt: string; status: 'lobby_open' | 'in_progress' | 'ended' }>
+    Record<
+      string,
+      {
+        code: string;
+        openedAt: string;
+        status: 'lobby_open' | 'in_progress' | 'ended';
+        ownerId?: number | null;
+        proctorName?: string | null;
+      }
+    >
   > {
     try {
       const raw = await appStorage.getItem(STORAGE_KEYS.offlineOpenedRooms);
       if (!raw) return {};
       const parsed = JSON.parse(raw) as Record<
         string,
-        { code: string; openedAt: string; status?: 'lobby_open' | 'in_progress' | 'ended' }
+        {
+          code: string;
+          openedAt: string;
+          status?: 'lobby_open' | 'in_progress' | 'ended';
+          ownerId?: number | null;
+          proctorName?: string | null;
+        }
       >;
       const out: Record<
         string,
-        { code: string; openedAt: string; status: 'lobby_open' | 'in_progress' | 'ended' }
+        {
+          code: string;
+          openedAt: string;
+          status: 'lobby_open' | 'in_progress' | 'ended';
+          ownerId?: number | null;
+          proctorName?: string | null;
+        }
       > = {};
       for (const [key, value] of Object.entries(parsed || {})) {
         if (!value?.code) continue;
@@ -566,6 +600,8 @@ export const OfflineStore = {
           code: String(value.code).toUpperCase(),
           openedAt: value.openedAt || new Date().toISOString(),
           status: value.status || 'lobby_open',
+          ownerId: value.ownerId != null ? Number(value.ownerId) : null,
+          proctorName: value.proctorName ? String(value.proctorName) : null,
         };
       }
       return out;
@@ -579,6 +615,8 @@ export const OfflineStore = {
     roomId: string | number,
     code: string,
     status: 'lobby_open' | 'in_progress' | 'ended' = 'lobby_open',
+    ownerId?: number | null,
+    proctorName?: string | null,
   ): Promise<void> {
     const sid = await this.resolveOpenedScheduleId(scheduleId);
     const rid = Number(roomId);
@@ -603,6 +641,8 @@ export const OfflineStore = {
       code: code.trim().toUpperCase(),
       openedAt: all[key]?.openedAt || new Date().toISOString(),
       status,
+      ownerId: ownerId !== undefined ? ownerId : (all[key]?.ownerId ?? null),
+      proctorName: proctorName !== undefined ? proctorName : (all[key]?.proctorName ?? null),
     };
     await appStorage.setItem(STORAGE_KEYS.offlineOpenedRooms, JSON.stringify(all));
   },
@@ -760,12 +800,15 @@ export const OfflineStore = {
   },
 
   async getPeerSession<T>(): Promise<T | null> {
-    const { data } = await readEncryptedOrLegacy<T>(
+    const { data, needsMigrate } = await readEncryptedOrLegacy<T>(
       PEER_FILE,
       PEER_FILE,
       WEB_PEER_KEY,
       WEB_PEER_KEY,
     );
+    if (data && needsMigrate) {
+      await this.savePeerSession(data);
+    }
     return data;
   },
 

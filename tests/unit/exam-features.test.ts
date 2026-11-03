@@ -2,9 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { useExamStore } from '../../features/examinations/stores/examStore';
 import { buildCategoryProgress } from '../../features/examinations/utils/categoryProgress';
+import { compareStudentNames } from '../../features/synchronization/utils/studentNameOrder';
 import type { Question } from '../../shared/types';
 
 test('exam features: navigation mode, flags, category progress, and type-to-confirm', async (t) => {
+  await t.test('mobile proctor rosters use stable surname-first ordering', () => {
+    const rows = [
+      { id: 6, firstName: 'Ana', lastName: 'Santos' },
+      { id: 4, firstName: '  Ben ', lastName: ' Rivera ' },
+      { id: 2, firstName: 'ZOE', lastName: 'CRUZ' },
+      { id: 3, firstName: 'Aira', lastName: 'Rivera' },
+      { id: 5, firstName: 'ana', lastName: 'santos' },
+      { id: 1, firstName: 'Amy', lastName: 'Dela Cruz' },
+    ];
+    rows.sort(compareStudentNames);
+    assert.deepEqual(rows.map((row) => row.id), [2, 1, 3, 4, 5, 6]);
+  });
+
   await t.test('navMode defaults to scroll and can toggle to one_at_a_time', () => {
     const store = useExamStore.getState();
     store.reset();

@@ -1,7 +1,19 @@
 import { STORAGE_KEYS } from '@/shared/constants';
+import { assertSecureApiBase } from '@/shared/services/apiReachability';
 import { PEER_PATH_PREFIX, PEER_PORT, type PeerQrTarget } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
 import { Platform } from 'react-native';
+import * as Crypto from 'expo-crypto';
+import { bytesToHex } from '@noble/ciphers/utils.js';
+import {
+  assertPeerCiphertextContext,
+  completePeerClientHandshake,
+  createPeerIdentity,
+  decryptPeerPayload,
+  encryptPeerPayload,
+  type PeerCiphertext,
+  type PeerHandshakeResponse,
+} from '@/features/examinations/services/peerTransportCrypto';
 
 export type PeerTarget = {
   host: string;
@@ -10,12 +22,182 @@ export type PeerTarget = {
   scheduleId: number | null;
   roomId: number | null;
   wifiSsid: string | null;
+  peerPublicKey: string;
 };
 
 let cached: PeerTarget | null | undefined;
+let channel: {
+  endpoint: string;
+  identityKey: string;
+  sessionId: string;
+  key: Uint8Array;
+  sequence: number;
+} | null = null;
+let requestQueue: Promise<void> = Promise.resolve();
 
 function baseUrl(target: PeerTarget): string {
   return `http://${target.host}:${target.port}${PEER_PATH_PREFIX}`;
+}
+
+function normalizeTarget(target: PeerTarget | PeerQrTarget): PeerTarget {
+  return {
+    host: target.host,
+    port: target.port || PEER_PORT,
+    code: target.code,
+    scheduleId: target.scheduleId ?? null,
+    roomId: target.roomId ?? null,
+    wifiSsid: target.wifiSsid ?? null,
+    peerPublicKey: target.peerPublicKey,
+  };
+}
+
+async function randomHex(byteLength: number): Promise<string> {
+  return bytesToHex(await Crypto.getRandomBytesAsync(byteLength));
+}
+
+async function secureChannelFor(target: PeerTarget) {
+  const endpoint = baseUrl(target);
+  if (
+    channel &&
+    channel.endpoint === endpoint &&
+    channel.identityKey === target.peerPublicKey
+  ) {
+    return channel;
+  }
+
+  const clientPrivateKey = await randomHex(32);
+  const clientPublicKey = createPeerIdentity(clientPrivateKey).publicKey;
+  const clientNonce = await randomHex(16);
+  const response = await withTimeout(
+    (signal) =>
+      fetch(`${endpoint}/handshake`, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_public_key: clientPublicKey,
+          client_nonce: clientNonce,
+        }),
+        signal,
+      }),
+    4000,
+  );
+  const json = await response.json().catch(() => null);
+  const handshake = json?.data ?? json;
+  if (!response.ok || json?.success === false || !handshake?.session_id) {
+    throw new Error(handshake?.message || 'Could not establish a secure session with the proctor.');
+  }
+
+  const key = completePeerClientHandshake({
+    identityPublicKey: target.peerPublicKey,
+    clientPrivateKey,
+    clientPublicKey,
+    clientNonce,
+    response: handshake as PeerHandshakeResponse,
+  });
+  channel = {
+    endpoint,
+    identityKey: target.peerPublicKey,
+    sessionId: String(handshake.session_id),
+    key,
+    sequence: 0,
+  };
+  return channel;
+}
+
+async function performSecureRequest<T>(
+  target: PeerTarget,
+  path: string,
+  options: {
+    method?: string;
+    body?: unknown;
+    query?: Record<string, string | undefined>;
+    timeoutMs?: number;
+  },
+): Promise<T> {
+  const method = (options.method ?? (options.body !== undefined ? 'POST' : 'GET')).toUpperCase();
+  const peerPath = `${PEER_PATH_PREFIX}${path.startsWith('/') ? path : `/${path}`}`;
+  const query = Object.fromEntries(
+    Object.entries(options.query ?? {}).filter((entry): entry is [string, string] =>
+      entry[1] != null && entry[1] !== '',
+    ),
+  );
+  const activeChannel = await secureChannelFor(target);
+  const sequence = activeChannel.sequence + 1;
+  activeChannel.sequence = sequence;
+  const message = encryptPeerPayload(
+    activeChannel.key,
+    activeChannel.sessionId,
+    sequence,
+    'POST',
+    `${PEER_PATH_PREFIX}/secure`,
+    { path: peerPath, method, query, body: options.body },
+    await randomHex(12),
+  );
+
+  try {
+    const response = await withTimeout(
+      (signal) =>
+        fetch(`${baseUrl(target)}/secure`, {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify(message),
+          signal,
+        }),
+      options.timeoutMs ?? 5000,
+    );
+    const outer = await response.json().catch(() => null);
+    if (!response.ok || !outer?.ciphertext) {
+      channel = null;
+      throw new Error(outer?.message || `Secure peer request failed (${response.status}).`);
+    }
+
+    assertPeerCiphertextContext(
+      outer as PeerCiphertext,
+      activeChannel.sessionId,
+      sequence,
+    );
+    const result = decryptPeerPayload<{ status: number; body: string }>(
+      activeChannel.key,
+      outer as PeerCiphertext,
+      method,
+      peerPath,
+    );
+    let json: any;
+    try {
+      json = result.body ? JSON.parse(result.body) : null;
+    } catch {
+      throw new Error('The proctor returned an invalid secure response.');
+    }
+    if (result.status < 200 || result.status >= 300 || json?.success === false) {
+      const { classifyPeerStartupError } = await import('@/features/examinations/services/examReadiness');
+      const rawMessage =
+        (typeof json?.message === 'string' && json.message.trim()) ||
+        `Request rejected (${result.status})`;
+      const err = new Error(classifyPeerStartupError(rawMessage, path));
+      (err as any).status = result.status;
+      (err as any).statusCode = result.status;
+      throw err;
+    }
+    return (json?.data !== undefined ? json.data : json) as T;
+  } catch (error) {
+    if (channel === activeChannel) channel = null;
+    throw error;
+  }
+}
+
+function queuedSecureRequest<T>(
+  target: PeerTarget,
+  path: string,
+  options: {
+    method?: string;
+    body?: unknown;
+    query?: Record<string, string | undefined>;
+    timeoutMs?: number;
+  },
+): Promise<T> {
+  const operation = requestQueue.then(() => performSecureRequest<T>(target, path, options));
+  requestQueue = operation.then(() => undefined, () => undefined);
+  return operation;
 }
 
 /**
@@ -24,6 +206,9 @@ function baseUrl(target: PeerTarget): string {
  */
 export const PeerExamClient = {
   async setTarget(target: PeerQrTarget): Promise<void> {
+    if (!/^[0-9a-f]{64}$/i.test(target.peerPublicKey)) {
+      throw new Error('This room QR has no secure proctor identity. Scan the current proctor QR code.');
+    }
     const value: PeerTarget = {
       host: target.host,
       port: target.port || PEER_PORT,
@@ -31,7 +216,15 @@ export const PeerExamClient = {
       scheduleId: target.scheduleId ?? null,
       roomId: target.roomId ?? null,
       wifiSsid: target.wifiSsid ?? null,
+      peerPublicKey: target.peerPublicKey.toLowerCase(),
     };
+    if (
+      !cached ||
+      baseUrl(cached) !== baseUrl(value) ||
+      cached.peerPublicKey !== value.peerPublicKey
+    ) {
+      channel = null;
+    }
     cached = value;
     await appStorage.setItem(STORAGE_KEYS.peerTarget, JSON.stringify(value));
     if (__DEV__) {
@@ -51,7 +244,8 @@ export const PeerExamClient = {
       return null;
     }
     try {
-      cached = JSON.parse(raw) as PeerTarget;
+      const restored = JSON.parse(raw) as PeerTarget;
+      cached = /^[0-9a-f]{64}$/i.test(restored.peerPublicKey ?? '') ? restored : null;
     } catch {
       cached = null;
     }
@@ -64,6 +258,7 @@ export const PeerExamClient = {
 
   async clear(): Promise<void> {
     cached = null;
+    channel = null;
     await appStorage.deleteItem(STORAGE_KEYS.peerTarget);
   },
 
@@ -73,6 +268,7 @@ export const PeerExamClient = {
    */
   async refreshHostFromCloud(examCode?: string): Promise<boolean> {
     const current = await this.getTarget();
+    if (!current?.peerPublicKey) return false;
     const code = (examCode || current?.code || '').trim().toUpperCase();
     if (!code) return false;
     if (__DEV__) {
@@ -95,6 +291,7 @@ export const PeerExamClient = {
     try {
       const { getCloudApiBaseUrl, getApiBaseUrl } = await import('@/shared/services/api');
       const base = getCloudApiBaseUrl() || getApiBaseUrl();
+      assertSecureApiBase(base);
       const res = await withTimeout(
         (signal) =>
           fetch(`${base}/exam/resolve`, {
@@ -128,6 +325,15 @@ export const PeerExamClient = {
           ? String(json.wifi_ssid ?? json.wifiSsid ?? json.session?.wifiSsid ?? current?.wifiSsid)
           : null;
       const nextCode = String(json.examinationCode ?? code).trim().toUpperCase() || code;
+      const reportedIdentity = String(
+        json.peer_identity_public_key ??
+          json.peerIdentityPublicKey ??
+          json.session?.peerIdentityPublicKey ??
+          json.data?.session?.peerIdentityPublicKey ??
+          '',
+      ).trim().toLowerCase();
+      const peerPublicKey = current?.peerPublicKey;
+      if (!peerPublicKey || (reportedIdentity && reportedIdentity !== peerPublicKey)) return false;
 
       await this.setTarget({
         host,
@@ -136,6 +342,7 @@ export const PeerExamClient = {
         scheduleId: current?.scheduleId ?? null,
         roomId: current?.roomId ?? null,
         wifiSsid,
+        peerPublicKey,
       });
       return true;
     } catch (err) {
@@ -155,8 +362,7 @@ export const PeerExamClient = {
     startSeq?: number;
     v: number;
   } | null> {
-    const target = await this.getTarget();
-    if (!target) return null;
+    if (!(await this.getTarget())) return null;
 
     const normalize = (data: any) => {
       if (!data) return null;
@@ -177,10 +383,9 @@ export const PeerExamClient = {
       };
     };
 
-    // POST first — expo-http-server GET often returns an empty 200 on phones.
     try {
       const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
-      const data = await this.request<any>('/status', {
+      const data = await this.request<Record<string, any>>('/status', {
         method: 'POST',
         body: token ? { participation_token: token } : {},
         timeoutMs: 4000,
@@ -188,25 +393,9 @@ export const PeerExamClient = {
       const parsed = normalize(data);
       if (parsed) return parsed;
     } catch {
-      /* fall through */
-    }
-
-    try {
-      const res = await withTimeout(
-        (signal) =>
-          fetch(`${baseUrl(target)}/status`, {
-            method: 'POST',
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-            body: '{}',
-            signal,
-          }),
-        4000,
-      );
-      const json = await res.json().catch(() => null);
-      return normalize(json?.data ?? json);
-    } catch {
       return null;
     }
+    return null;
   },
 
   /** Personal status check - used once student has a token */
@@ -219,20 +408,13 @@ export const PeerExamClient = {
     startPhase?: string;
     startSeq?: number;
   } | null> {
-    const target = await this.getTarget();
-    if (!target) return null;
+    if (!(await this.getTarget())) return null;
     try {
-      const res = await withTimeout(
-        (signal) =>
-          fetch(`${baseUrl(target)}/status?participation_token=${token}`, {
-            headers: { Accept: 'application/json' },
-            signal,
-          }),
-        2500,
-      );
-      if (!res.ok) return null;
-      const json = await res.json();
-      const data = json?.data ?? json;
+      const data = await this.request<Record<string, any>>('/status', {
+        method: 'GET',
+        query: { participation_token: token },
+        timeoutMs: 2500,
+      });
       if (!data) return null;
       const roomStatus = String(data.roomStatus ?? data.status ?? '');
       return {
@@ -252,29 +434,15 @@ export const PeerExamClient = {
 
   /** Reachability probe for the Wi‑Fi gate: is the proctor phone answering? */
   async ping(target?: PeerTarget | PeerQrTarget): Promise<boolean> {
-    const resolved = (target as PeerTarget | undefined) ?? (await this.getTarget());
+    const resolved = target ? normalizeTarget(target) : await this.getTarget();
     if (!resolved) return false;
     try {
-      const res = await withTimeout(
-        (signal) =>
-          fetch(`${baseUrl(resolved)}/health`, {
-            method: 'POST',
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-            body: '{}',
-            signal,
-          }),
-        4000,
-      );
-      if (res.ok) return true;
-      const fallback = await withTimeout(
-        (signal) =>
-          fetch(`${baseUrl(resolved)}/health`, {
-            headers: { Accept: 'application/json' },
-            signal,
-          }),
-        4000,
-      );
-      return fallback.ok;
+      await queuedSecureRequest(resolved, '/health', {
+        method: 'POST',
+        body: {},
+        timeoutMs: 4000,
+      });
+      return true;
     } catch {
       return false;
     }
@@ -287,7 +455,7 @@ export const PeerExamClient = {
   async probeHealth(
     target?: PeerTarget | PeerQrTarget,
   ): Promise<'ready' | 'idle' | 'ended' | 'unreachable'> {
-    const resolved = (target as PeerTarget | undefined) ?? (await this.getTarget());
+    const resolved = target ? normalizeTarget(target) : await this.getTarget();
     if (!resolved) return 'unreachable';
     try {
       if (__DEV__) {
@@ -296,26 +464,18 @@ export const PeerExamClient = {
           qrIp: resolved.host,
         });
       }
-      const res = await withTimeout(
-        (signal) =>
-          fetch(`${baseUrl(resolved)}/health`, {
-            method: 'POST',
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-            body: '{}',
-            signal,
-          }),
-        4000,
-      );
+      const data = await queuedSecureRequest<Record<string, unknown>>(resolved, '/health', {
+        method: 'POST',
+        body: {},
+        timeoutMs: 4000,
+      });
       if (__DEV__) {
         console.log('[PEER JOIN] health response', {
           qrIp: resolved.host,
-          status: res.status,
-          ok: res.ok,
+          status: 'secure',
+          ok: true,
         });
       }
-      if (!res.ok) return 'unreachable';
-      const json = await res.json().catch(() => null);
-      const data = json?.data ?? json;
       const sessionStatus = String(data?.session_status ?? '').toLowerCase();
       const status = String(data?.status ?? '').toLowerCase();
       if (sessionStatus === 'ended' || status === 'ended') return 'ended';
@@ -346,121 +506,25 @@ export const PeerExamClient = {
     if (!target) {
       throw new Error('Not connected to a proctor phone. Scan the proctor QR again.');
     }
-    if (__DEV__) {
-      try {
-        console.log("[LOBBY DEBUG] API URL:", `${baseUrl(target)}${path}`);
-      } catch {}
-    }
-
-    const query = new URLSearchParams();
-    for (const [key, value] of Object.entries(options.query ?? {})) {
-      if (value != null && value !== '') query.set(key, value);
-    }
-    const qs = query.toString() ? `?${query.toString()}` : '';
-
-    const headers: Record<string, string> = { Accept: 'application/json' };
-    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
-
-    let res: Response;
     try {
-      if (__DEV__) {
-        console.log('[PEER JOIN] sending request', {
-          baseUrl: `${baseUrl(target)}${path}`,
-          qrIp: target.host,
-          method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
-        });
-      }
-
-      res = await withTimeout(
-        (signal) =>
-          fetch(`${baseUrl(target)}${path}${qs}`, {
-            method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
-            headers,
-            body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-            signal,
-          }),
-        options.timeoutMs ?? 5000, // Reduced default timeout for faster failure detection
-      );
-    } catch (err) {
-      if (__DEV__) {
-        console.error('[PEER JOIN] transport failure', {
-          baseUrl: `${baseUrl(target)}${path}`,
-          qrIp: target.host,
-          errorType: err instanceof Error ? err.name : typeof err,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-      const isTimeout =
-        err instanceof Error &&
-        (err.name === 'AbortError' || err.message.toLowerCase().includes('timeout'));
-      if (isTimeout) {
-        throw new Error('Connection to the proctor phone timed out. Please check your Wi-Fi signal.');
-      }
-      if (Platform.OS === 'ios') {
-        throw new Error(
-          'Cannot reach the proctor phone. Please ensure you are connected to the exam Wi-Fi and have allowed "Local Network" access in iOS Settings > TCC Entrance Exam.',
-        );
-      }
-      throw new Error(
-        'Cannot reach the proctor, check you are on the same WiFi. The WiFi may block device-to-device connections.',
-      );
+      return await queuedSecureRequest<T>(target, path, options);
+    } catch (error) {
+        const isTimeout =
+          error instanceof Error &&
+          (error.name === 'AbortError' || error.message.toLowerCase().includes('timeout'));
+        if (isTimeout) {
+          throw new Error('Connection to the proctor phone timed out. Please check your Wi-Fi signal.');
+        }
+        if (error instanceof TypeError && Platform.OS === 'ios') {
+          throw new Error(
+            'Cannot reach the proctor phone. Ensure you are on exam Wi-Fi and have allowed Local Network access in iOS Settings.',
+          );
+        }
+        if (error instanceof TypeError) {
+          throw new Error('Cannot reach the proctor. Check the exam Wi-Fi and device-to-device access.');
+        }
+        throw error;
     }
-
-    if (__DEV__) {
-      console.log('[PEER JOIN] HTTP response', {
-        baseUrl: `${baseUrl(target)}${path}`,
-        qrIp: target.host,
-        status: res.status,
-        errorType: res.ok ? null : 'HttpError',
-      });
-    }
-
-    const text = await res.text();
-    if (__DEV__ && (path === '/heartbeat' || path === '/reconnect')) {
-      console.info('[RECONNECT TRACE] proctor HTTP response', {
-        host: target.host,
-        port: target.port,
-        path,
-        status: res.status,
-        body: (text || '').slice(0, 400),
-      });
-    }
-    let json: any = null;
-    try {
-      json = text ? JSON.parse(text) : null;
-    } catch (err) {
-      if (__DEV__) console.error(`[LAN ERROR] JSON Parse failed from ${target.host}:`, text.slice(0, 100));
-      throw new Error('Exam Pack Incomplete');
-    }
-
-    const hasUsablePayload =
-      json &&
-      json.success !== false &&
-      (json.data != null || json.questions != null || json.registration_id != null);
-
-    if (res.ok && hasUsablePayload) {
-      return (json.data !== undefined ? json.data : json) as T;
-    }
-
-    const { classifyPeerStartupError } = await import('@/features/examinations/services/examReadiness');
-    const rawMessage =
-      (typeof json?.message === 'string' && json.message.trim()) ||
-      (!json || !text ? '' : `Request rejected (${res.status})`);
-    const msg = classifyPeerStartupError(rawMessage, path);
-    if (__DEV__) {
-      console.error('[PEER JOIN] HTTP error response', {
-        baseUrl: `${baseUrl(target)}${path}`,
-        qrIp: target.host,
-        status: res.status,
-        errorType: 'HttpError',
-        body: (text || '').slice(0, 180),
-        mapped: msg,
-      });
-    }
-    const err = new Error(msg);
-    (err as any).status = res.status;
-    (err as any).statusCode = res.status;
-    throw err;
   },
 };
 

@@ -1,5 +1,16 @@
 import React, { useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, Text, TextInput, View, StyleSheet } from 'react-native';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+  StyleSheet,
+} from 'react-native';
 import { WifiOff } from 'lucide-react-native';
 import { useThemeTokens } from '@/shared/contexts/ThemeContext';
 import { userFacingError } from '@/shared/utils/userFacingError';
@@ -74,8 +85,18 @@ export function ExamWifiDisconnectOverlay({
 
   return (
     <Modal visible={visible} animationType="fade" transparent={false}>
-      <View style={[styles.screen, { backgroundColor: theme.bg }]}>
-        <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border, shadowColor: theme.text }]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={[styles.screen, { backgroundColor: theme.bg }]}
+      >
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border, shadowColor: theme.text }]}>
           <View style={[styles.iconWrap, { backgroundColor: theme.accentSoft }]}>
             <WifiOff size={36} color={theme.accent} />
           </View>
@@ -212,8 +233,9 @@ export function ExamWifiDisconnectOverlay({
               <Text style={[styles.disclaimer, { color: theme.textMuted }]}>Your answers remain saved locally on this phone.</Text>
             </>
           )}
-        </View>
-      </View>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -221,6 +243,13 @@ export function ExamWifiDisconnectOverlay({
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
+  },
+  scroll: {
+    flex: 1,
+    width: '100%',
+  },
+  scrollContent: {
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,

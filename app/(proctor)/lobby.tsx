@@ -1428,6 +1428,40 @@ function ProctorLobbyContent() {
                 })}
               </View>
 
+              <View style={styles.incidentCard}>
+                <View style={styles.incidentHeader}>
+                  <ShieldAlert size={18} color={LOBBY.danger} />
+                  <Text style={styles.incidentTitle} maxFontSizeMultiplier={1.2}>
+                    Security incidents ({lobby.violationsDetected})
+                  </Text>
+                </View>
+                <Text style={styles.incidentNote} maxFontSizeMultiplier={1.15}>
+                  Detected events are evidence for review; they do not prove the action was blocked.
+                </Text>
+                {(lobby.recentViolations ?? []).slice(0, 5).map((incident) => (
+                  <View key={incident.id} style={styles.incidentRow}>
+                    <View style={styles.incidentText}>
+                      <Text style={styles.incidentStudent} maxFontSizeMultiplier={1.15}>
+                        {incident.studentName} · {incident.type.replace(/_/g, ' ')}
+                      </Text>
+                      {incident.message ? (
+                        <Text style={styles.incidentMessage} maxFontSizeMultiplier={1.15}>
+                          {incident.message}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <Text style={styles.incidentTime} maxFontSizeMultiplier={1.1}>
+                      {formatTime(incident.occurredAt)}
+                    </Text>
+                  </View>
+                ))}
+                {!(lobby.recentViolations ?? []).length ? (
+                  <Text style={styles.incidentEmpty} maxFontSizeMultiplier={1.15}>
+                    No incidents have been reported for this session.
+                  </Text>
+                ) : null}
+              </View>
+
               {activeStatusFilter && currentTab ? (
                 <View style={styles.statusListBlock}>
                   <View style={styles.statusListHeaderRow}>
@@ -2980,6 +3014,64 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 10,
     marginTop: 12,
+  },
+  incidentCard: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E8C8C8',
+    backgroundColor: '#FFF8F7',
+    gap: 8,
+  },
+  incidentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  incidentTitle: {
+    flex: 1,
+    color: LOBBY.danger,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  incidentNote: {
+    color: LOBBY.muted,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  incidentRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingTop: 7,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E8C8C8',
+  },
+  incidentText: {
+    flex: 1,
+    gap: 2,
+  },
+  incidentStudent: {
+    color: LOBBY.ink,
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'capitalize',
+  },
+  incidentMessage: {
+    color: LOBBY.muted,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  incidentTime: {
+    color: LOBBY.muted,
+    fontSize: 10,
+  },
+  incidentEmpty: {
+    color: LOBBY.muted,
+    fontSize: 12,
+    paddingVertical: 6,
   },
   statusCard: {
     // Two equal columns with enough width to stay side by side at 320dp.

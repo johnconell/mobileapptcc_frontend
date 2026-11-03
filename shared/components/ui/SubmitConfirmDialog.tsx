@@ -4,6 +4,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -51,7 +52,7 @@ function SubmitConfirmDialogComponent({
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={[styles.overlay, { backgroundColor: `${isDark ? theme.bg : theme.text}73` }]}
       >
         <Pressable
@@ -60,15 +61,22 @@ function SubmitConfirmDialogComponent({
           accessibilityLabel="Dismiss submit confirmation"
         />
 
-        <View
-          style={[
-            styles.dialogCard,
-            {
-              backgroundColor: theme.surface,
-              borderColor: theme.border,
-            },
-          ]}
+        <ScrollView
+          style={styles.dialogScroll}
+          contentContainerStyle={styles.dialogScrollContent}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          showsVerticalScrollIndicator={false}
         >
+          <View
+            style={[
+              styles.dialogCard,
+              {
+                backgroundColor: theme.surface,
+                borderColor: theme.border,
+              },
+            ]}
+          >
           {/* Title */}
           <Text style={[styles.title, { color: theme.text }]}>
             Submit Examination
@@ -239,7 +247,8 @@ function SubmitConfirmDialogComponent({
               <Text style={[styles.submitText, { color: matches ? theme.onAccent : theme.textMuted }]}>Submit exam</Text>
             </Pressable>
           </Row>
-        </View>
+          </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -253,6 +262,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+  },
+  dialogScroll: {
+    flex: 1,
+    width: '100%',
+  },
+  dialogScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 8,
   },
   dialogCard: {
     width: '100%',

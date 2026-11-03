@@ -5,6 +5,7 @@ import { OfflineExamRepository } from '@/features/synchronization/services/offli
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { appStorage } from '@/shared/services/storage';
 import type { ExamCodeValidation, ExamRoom, ExamSchedule, ExamSession } from '@/shared/types';
+import { getProctorScheduleAvailability } from '@/features/schedules/utils/proctorScheduleWindow';
 
 type BackendSchedule = {
   id: number;
@@ -59,6 +60,8 @@ type BackendRoom = {
   status?: string;
   connected_count?: number;
   can_reopen?: boolean;
+  claim_required?: boolean;
+  authorization_reason?: string | null;
 };
 
 function formatDateLabel(iso?: string | null): string {
@@ -73,24 +76,31 @@ function formatDateLabel(iso?: string | null): string {
 
 function formatTime(value?: string | null): string {
   if (!value) return '';
-  const raw = String(value);
-  if (/^\d{2}:\d{2}/.test(raw)) return raw.slice(0, 5);
-  try {
-    return new Date(`1970-01-01T${raw}`).toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
-  } catch {
-    return raw;
-  }
+  const raw = String(value).trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i);
+  if (!match) return raw;
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const period = match[3]?.toUpperCase();
+  if (minutes > 59 || hours > 23 || (period && hours > 12)) return raw;
+  if (period === 'PM' && hours < 12) hours += 12;
+  if (period === 'AM' && hours === 12) hours = 0;
+  return `${hours % 12 || 12}:${String(minutes).padStart(2, '0')} ${hours < 12 ? 'AM' : 'PM'}`;
+}
+
+function formatTimeRange(value?: string | null): string {
+  if (!value) return '';
+  const parts = String(value).split(/\s*[-–—]\s*/);
+  if (parts.length !== 2) return String(value);
+  const [start, end] = parts.map(formatTime);
+  return start && end ? `${start} – ${end}` : String(value);
 }
 
 function toMobileSession(row: BackendSchedule): ExamSession {
   const examDate = row.exam_date || '';
   const title = row.title || 'Entrance Examination';
   const timeLabel =
-    row.time_slot ||
+    formatTimeRange(row.time_slot) ||
     [formatTime(row.start_time), formatTime(row.end_time)].filter(Boolean).join('–');
 
   return {
@@ -128,9 +138,13 @@ function toMobileRoom(row: BackendRoom, scheduleId: string): ExamRoom {
     assignedProctorName: row.assigned_proctor_name ?? null,
     ownerId: row.owner_id ?? null,
     ownerName: row.owner_name ?? null,
-    canOpen: row.can_open ?? true,
+    canOpen: row.can_open ?? false,
     canControl: row.can_control ?? false,
     canReopen: row.can_reopen !== false,
+    claimRequired:
+      row.claim_required ??
+      (row.assigned_proctor_id == null && row.owner_id == null && row.can_open === true),
+    authorizationReason: row.authorization_reason ?? null,
   };
 }
 
@@ -237,7 +251,9 @@ export const ScheduleRepository = {
   async getSessionsBySchedule(scheduleId: string): Promise<ExamSession[]> {
     const fromPack = async (): Promise<ExamSession[]> => {
       const pack = await OfflineStore.getPack();
-      if (!pack) return [];
+      if (!pack) {
+        throw new Error('The offline examination package is missing. Download it before opening a room.');
+      }
 
       let date: string | null = null;
       let title: string | null = null;
@@ -254,6 +270,9 @@ export const ScheduleRepository = {
         }
         return String(s.id) === String(scheduleId).replace(/^offline-/, '');
       });
+      if (!rows.length) {
+        throw new Error('This examination schedule is missing from the offline package. Update the package before continuing.');
+      }
       return rows
         .map((row) =>
           toMobileSession({
@@ -316,26 +335,130 @@ export const ScheduleRepository = {
   async getRoomsBySession(sessionId: string): Promise<ExamRoom[]> {
     const fromPack = async (): Promise<ExamRoom[]> => {
       const pack = await OfflineStore.getPack();
-      if (!pack) return [];
+      if (!pack) {
+        throw new Error('The offline examination package is missing. Download it before opening a room.');
+      }
       const sid = Number(String(sessionId).replace(/^offline-/, ''));
       const schedule = pack.schedules.find((s) => Number(s.id) === sid);
-      const rooms = schedule?.rooms?.length
-        ? schedule.rooms
-        : [{ id: sid * 1000 + 1, room_name: 'Examination Room', capacity: 40 }];
+      if (!schedule) {
+        throw new Error('This examination schedule is missing from the offline package. Update the package before continuing.');
+      }
+      if (!Array.isArray(schedule.rooms) || !schedule.rooms.length) {
+        throw new Error('Room assignments are missing from the offline package. Update the package before opening a room.');
+      }
+      if (typeof schedule.rooms_managed !== 'boolean') {
+        throw new Error('Room authorization data is outdated. Update the examination package before opening a room.');
+      }
+      const rooms = schedule.rooms;
       const opened = await OfflineStore.getOpenedRooms();
+      const actorId = Number(pack.authorization?.actor_id ?? 0);
+      const authorizationKnown =
+        Number.isInteger(actorId) &&
+        actorId > 0 &&
+        Array.isArray(pack.authorization?.schedule_ids) &&
+        pack.authorization.schedule_ids.some((id) => Number(id) === sid) &&
+        typeof schedule.rooms_managed === 'boolean';
+      const assignedRoomIds = rooms
+        .filter((room) => Number(room.proctor_id) === actorId)
+        .map((room) => Number(room.id));
+      const activeRoomKeys = Object.entries(opened)
+        .filter(([, value]) => value.status === 'lobby_open' || value.status === 'in_progress')
+        .map(([key]) => key);
 
       return rooms.map((row) => {
         const key = OfflineStore.roomKey(sid, row.id);
         const live = opened[key];
         const status = live?.status ?? 'idle';
+        const isLive = status === 'lobby_open' || status === 'in_progress';
+        const liveOwnerId = live?.ownerId != null ? Number(live.ownerId) : null;
+        const ownedByCurrent = Boolean(
+          live && isLive && (liveOwnerId === actorId || liveOwnerId == null),
+        );
+        const ownedByOther = Boolean(
+          live && isLive && liveOwnerId != null && liveOwnerId !== actorId,
+        );
+        const locallyClaimed = ownedByCurrent;
+
+        const roomMetadataKnown =
+          Object.prototype.hasOwnProperty.call(row, 'proctor_id') &&
+          Number(row.examination_schedule_id) === sid;
+        const assignedProctorId = row.proctor_id == null ? null : Number(row.proctor_id);
+        const assignedToCurrent = assignedProctorId === actorId;
+        const assignedToOther = (assignedProctorId != null && !assignedToCurrent) || ownedByOther;
+
+        const hasOtherActiveRoom = activeRoomKeys.some((activeKey) => {
+          if (activeKey === key) return false;
+          const otherLive = opened[activeKey];
+          return otherLive?.ownerId == null || Number(otherLive.ownerId) === actorId;
+        });
+
+        const unassignedEligible =
+          assignedProctorId == null &&
+          !ownedByOther &&
+          assignedRoomIds.length === 0 &&
+          !hasOtherActiveRoom;
+
+        const canOpen =
+          authorizationKnown &&
+          roomMetadataKnown &&
+          !assignedToOther &&
+          !hasOtherActiveRoom &&
+          status !== 'ended' &&
+          getProctorScheduleAvailability(
+            {
+              date: schedule.exam_date || '',
+              startTime: schedule.start_time,
+              endTime: schedule.end_time,
+              timeLabel: schedule.time_slot,
+            },
+            Date.now(),
+          ) === 'active' &&
+          (assignedToCurrent || locallyClaimed || unassignedEligible);
+
+        const claimRequired = unassignedEligible && !locallyClaimed;
+
+        const assignedProctor = pack.proctors?.find((p) => Number(p.id) === assignedProctorId);
+        const assignedProctorName = assignedProctor?.name ?? (assignedToCurrent ? 'You' : assignedProctorId != null ? `Proctor #${assignedProctorId}` : null);
+        const ownerProctor = pack.proctors?.find((p) => Number(p.id) === (live?.ownerId ?? actorId));
+        const ownerName = ownedByCurrent
+          ? (ownerProctor?.name ?? 'You')
+          : ownedByOther
+            ? (live?.proctorName ?? pack.proctors?.find((p) => Number(p.id) === liveOwnerId)?.name ?? `Proctor #${liveOwnerId}`)
+            : null;
+
+        const authorizationReason = !authorizationKnown || !roomMetadataKnown
+          ? 'Room assignment authorization is missing or outdated. Update the examination pack.'
+          : assignedToOther
+            ? 'This room is assigned to another proctor. Please select your assigned room or an available unassigned room.'
+            : hasOtherActiveRoom
+              ? 'You already manage another active examination room.'
+              : assignedProctorId == null && assignedRoomIds.length > 0
+                ? 'You already have an assigned room for this examination schedule.'
+                : null;
+
         return toMobileRoom(
           {
             id: row.id,
             room_name: row.room_name,
             capacity: row.capacity,
+            student_count: pack.registrations.filter(
+              (registration) =>
+                Number(registration.examination_schedule_id) === sid &&
+                Number(registration.assigned_room_id) === Number(row.id),
+            ).length,
+            proctor_id: assignedProctorId,
+            proctor_name: assignedProctorName,
+            assigned_proctor_id: assignedProctorId,
+            assigned_proctor_name: assignedProctorName,
             examination_code: live?.code ?? null,
             status,
             connected_count: 0,
+            owner_id: ownedByCurrent ? actorId : liveOwnerId,
+            owner_name: ownerName,
+            can_open: canOpen,
+            can_control: ownedByCurrent,
+            claim_required: claimRequired,
+            authorization_reason: authorizationReason,
             // Match Laravel ExamSessionService::roomsForSchedule —
             // idle/active rooms can open; ended rooms cannot reopen.
             can_reopen: status !== 'ended',
@@ -345,7 +468,9 @@ export const ScheduleRepository = {
       });
     };
 
-    if (await OfflineStore.hasPack()) {
+    const hasPack = await OfflineStore.hasPack();
+    const networkState = await Network.getNetworkStateAsync().catch(() => null);
+    if (hasPack && networkState?.isInternetReachable !== true) {
       return fromPack();
     }
 
@@ -377,7 +502,7 @@ export const ScheduleRepository = {
       if (error instanceof ApiError && error.status === 403) {
         throw new Error(error.message || 'This schedule is not in the current academic year and cannot be downloaded.');
       }
-      if (await OfflineStore.hasPack()) {
+      if (hasPack) {
         await OfflineStore.setOfflineMode(true);
         return fromPack();
       }

@@ -10,7 +10,14 @@ export type OfflineRoomSchedule = {
     id: number;
     examination_schedule_id?: number;
     room_name?: string;
+    proctor_id?: number | null;
   }>;
+};
+
+export type OfflinePackAuthorization = {
+  actor_id: number | null;
+  scope: 'assigned_rooms' | 'administrator';
+  schedule_ids: number[];
 };
 
 export type OfflineRoomRegistration = {
@@ -25,7 +32,10 @@ export type OfflineRoomDecision =
       code:
         | 'wrong_schedule'
         | 'wrong_room'
-        | 'assignment_data_unavailable';
+        | 'assignment_data_unavailable'
+        | 'unauthorized_proctor'
+        | 'online_claim_required'
+        | 'active_room_conflict';
       message: string;
       recoveryRequired: boolean;
     };
@@ -53,7 +63,8 @@ export function validateOfflineRoomAssignment(input: {
     return {
       ok: false,
       code: 'wrong_schedule',
-      message: 'This examination key is not valid for the examination open in this room.',
+      message:
+        'You are not scheduled for this examination session. Please check your assigned examination date and time.',
       recoveryRequired: false,
     };
   }
@@ -61,7 +72,8 @@ export function validateOfflineRoomAssignment(input: {
     return {
       ok: false,
       code: 'wrong_schedule',
-      message: 'This examination key is not valid for the examination open in this room.',
+      message:
+        'You are not scheduled for this examination session. Please check your assigned examination date and time.',
       recoveryRequired: false,
     };
   }
@@ -107,15 +119,106 @@ export function validateOfflineRoomAssignment(input: {
     };
   }
   if (assignedRoomId !== targetRoomId) {
+    const roomName = assignedRoom.room_name?.trim() || `Room ${assignedRoomId}`;
     return {
       ok: false,
       code: 'wrong_room',
-      message:
-        'Your room assignment does not match the examination room currently open. Ask the proctor for assistance.',
+      message: `You are assigned to ${roomName}. Please connect to your assigned examination room.`,
       recoveryRequired: false,
     };
   }
   return { ok: true };
+}
+
+export function validateOfflineProctorRoom(input: {
+  authorization: OfflinePackAuthorization | undefined;
+  schedule: OfflineRoomSchedule | undefined;
+  authority: OfflineRoomAuthority;
+  locallyClaimed?: boolean;
+  hasOtherActiveRoom?: boolean;
+  claimConfirmed?: boolean;
+}): OfflineRoomDecision {
+  const { authorization, schedule, authority } = input;
+  const hostRoom = validateOfflineHostRoom({ schedule, authority });
+  if (!hostRoom.ok) return hostRoom;
+
+  const actorId = positiveInteger(authorization?.actor_id);
+  const scheduleId = positiveInteger(authority.scheduleId);
+  if (
+    !actorId ||
+    !scheduleId ||
+    !authorization ||
+    !authorization.schedule_ids.some((id) => Number(id) === scheduleId)
+  ) {
+    return {
+      ok: false,
+      code: 'assignment_data_unavailable',
+      message:
+        'Room authorization is missing or does not belong to the signed-in proctor. Update the examination pack while signed in to the correct account.',
+      recoveryRequired: true,
+    };
+  }
+
+  const roomId = positiveInteger(authority.roomId);
+  const room = schedule?.rooms?.find((candidate) => Number(candidate.id) === roomId);
+  if (!room || !Object.prototype.hasOwnProperty.call(room, 'proctor_id')) {
+    return {
+      ok: false,
+      code: 'assignment_data_unavailable',
+      message: RECOVERY_MESSAGE,
+      recoveryRequired: true,
+    };
+  }
+
+  if (authorization.scope === 'administrator') return { ok: true };
+
+  const assignedProctorId = positiveInteger(room.proctor_id);
+  if (assignedProctorId && assignedProctorId !== actorId) {
+    return {
+      ok: false,
+      code: 'unauthorized_proctor',
+      message:
+        'This room is assigned to another proctor. Please select your assigned room or an available unassigned room.',
+      recoveryRequired: false,
+    };
+  }
+  if (assignedProctorId === actorId) {
+    if (input.hasOtherActiveRoom) {
+      return {
+        ok: false,
+        code: 'active_room_conflict',
+        message: 'You already manage another active examination room. Close it before opening this room.',
+        recoveryRequired: false,
+      };
+    }
+    return { ok: true };
+  }
+
+  if (input.locallyClaimed) return { ok: true };
+
+  const hasAssignedDuty = schedule?.rooms?.some(
+    (candidate) => positiveInteger(candidate.proctor_id) === actorId,
+  );
+  if (hasAssignedDuty || input.hasOtherActiveRoom) {
+    return {
+      ok: false,
+      code: 'active_room_conflict',
+      message: hasAssignedDuty
+        ? 'You already have an assigned room for this examination schedule. Please open your assigned room.'
+        : 'You already manage another active examination room. Close it before claiming this room.',
+      recoveryRequired: false,
+    };
+  }
+
+  if (input.claimConfirmed) return { ok: true };
+
+  return {
+    ok: false,
+    code: 'online_claim_required',
+    message:
+      'This room is unassigned. Please confirm the room claim before opening the examination room.',
+    recoveryRequired: false,
+  };
 }
 
 export function validateOfflineHostRoom(input: {

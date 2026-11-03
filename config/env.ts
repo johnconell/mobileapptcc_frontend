@@ -6,7 +6,6 @@ export {
   getApiBaseUrl,
   getAuthApiBaseUrl,
   getCloudApiBaseUrl,
-  getSyncToken,
   setLanApiUrl,
   clearLanApiUrl,
   hydrateApiBaseUrl,

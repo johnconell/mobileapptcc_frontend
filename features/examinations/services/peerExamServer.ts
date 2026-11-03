@@ -1,5 +1,6 @@
 import * as Crypto from 'expo-crypto';
 import * as Network from 'expo-network';
+import { bytesToHex } from '@noble/ciphers/utils.js';
 
 import {
   buildExamQuestions,
@@ -10,10 +11,24 @@ import {
   type ChoiceDisplayMap,
 } from '@/features/synchronization/services/offlineExamRepository';
 import { OfflineStore, computePackHash, computePackHashAsync, type OfflinePack } from '@/features/synchronization/services/offlineStore';
+import {
+  createPeerIdentity,
+  createPeerServerHandshake,
+  decryptPeerPayload,
+  encryptPeerPayload,
+  type PeerCiphertext,
+} from '@/features/examinations/services/peerTransportCrypto';
 import { resolveWifiLanIp } from '@/features/monitoring/services/wifiLanIp';
 import { clampViolationLimit } from '@/shared/utils/violationLimit';
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
-import { validateOfflineHostRoom } from '@/features/examinations/services/offlineRoomAssignment';
+import {
+  formatScheduleOpeningTime,
+  getProctorScheduleAvailability,
+} from '@/features/schedules/utils/proctorScheduleWindow';
+import {
+  validateOfflineHostRoom,
+  validateOfflineProctorRoom,
+} from '@/features/examinations/services/offlineRoomAssignment';
 import type {
   ExamTerminationReason,
   LobbySnapshot,
@@ -96,11 +111,14 @@ type PeerStudentState = {
 
 type PeerViolation = {
   id: number;
+  clientEventId: string;
   registration_id: number;
   studentName: string;
   studentId: string;
   type: string;
   message?: string | null;
+  attemptRef?: string | null;
+  deviceId?: string | null;
   violationCount: number;
   occurredAt: string;
 };
@@ -122,6 +140,8 @@ type PeerSessionState = {
   removedStudents?: Record<string, { registrationId: number; reason: string; removedAt: string }>;
   violations: PeerViolation[];
   violationSeq: number;
+  peerIdentityPrivateKey?: string;
+  peerIdentityPublicKey?: string;
   wifiSsid?: string | null;
   startSeq: number;
 };
@@ -143,6 +163,7 @@ let hostIp: string | null = null;
 let listeners: Array<() => void> = [];
 let examWatchdog: ReturnType<typeof setInterval> | null = null;
 let endingExam = false;
+const activePeerSessions = new Map<string, { key: Uint8Array; sequence: number }>();
 
 // Performance optimizations & Bulletproof Caching
 let _cachedSnapshot: LobbySnapshot | null = null;
@@ -152,6 +173,10 @@ let _resolvedCache: any = null;
 let _resolvedAt = 0;
 let _builtQuestionsCache: Question[] | null = null;
 let _builtQuestionsHash: string | null = null;
+
+async function randomHex(byteLength: number): Promise<string> {
+  return bytesToHex(await Crypto.getRandomBytesAsync(byteLength));
+}
 
 async function getOrBuildQuestions(pack: OfflinePack): Promise<{ questions: Question[]; hash: string }> {
   if (!_builtQuestionsCache || !_builtQuestionsHash) {
@@ -631,8 +656,8 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
     warningCount: warning,
     terminatedCount: terminated,
     disconnectedCount: disconnected,
-    violationsDetected: 0,
-    recentViolations: [],
+    violationsDetected: state.violations.length,
+    recentViolations: state.violations.slice(-20).reverse(),
     students,
     can_control: true,
     is_owner: true,
@@ -650,6 +675,9 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
  * the student app can talk directly to it with no Laravel server involved.
  */
 export function peerQrPayload(state: PeerSessionState): string {
+  if (!state.peerIdentityPublicKey) {
+    throw new Error('Secure peer identity is not initialized. Reopen the proctor room.');
+  }
   return JSON.stringify({
     type: 'metcc_peer',
     c: state.examCode,
@@ -658,6 +686,7 @@ export function peerQrPayload(state: PeerSessionState): string {
     s: state.scheduleId,
     r: state.roomId,
     w: state.wifiSsid,
+    k: state.peerIdentityPublicKey,
   });
 }
 
@@ -668,6 +697,7 @@ export type PeerQrTarget = {
   scheduleId?: number | null;
   roomId?: number | null;
   wifiSsid?: string | null;
+  peerPublicKey: string;
 };
 
 /** Read a scanned QR string; returns null when it is not a peer QR. */
@@ -719,6 +749,8 @@ export function parsePeerQr(raw: string): PeerQrTarget | null {
       : parsed.wifiSsid
       ? String(parsed.wifiSsid)
       : null;
+    const peerPublicKey = String(parsed.k ?? parsed.peer_public_key ?? '').trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(peerPublicKey)) return null;
     return {
       host,
       port:
@@ -733,6 +765,7 @@ export function parsePeerQr(raw: string): PeerQrTarget | null {
       scheduleId,
       roomId,
       wifiSsid,
+      peerPublicKey,
     };
   } catch {
     return null;
@@ -744,6 +777,103 @@ function registerRoutes(mod: HttpServerModule) {
   routesRegistered = true;
 
   const p = (path: string) => `${PEER_PATH_PREFIX}${path}`;
+  const handlers = new Map<string, (request: any) => Promise<JsonResponse>>();
+  const secureRoute = (
+    path: string,
+    method: string,
+    handler: (request: any) => Promise<JsonResponse>,
+  ) => {
+    handlers.set(`${method.toUpperCase()}:${path}`, handler);
+  };
+
+  mod.route(p('/handshake'), 'POST', async (request) => {
+    if (!session?.peerIdentityPrivateKey) {
+      return fail(503, 'Secure peer identity is not initialized.');
+    }
+
+    const body = parseBody(request.body);
+    const clientPublicKey = String(body.client_public_key ?? '').toLowerCase();
+    const clientNonce = String(body.client_nonce ?? '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(clientPublicKey) || !/^[0-9a-f]{32}$/.test(clientNonce)) {
+      return fail(422, 'Invalid secure peer handshake.');
+    }
+
+    try {
+      const sessionId = await randomHex(16);
+      const serverNonce = await randomHex(16);
+      const handshake = createPeerServerHandshake({
+        identityPrivateKey: session.peerIdentityPrivateKey,
+        clientPublicKey,
+        clientNonce,
+        serverEphemeralPrivateKey: await randomHex(32),
+        serverNonce,
+        sessionId,
+      });
+      activePeerSessions.set(sessionId, { key: handshake.sessionKey, sequence: 0 });
+      return ok(handshake.response);
+    } catch {
+      return fail(422, 'Secure peer handshake was rejected.');
+    }
+  });
+
+  mod.route(p('/secure'), 'POST', async (request) => {
+    const outer = parseBody(request.body);
+    const message = outer as unknown as PeerCiphertext;
+    const peerSession = activePeerSessions.get(String(message.session_id ?? ''));
+    if (!peerSession) return fail(401, 'Secure peer session expired. Reconnect using the current room QR code.');
+    if (!Number.isSafeInteger(message.sequence) || message.sequence !== peerSession.sequence + 1) {
+      return fail(409, 'Secure peer message is out of sequence. Reconnect and retry.');
+    }
+
+    let envelope: {
+      path: string;
+      method: string;
+      query?: Record<string, string>;
+      body?: unknown;
+    };
+    try {
+      envelope = decryptPeerPayload(peerSession.key, message, 'POST', p('/secure'));
+    } catch {
+      return fail(400, 'Secure peer request authentication failed.');
+    }
+
+    const path = String(envelope.path ?? '');
+    const method = String(envelope.method ?? '').toUpperCase();
+    if (!path.startsWith(`${PEER_PATH_PREFIX}/`) || path === p('/secure') || path === p('/handshake')) {
+      return fail(404, 'Unknown secure peer route.');
+    }
+    const handler = handlers.get(`${method}:${path}`);
+    if (!handler) return fail(404, 'Unknown secure peer route.');
+
+    peerSession.sequence = message.sequence;
+    const query = new URLSearchParams(envelope.query ?? {}).toString();
+    const response = await handler({
+      ...request,
+      method,
+      path,
+      url: query ? `${path}?${query}` : path,
+      body: envelope.body === undefined ? '' : JSON.stringify(envelope.body),
+    });
+    const responseBody = {
+      status: response.statusCode ?? response.status ?? 200,
+      body: response.body ?? '',
+    };
+    const encrypted = encryptPeerPayload(
+      peerSession.key,
+      message.session_id,
+      message.sequence,
+      method,
+      path,
+      responseBody,
+      await randomHex(12),
+    );
+    return {
+      statusCode: 200,
+      contentType: 'application/json',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(encrypted),
+    };
+  });
 
   const handleHealth = async () => {
     return ok({
@@ -753,8 +883,8 @@ function registerRoutes(mod: HttpServerModule) {
       session_status: session?.status ?? null,
     });
   };
-  mod.route(p('/health'), 'GET', handleHealth);
-  mod.route(p('/health'), 'POST', handleHealth);
+  secureRoute(p('/health'), 'GET', handleHealth);
+  secureRoute(p('/health'), 'POST', handleHealth);
 
   /**
    * Ultra-fast signal endpoint (Minecraft-style).
@@ -776,8 +906,8 @@ function registerRoutes(mod: HttpServerModule) {
     }
     return ok(statusPayload(student, token));
   };
-  mod.route(p('/status'), 'GET', handleStatus);
-  mod.route(p('/status'), 'POST', handleStatus);
+  secureRoute(p('/status'), 'GET', handleStatus);
+  secureRoute(p('/status'), 'POST', handleStatus);
 
   const handlePing = async () => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
@@ -788,10 +918,10 @@ function registerRoutes(mod: HttpServerModule) {
       room_id: session.roomId,
     });
   };
-  mod.route(p('/ping'), 'GET', handlePing);
-  mod.route(p('/ping'), 'POST', handlePing);
+  secureRoute(p('/ping'), 'GET', handlePing);
+  secureRoute(p('/ping'), 'POST', handlePing);
 
-  mod.route(p('/resolve'), 'POST', async (request) => {
+  secureRoute(p('/resolve'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     if (session.status === 'ended') {
       return fail(409, 'This examination has already ended and is no longer available for applicants.');
@@ -818,7 +948,7 @@ function registerRoutes(mod: HttpServerModule) {
     );
   });
 
-  mod.route(p('/passkey'), 'POST', async (request) => {
+  secureRoute(p('/passkey'), 'POST', async (request) => {
     if (__DEV__) {
       console.log('[PEER SERVER] passkey request reached proctor', {
         hostIp,
@@ -917,7 +1047,7 @@ function registerRoutes(mod: HttpServerModule) {
    * STEP 11: Applicant downloads complete examination package BEFORE entering lobby.
    * Serves questions (without answer keys), duration, and package SHA-256 hash.
    */
-  mod.route(p('/package'), 'POST', async (request) => {
+  secureRoute(p('/package'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
     const passkey = String(body.passkey ?? '').trim().toUpperCase();
@@ -928,6 +1058,13 @@ function registerRoutes(mod: HttpServerModule) {
       passkey,
       peerAuthority(session),
     );
+    if (validated?.classification === 'wrong_schedule') {
+      return fail(
+        409,
+        validated.message ||
+          'You are not scheduled for this examination session. Please check your assigned examination date and time.',
+      );
+    }
     if (validated?.classification === 'already_completed') {
       return fail(403, 'Examination Already Completed: Multiple attempts are not permitted.');
     }
@@ -994,7 +1131,7 @@ function registerRoutes(mod: HttpServerModule) {
     });
   });
 
-  mod.route(p('/join'), 'POST', async (request) => {
+  secureRoute(p('/join'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     if (session.status === 'ended') {
       return fail(409, 'This examination has already ended.');
@@ -1018,7 +1155,11 @@ function registerRoutes(mod: HttpServerModule) {
     );
     if (!validated) return fail(404, 'Invalid examination key for this examination.');
     if (validated.classification === 'wrong_schedule') {
-      return fail(409, validated.message || 'This examination key belongs to a different schedule.');
+      return fail(
+        409,
+        validated.message ||
+          'You are not scheduled for this examination session. Please check your assigned examination date and time.',
+      );
     }
 
     const joinAdmissionFailure = passkeyAdmissionFailure(validated);
@@ -1167,7 +1308,7 @@ function registerRoutes(mod: HttpServerModule) {
     }
   });
 
-  mod.route(p('/lobby'), 'GET', async (request) => {
+  secureRoute(p('/lobby'), 'GET', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const params = parseParams(request);
     const token = params.participation_token ?? '';
@@ -1200,7 +1341,7 @@ function registerRoutes(mod: HttpServerModule) {
     });
   });
 
-  mod.route(p('/leave'), 'POST', async (request) => {
+  secureRoute(p('/leave'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
     const token = String(body.participation_token ?? '');
@@ -1216,7 +1357,7 @@ function registerRoutes(mod: HttpServerModule) {
     return ok({ left: true });
   });
 
-  mod.route(p('/questions'), 'GET', async (request) => {
+  secureRoute(p('/questions'), 'GET', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const params = parseParams(request);
     const student = studentByToken(params.participation_token ?? '');
@@ -1256,7 +1397,7 @@ function registerRoutes(mod: HttpServerModule) {
     });
   });
 
-  mod.route(p('/questions'), 'POST', async (request) => {
+  secureRoute(p('/questions'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
     const token = String(body.participation_token ?? parseParams(request).participation_token ?? '');
@@ -1289,7 +1430,7 @@ function registerRoutes(mod: HttpServerModule) {
     });
   });
 
-  mod.route(p('/answers'), 'POST', async (request) => {
+  secureRoute(p('/answers'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
@@ -1316,7 +1457,7 @@ function registerRoutes(mod: HttpServerModule) {
     return ok({ saved: Object.keys(student.answers).length });
   });
 
-  mod.route(p('/submit'), 'POST', async (request) => {
+  secureRoute(p('/submit'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
@@ -1419,21 +1560,99 @@ function registerRoutes(mod: HttpServerModule) {
     return ok({ submitted: true, items_total: graded.items_total });
   });
 
-  mod.route(p('/violation'), 'POST', async (request) => {
+  secureRoute(p('/violation'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
     if (!student) return fail(404, 'You are no longer joined to this examination.');
 
-    // Violation tracking is disabled: mandatory screen pinning physically enforces security.
+    const clientEventId = typeof body.local_event_id === 'string'
+      ? body.local_event_id.trim()
+      : '';
+    const type = typeof body.type === 'string' ? body.type.trim() : '';
+    const rawMessage = body.message;
+    const rawAttemptRef = body.attempt_ref;
+    const rawDeviceId = body.device_id;
+    const validTypes = new Set([
+      'app_background',
+      'app_inactive',
+      'app_blur',
+      'screen_lock',
+      'screenshot',
+      'screen_recording',
+      'leave_attempt',
+      'kiosk_lock_failed',
+      'lock_task_state_lost',
+      'app_exit_during_lock',
+      'guided_access_lost',
+    ]);
+    if (
+      !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(clientEventId) ||
+      !validTypes.has(type) ||
+      (rawMessage != null && (typeof rawMessage !== 'string' || rawMessage.length > 500)) ||
+      (rawAttemptRef != null && (typeof rawAttemptRef !== 'string' || !/^[0-9a-f]{64}$/i.test(rawAttemptRef))) ||
+      (rawDeviceId != null && (typeof rawDeviceId !== 'string' || rawDeviceId.length > 120))
+    ) {
+      return fail(422, 'Invalid security incident data.');
+    }
+
+    const providedDeviceId = typeof rawDeviceId === 'string' ? rawDeviceId.trim() : '';
+    const attemptRef = typeof rawAttemptRef === 'string' ? rawAttemptRef.toLowerCase() : null;
+    const message = typeof rawMessage === 'string' ? rawMessage.slice(0, 500) || null : null;
+    const existing = session.violations.find((violation) => violation.clientEventId === clientEventId);
+    if (existing) {
+      if (
+        existing.type !== type ||
+        existing.message !== message ||
+        existing.attemptRef !== attemptRef ||
+        existing.deviceId !== (providedDeviceId || student.deviceId || null)
+      ) {
+        return fail(409, 'This incident ID was already used with different incident data.');
+      }
+      return ok({
+        acknowledged: true,
+        violation_id: existing.id,
+        violation_count: existing.violationCount,
+        duplicate: true,
+        lobby_status: student.status,
+      });
+    }
+
+    if (student.deviceId && providedDeviceId && student.deviceId !== providedDeviceId) {
+      return fail(403, 'Security incident device does not match the joined device.');
+    }
+
+    const violationCount = student.violationCount + 1;
+    const violation: PeerViolation = {
+      id: ++session.violationSeq,
+      clientEventId,
+      registration_id: student.registrationId,
+      studentName: student.fullName,
+      studentId: student.applicantCode,
+      type,
+      message,
+      attemptRef,
+      deviceId: providedDeviceId || student.deviceId || null,
+      violationCount,
+      occurredAt: new Date().toISOString(),
+    };
+    student.violationCount = violationCount;
+    student.lastActivityAt = violation.occurredAt;
+    session.violations.push(violation);
+    invalidateSnapshot();
+    await persist();
+    notify();
+
     return ok({
-      violation_count: 0,
-      violation_limit: 0,
+      acknowledged: true,
+      violation_id: violation.id,
+      violation_count: violationCount,
+      duplicate: false,
       lobby_status: student.status,
     });
   });
 
-  mod.route(p('/heartbeat'), 'POST', async (request) => {
+  secureRoute(p('/heartbeat'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
     const token = String(body.participation_token ?? '');
@@ -1520,7 +1739,7 @@ function registerRoutes(mod: HttpServerModule) {
     });
   });
 
-  mod.route(p('/ack-start'), 'POST', async (request) => {
+  secureRoute(p('/ack-start'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
@@ -1541,7 +1760,7 @@ function registerRoutes(mod: HttpServerModule) {
     });
   });
 
-  mod.route(p('/allow-reconnect'), 'POST', async (request) => {
+  secureRoute(p('/allow-reconnect'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
     const registrationId = Number(body.registration_id ?? 0);
@@ -1569,7 +1788,7 @@ function registerRoutes(mod: HttpServerModule) {
     });
   });
 
-  mod.route(p('/reconnect'), 'POST', async (request) => {
+  secureRoute(p('/reconnect'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
     const body = parseBody(request.body);
     const token = String(body.participation_token ?? '');
@@ -1830,6 +2049,57 @@ export const PeerExamServer = {
     if (!hostRoomDecision.ok) {
       throw new Error(hostRoomDecision.message);
     }
+    const openedRooms = await OfflineStore.getOpenedRooms();
+    const roomKey = OfflineStore.roomKey(scheduleId, roomId ?? 0);
+    const locallyClaimed = ['lobby_open', 'in_progress'].includes(openedRooms[roomKey]?.status);
+    const hasOtherActiveRoom = Object.entries(openedRooms).some(
+      ([key, value]) =>
+        key !== roomKey && (value.status === 'lobby_open' || value.status === 'in_progress'),
+    );
+    const proctorRoomDecision = validateOfflineProctorRoom({
+      authorization: pack.authorization,
+      schedule,
+      authority: { scheduleId, roomId },
+      locallyClaimed,
+      hasOtherActiveRoom,
+    });
+    if (!proctorRoomDecision.ok) {
+      throw new Error(proctorRoomDecision.message);
+    }
+
+    const reopening =
+      session &&
+      session.scheduleId === scheduleId &&
+      session.roomId === roomId &&
+      session.status !== 'ended' &&
+      session.examCode === input.examCode.trim().toUpperCase();
+    const availability = getProctorScheduleAvailability(
+      {
+        date: schedule?.exam_date || '',
+        startTime: schedule?.start_time,
+        endTime: schedule?.end_time,
+        timeLabel: schedule?.time_slot,
+      },
+      Date.now(),
+    );
+    if (!reopening && availability !== 'available') {
+      const opensAt = formatScheduleOpeningTime({
+        date: schedule?.exam_date || '',
+        startTime: schedule?.start_time,
+        timeLabel: schedule?.time_slot,
+      });
+      throw new Error(
+        availability === 'too_early'
+          ? opensAt
+            ? `The room opens at ${opensAt}.`
+            : 'The room is not available yet. Wait until the schedule opens.'
+          : availability === 'ended'
+            ? 'This examination schedule has ended.'
+            : availability === 'not_available'
+              ? "Only today's examination schedule can be opened."
+              : 'This examination schedule has an invalid time window.',
+      );
+    }
 
     const lan = await resolveWifiLanIp();
     hostIp = lan.ip;
@@ -1857,13 +2127,6 @@ export const PeerExamServer = {
           : 'This phone has no Wi‑Fi address. Connect to the exam Wi‑Fi (or turn on a hotspot) and try again.',
       );
     }
-
-    const reopening =
-      session &&
-      session.scheduleId === scheduleId &&
-      session.roomId === roomId &&
-      session.status !== 'ended' &&
-      session.examCode === input.examCode.trim().toUpperCase();
 
     // Reset when switching rooms/schedules, after end, or when minting a new exam code.
     if (session && !reopening) {
@@ -1895,10 +2158,26 @@ export const PeerExamServer = {
         tokenMap: {},
         violations: [],
         violationSeq: 0,
+        peerIdentityPrivateKey: undefined,
+        peerIdentityPublicKey: undefined,
         wifiSsid,
         startSeq: 0,
       };
+      activePeerSessions.clear();
       invalidateSnapshot();
+    }
+
+    const identityPrivateKey = session?.peerIdentityPrivateKey ?? '';
+    const identityPublicKey = session?.peerIdentityPublicKey ?? '';
+    const identityIsValid =
+      /^[0-9a-f]{64}$/i.test(identityPrivateKey) &&
+      /^[0-9a-f]{64}$/i.test(identityPublicKey) &&
+      createPeerIdentity(identityPrivateKey).publicKey === identityPublicKey.toLowerCase();
+    if (!identityIsValid && session) {
+      const privateKey = await randomHex(32);
+      session.peerIdentityPrivateKey = privateKey;
+      session.peerIdentityPublicKey = createPeerIdentity(privateKey).publicKey;
+      activePeerSessions.clear();
     }
 
     if (listenerState === 'stopped') {
@@ -2119,6 +2398,7 @@ export const PeerExamServer = {
     stopExamWatchdog();
     await this.stop();
     session = null;
+    activePeerSessions.clear();
     hostIp = null;
     invalidateSnapshot();
     await OfflineStore.clearPeerSession();

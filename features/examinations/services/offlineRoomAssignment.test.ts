@@ -38,7 +38,7 @@ test('offline room contract rejects a registration assigned to another room', ()
   if (!result.ok) {
     assert.equal(result.code, 'wrong_room');
     assert.equal(result.recoveryRequired, false);
-    assert.doesNotMatch(result.message, /Room A\b|Room B\b|Applicant/i);
+    assert.equal(result.message, 'You are assigned to Room B. Please connect to your assigned examination room.');
   }
 });
 
@@ -143,7 +143,10 @@ test('REGRESSION-ROOM-001: Single schedule with two rooms (Room 201 and Room 202
   if (!wrongRoomAttempt.ok) {
     assert.equal(wrongRoomAttempt.code, 'wrong_room');
     assert.equal(wrongRoomAttempt.recoveryRequired, false);
-    assert.match(wrongRoomAttempt.message, /room assignment does not match/i);
+    assert.equal(
+      wrongRoomAttempt.message,
+      'You are assigned to Room 201 - Lab 1. Please connect to your assigned examination room.',
+    );
   }
 
   // 2. Candidate assigned to Room 201 entering Room 201 -> ok: true

@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { DeviceEventEmitter } from 'react-native';
+import { AppState, DeviceEventEmitter } from 'react-native';
+import * as Network from 'expo-network';
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
+import { SecurityRepository } from '@/features/examinations/repositories/SecurityRepository';
 import { useAppState } from '@/shared/hooks/useAppState';
 import { useKioskMode } from '@/features/examinations/hooks/useKioskMode';
+import { useViolationMonitor } from '@/features/monitoring/hooks/useViolationMonitor';
 import type { ExamSecurityCapabilities, SecurityViolationType } from '@/shared/types';
 
 interface UseExamSecurityOptions {
@@ -15,11 +18,10 @@ interface UseExamSecurityOptions {
   onRequestSubmit?: () => void;
 }
 
-const LEAVE_MESSAGE = 'Screen Pinning is active. Leaving the examination is prohibited.';
+const LEAVE_MESSAGE = 'Remain in the examination. Leaving the app may be detected and reported.';
 
 /**
- * Orchestrates Secure Examination / Kiosk Mode.
- * Mandatory screen pinning enforces kiosk containment; violation tracking is disabled.
+ * Orchestrates best-effort exam restrictions and records detected security events.
  */
 export function useExamSecurity(options: UseExamSecurityOptions) {
   const {
@@ -34,25 +36,34 @@ export function useExamSecurity(options: UseExamSecurityOptions) {
   const armedRef = useRef(false);
   const suppressUntilRef = useRef(0);
   const pausedRef = useRef(false);
+  const incidentMonitor = useViolationMonitor({
+    enabled,
+    sessionId: options.sessionId,
+    studentId: options.studentId,
+    studentName: options.studentName,
+  });
+  const recordViolation = incidentMonitor.recordViolation;
 
   useEffect(() => {
     pausedRef.current = paused;
   }, [paused]);
 
   const handleSecurityEvent = useCallback(
-    (_type: SecurityViolationType) => {
+    (type: SecurityViolationType) => {
       if (!enabled || !armedRef.current) return;
       if (Date.now() < suppressUntilRef.current) return;
-      if (pausedRef.current) return;
-
-      // Show reminder warning to remain in the exam screen
-      setPaused(true);
-      setWarningVisible(true);
-      setWarningMessage(
-        'Warning: You navigated away from the examination. Screen pinning is required to continue. Please remain on this screen.'
+      void recordViolation(type).catch((error) =>
+        console.error('[SECURITY INCIDENT] Could not record detected event.', error),
       );
+      if (!pausedRef.current) {
+        setPaused(true);
+        setWarningVisible(true);
+        setWarningMessage(
+          'A security-related event was detected and recorded for proctor review. Detection does not prevent leaving the app.'
+        );
+      }
     },
-    [enabled],
+    [enabled, recordViolation],
   );
 
   const handleReturnToExam = useCallback(() => {
@@ -91,6 +102,33 @@ export function useExamSecurity(options: UseExamSecurityOptions) {
       }
     },
   });
+
+  useEffect(() => {
+    if (!enabled) return;
+    const retryPending = () => {
+      void SecurityRepository.flushPending().catch((error) =>
+        console.error('[SECURITY INCIDENT] Could not retry incident delivery.', error),
+      );
+    };
+
+    retryPending();
+    const retryTimer = setInterval(retryPending, 15_000);
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        retryPending();
+      }
+    });
+    const networkSubscription = Network.addNetworkStateListener((state) => {
+      if (state.isConnected) {
+        retryPending();
+      }
+    });
+    return () => {
+      clearInterval(retryTimer);
+      subscription.remove();
+      networkSubscription.remove();
+    };
+  }, [enabled]);
 
   useEffect(() => {
     if (!enabled) {
@@ -174,12 +212,12 @@ export function useExamSecurity(options: UseExamSecurityOptions) {
     warningVisible,
     warningMessage,
     capabilities,
-    violationCount: 0,
-    maxViolations: 0,
-    latestViolation: null,
+    violationCount: incidentMonitor.violationCount,
+    maxViolations: incidentMonitor.maxViolations,
+    latestViolation: incidentMonitor.latestViolation,
     acknowledgeWarning,
     requestSubmitFromWarning,
-    recordViolation: async () => null,
-    setViolationCount: () => {},
+    recordViolation,
+    setViolationCount: incidentMonitor.setViolationCount,
   };
 }

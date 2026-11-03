@@ -222,6 +222,7 @@ export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
       ) {
         exam.restoreProgress({
           answers: checkpoint.answers,
+          currentIndex: checkpoint.currentIndex,
           remainingSeconds: checkpoint.remainingSeconds,
           startedAt: checkpoint.startedAt,
         });

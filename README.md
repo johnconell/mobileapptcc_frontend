@@ -33,9 +33,11 @@ Copy `.env.example` → `.env`. Restart Expo after changes (`npx expo start -c`)
 |----------|---------|
 | `EXPO_PUBLIC_API_URL` | Default API base (exam + lobby traffic) |
 | `EXPO_PUBLIC_CLOUD_API_URL` | Cloud API for **proctor login** and sync |
-| `EXPO_PUBLIC_SYNC_TOKEN` | Admin/LAN sync token (must match backend) |
 
 On a **physical phone**, do not use `127.0.0.1` — use your PC’s LAN IP when testing against local Laravel.
+Result uploads use the signed-in proctor's Sanctum session and are restricted to assigned examination rooms. Never put a shared sync credential in an `EXPO_PUBLIC_*` variable or a mobile build.
+
+If a shared sync credential was ever included in a mobile build, treat it as compromised and revoke that exact credential wherever it is accepted. For the server-to-server `/sync` credential, replace `ADMIN_SYNC_TOKEN` on the central server and every LAN server with a newly generated secret, then run `php artisan config:clear` and `php artisan config:cache` on each host. Remove old values from build variables and release pipelines; changing only the mobile source does not revoke a deployed credential. Existing proctor sessions can be revoked individually by logging out or revoking their Sanctum tokens. If a distinct public token was used, rotate that token at its accepting service too.
 
 ## Setup & run
 

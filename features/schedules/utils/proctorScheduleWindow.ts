@@ -32,6 +32,47 @@ function parseTime(value?: string | null): { hours: number; minutes: number } | 
   return { hours, minutes };
 }
 
+function getScheduleStartEpoch(input: ScheduleTimeInput): number | null {
+  const times = getScheduleTimes(input);
+  if (!times || !/^\d{4}-\d{2}-\d{2}$/.test(input.date)) return null;
+  const start = Date.parse(
+    `${input.date}T${String(times.start.hours).padStart(2, '0')}:${String(times.start.minutes).padStart(2, '0')}:00+08:00`,
+  );
+  return Number.isFinite(start) ? start : null;
+}
+
+export function getScheduleTimelinePhase(
+  input: ScheduleTimeInput,
+  nowMs: number,
+): 'active' | 'upcoming' | 'completed' | 'invalid' {
+  const times = getScheduleTimes(input);
+  const start = getScheduleStartEpoch(input);
+  if (!times || start === null) return 'invalid';
+  const end = Date.parse(
+    `${input.date}T${String(times.end.hours).padStart(2, '0')}:${String(times.end.minutes).padStart(2, '0')}:00+08:00`,
+  );
+  if (!Number.isFinite(end) || end <= start) return 'invalid';
+  if (nowMs < start) return 'upcoming';
+  if (nowMs > end) return 'completed';
+  return 'active';
+}
+
+export function compareScheduleTimeline(
+  a: ScheduleTimeInput,
+  b: ScheduleTimeInput,
+  nowMs: number,
+): number {
+  const phaseOrder = { active: 0, upcoming: 1, completed: 2, invalid: 3 };
+  const phaseA = getScheduleTimelinePhase(a, nowMs);
+  const phaseB = getScheduleTimelinePhase(b, nowMs);
+  const phaseDifference = phaseOrder[phaseA] - phaseOrder[phaseB];
+  if (phaseDifference !== 0) return phaseDifference;
+
+  const startA = getScheduleStartEpoch(a) ?? 0;
+  const startB = getScheduleStartEpoch(b) ?? 0;
+  return phaseA === 'completed' ? startB - startA : startA - startB;
+}
+
 function getScheduleTimes(input: ScheduleTimeInput) {
   let start = parseTime(input.startTime);
   let end = parseTime(input.endTime);

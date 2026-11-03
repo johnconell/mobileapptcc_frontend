@@ -54,11 +54,13 @@ import { useHardwareBack } from '@/shared/hooks/useHardwareBack';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { extractNumericScheduleId, matchOpenedRoom } from '@/features/schedules/utils/examScheduleStatus';
 import {
+  compareScheduleTimeline,
   formatManilaMonth,
   formatManilaScheduleDate,
   formatScheduleOpeningTime,
   getManilaDateIso,
   getProctorScheduleAvailability,
+  getScheduleTimelinePhase,
   splitScheduleDays,
 } from '@/features/schedules/utils/proctorScheduleWindow';
 
@@ -210,13 +212,8 @@ export default function ProctorExaminationTabScreen() {
   }, []);
 
   const serverClockNowMs = useMemo(() => getServerClockEstimate(), [clockTick]);
-  const scheduleNowMs =
-    internetAvailable === false
-      ? Date.now()
-      : internetAvailable === true
-        ? serverClockNowMs
-        : null;
-  const todayIso = scheduleNowMs === null ? '' : getManilaDateIso(scheduleNowMs);
+  const scheduleNowMs = serverClockNowMs ?? Date.now();
+  const todayIso = getManilaDateIso(scheduleNowMs);
 
   useEffect(() => {
     const schedules = schedulesQuery.data ?? [];
@@ -367,58 +364,14 @@ export default function ProctorExaminationTabScreen() {
     );
   };
 
-  // When proctor clicks an examination time slot, DIRECTLY open the room modal
+  // Select a schedule first, then let the proctor choose an authorized room.
   const handleSelectTimeSlot = async (schedule: ExamSchedule, session: ExamSession) => {
     setSelectedSchedule(schedule);
     setSelectedSession(session);
-
-    // Resolve room and schedule numeric ID
-    // Resolve room and schedule numeric ID from session.id
-    const offlinePack = await OfflineStore.getPack();
-    const sidNum = extractNumericScheduleId(session.id, session.scheduleId);
-    const cleanSess = String(session.id).replace(/^offline-/, '');
-
-    const schedMatch = (offlinePack?.schedules ?? []).find((row) => {
-      if (sidNum && Number(row.id) === sidNum) return true;
-      return String(row.id) === cleanSess.split('-')[0];
+    router.push({
+      pathname: '/(proctor)/rooms' as any,
+      params: { sessionId: session.id, scheduleId: schedule.id },
     });
-    const roomObj = schedMatch?.rooms?.[0];
-    const roomId = Number(session.roomId || roomObj?.id || 0) || 1;
-    const roomName = session.roomName || roomObj?.room_name || session.venue || 'Room 101';
-    const adminRoomLimit = Number(offlinePack?.examination_settings?.room_student_limit);
-    const capacity =
-      Number.isInteger(adminRoomLimit) && adminRoomLimit >= 1
-        ? adminRoomLimit
-        : (roomObj?.capacity ?? 60);
-
-    const currentOpened = await OfflineStore.getOpenedRooms();
-    setOpenedRooms(currentOpened);
-
-    const matchingEntry = matchOpenedRoom(currentOpened, {
-      id: session.id,
-      scheduleId: session.scheduleId,
-      roomId: session.roomId ?? (roomObj?.id != null ? String(roomObj.id) : null),
-    });
-
-    const isOpened = Boolean(
-      matchingEntry && (matchingEntry.status === 'lobby_open' || matchingEntry.status === 'in_progress'),
-    );
-    const isEnded = Boolean(matchingEntry && matchingEntry.status === 'ended');
-
-    setSelectedSlot({
-      schedule,
-      session,
-      sidNum: sidNum ?? (Number(cleanSess.split('-')[0]) || 0),
-      roomId,
-      roomName,
-      capacity,
-      isOpened,
-      isEnded,
-      openedCode: matchingEntry?.code || '',
-      openedStatus: matchingEntry?.status || 'lobby_open',
-    });
-
-    setOpenModalVisible(true);
   };
 
   // Open Room or Enter Existing Lobby
@@ -601,10 +554,26 @@ export default function ProctorExaminationTabScreen() {
       groups.set(date, group);
     }
     for (const group of groups.values()) {
-      group.sort((a, b) => a.session.startTime.localeCompare(b.session.startTime));
+      group.sort((a, b) =>
+        compareScheduleTimeline(
+          {
+            date: String(a.schedule.examinationDateIso || a.schedule.examinationDate).slice(0, 10),
+            startTime: a.session.startTime,
+            endTime: a.session.endTime,
+            timeLabel: a.session.timeLabel,
+          },
+          {
+            date: String(b.schedule.examinationDateIso || b.schedule.examinationDate).slice(0, 10),
+            startTime: b.session.startTime,
+            endTime: b.session.endTime,
+            timeLabel: b.session.timeLabel,
+          },
+          scheduleNowMs,
+        ),
+      );
     }
     return groups;
-  }, [visibleEntries]);
+  }, [visibleEntries, scheduleNowMs]);
 
   const orderedDays = splitScheduleDays(dayGroups, todayIso);
   const todayEntries = orderedDays.today;
@@ -1034,6 +1003,15 @@ export default function ProctorExaminationTabScreen() {
                       scheduleNowMs,
                       todayIso,
                     );
+                    const phase = getScheduleTimelinePhase(
+                      {
+                        date: todayIso,
+                        startTime: entry.session.startTime,
+                        endTime: entry.session.endTime,
+                        timeLabel: entry.session.timeLabel,
+                      },
+                      scheduleNowMs,
+                    );
                     return (
                       <ProctorScheduleRow
                         key={`${entry.schedule.id}:${entry.session.id}:${index}`}
@@ -1041,7 +1019,7 @@ export default function ProctorExaminationTabScreen() {
                         dateLabel={todayIso}
                         mode="today"
                         availability={availability}
-                        status={opened?.status === 'in_progress' ? 'In progress' : opened?.status === 'lobby_open' ? 'Lobby open' : availability === 'ended' ? 'Ended' : 'Scheduled'}
+                        status={opened?.status === 'in_progress' ? 'In progress' : opened?.status === 'lobby_open' ? 'Lobby open' : phase === 'completed' ? 'Ended' : phase === 'active' ? 'In progress' : 'Scheduled'}
                         onOpen={() => void handleSelectTimeSlot(entry.schedule, entry.session)}
                       />
                     );

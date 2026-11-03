@@ -1,14 +1,19 @@
 import { STORAGE_KEYS } from '@/shared/constants';
-import * as Network from 'expo-network';
 import { resolveViolationLimit, persistViolationLimit } from '@/shared/utils/violationLimit';
 import { apiRequest, ApiError } from '@/shared/services/api';
 import {
   extractExaminationCode,
   OfflineExamRepository,
 } from '@/features/synchronization/services/offlineExamRepository';
-import { OfflineStore, computePackHash, computePackHashAsync } from '@/features/synchronization/services/offlineStore';
+import {
+  OfflineStore,
+  computePackHash,
+  computePackHashAsync,
+  type OfflinePack,
+} from '@/features/synchronization/services/offlineStore';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { classifyPeerReconnectError } from '@/features/examinations/services/peerReconnectErrors';
+import { validateOfflineProctorRoom } from '@/features/examinations/services/offlineRoomAssignment';
 import { parsePeerQr, PeerExamServer, resolveNumericScheduleId } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
 import { DeviceService } from '@/shared/services/DeviceService';
@@ -105,6 +110,88 @@ function peerMatchesRequest(
   return true;
 }
 
+export function selectPreparedOfflineLobby(
+  pack: OfflinePack | null,
+  sessionId: string,
+  roomId?: string,
+  options: { locallyClaimed?: boolean; hasOtherActiveRoom?: boolean; claimConfirmed?: boolean } = {},
+) {
+  if (!pack) return null;
+
+  const sid = Number(String(sessionId).replace(/^offline-/, ''));
+  const schedule = pack.schedules.find((row) => Number(row.id) === sid);
+  if (!schedule) {
+    throw new Error('This examination schedule is not available in the authorized offline pack.');
+  }
+
+  if (!roomId) {
+    throw new Error('Select a room first. Each room has its own examination code and QR.');
+  }
+
+  const room = schedule.rooms?.find((row) => Number(row.id) === Number(roomId));
+  if (!room) {
+    throw new Error('This examination room is not available in the authorized offline pack.');
+  }
+
+  const authorization = validateOfflineProctorRoom({
+    authorization: pack.authorization,
+    schedule,
+    authority: { scheduleId: sid, roomId: Number(roomId) },
+    locallyClaimed: options.locallyClaimed,
+    hasOtherActiveRoom: options.hasOtherActiveRoom,
+    claimConfirmed: options.claimConfirmed,
+  });
+  if (!authorization.ok) throw new Error(authorization.message);
+
+  return { schedule, sid: String(sid), pack };
+}
+
+export async function getPreparedOfflineLobby(
+  sessionId: string,
+  roomId?: string,
+  options: { claimConfirmed?: boolean } = {},
+) {
+  if (!(await OfflineStore.hasPack())) return null;
+
+  const integrity = await OfflineStore.verifyPackIntegrity();
+  if (!integrity.valid || !integrity.pack) {
+    throw new Error(
+      integrity.error || 'The examination package on this device could not be verified.',
+    );
+  }
+
+  const sid = Number(String(sessionId).replace(/^offline-/, ''));
+  const roomKey = OfflineStore.roomKey(sid, Number(roomId));
+  const openedRooms = await OfflineStore.getOpenedRooms();
+  const roomEntry = openedRooms[roomKey];
+  const actorId = Number(integrity.pack.authorization?.actor_id ?? 0);
+  const ownedByOther = Boolean(
+    roomEntry &&
+    (roomEntry.status === 'lobby_open' || roomEntry.status === 'in_progress') &&
+    roomEntry.ownerId != null &&
+    Number(roomEntry.ownerId) !== actorId,
+  );
+  if (ownedByOther) {
+    throw new Error(
+      'This room is assigned to another proctor. Please select your assigned room or an available unassigned room.',
+    );
+  }
+  const locallyClaimed = ['lobby_open', 'in_progress'].includes(roomEntry?.status);
+  const hasOtherActiveRoom = Object.entries(openedRooms).some(
+    ([key, value]) =>
+      key !== roomKey &&
+      (value.status === 'lobby_open' || value.status === 'in_progress') &&
+      (value.ownerId == null || Number(value.ownerId) === actorId),
+  );
+  return selectPreparedOfflineLobby(integrity.pack, sessionId, roomId, {
+    locallyClaimed,
+    hasOtherActiveRoom,
+    claimConfirmed: options.claimConfirmed,
+  });
+}
+
+type OpenLobbyOptions = { claimUnassignedOnline?: boolean; claimConfirmed?: boolean };
+
 /**
  * LobbyRepository — Laravel exam session lobby + QR code workflow.
  * `sessionId` = examination_schedules.id; `roomId` = examination_rooms.id.
@@ -118,11 +205,11 @@ export const LobbyRepository = {
     sessionId: string,
     questionBankId?: number,
     roomId?: string,
+    options: OpenLobbyOptions = {},
   ): Promise<LobbySnapshot> {
-    const hasPack = await OfflineStore.hasPack();
-    const networkState = await Network.getNetworkStateAsync().catch(() => null);
-    const offlineConfirmed =
-      networkState?.isInternetReachable === false || networkState?.isConnected === false;
+    const preparedOfflineLobby = options.claimUnassignedOnline
+      ? null
+      : await getPreparedOfflineLobby(sessionId, roomId, { claimConfirmed: options.claimConfirmed });
 
     const { assertProctorWifiForRoomOpen } = await import(
       '@/features/monitoring/services/proctorWifiLock'
@@ -141,6 +228,10 @@ export const LobbyRepository = {
         );
       }
 
+      const pack = preparedOfflineLobby?.pack ?? (await OfflineStore.getPack());
+      const actorId = Number(pack?.authorization?.actor_id ?? 0) || null;
+      const proctorName = pack?.proctors?.find((p) => Number(p.id) === actorId)?.name ?? null;
+
       // Idempotent: keep the current code/QR only while this room's lobby is
       // already live. After close/end (or any non-lobby state), mint a fresh code.
       const info = PeerExamServer.info();
@@ -152,7 +243,7 @@ export const LobbyRepository = {
         hostedNow.status === 'lobby_open' &&
         hostedNow.examinationCode
       ) {
-        await OfflineStore.setOpenedRoom(sid, roomId, hostedNow.examinationCode, 'lobby_open');
+        await OfflineStore.setOpenedRoom(sid, roomId, hostedNow.examinationCode, 'lobby_open', actorId, proctorName);
         await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, sid);
         await appStorage.setItem(STORAGE_KEYS.offlineExamCode, hostedNow.examinationCode);
         await setStoredCode(hostedNow.examinationCode);
@@ -165,7 +256,7 @@ export const LobbyRepository = {
       const usedCodes = new Set(Object.values(opened).map((r) => r.code));
       const examCode = OfflineExamRepository.generateExamCode(usedCodes);
 
-      await OfflineStore.setOpenedRoom(sid, roomId, examCode, 'lobby_open');
+      await OfflineStore.setOpenedRoom(sid, roomId, examCode, 'lobby_open', actorId, proctorName);
       await appStorage.setItem(STORAGE_KEYS.offlineScheduleId, sid);
       await appStorage.setItem(STORAGE_KEYS.offlineExamCode, examCode);
       await setStoredCode(examCode);
@@ -176,11 +267,8 @@ export const LobbyRepository = {
       return hosted;
     };
 
-    if (hasPack && offlineConfirmed) {
-      const pack = await OfflineStore.getPack();
-      const sid = String(sessionId).replace(/^offline-/, '');
-      const schedule = pack?.schedules.find((row) => Number(row.id) === Number(sid));
-      if (!schedule) throw new Error('This examination schedule is not available in the offline pack.');
+    if (preparedOfflineLobby) {
+      const { schedule } = preparedOfflineLobby;
       const availability = getProctorScheduleAvailability(
         {
           date: schedule.exam_date || '',
@@ -235,6 +323,12 @@ export const LobbyRepository = {
       // Host peer LAN so QR embeds the current IP for examinee entry.
       if (await OfflineStore.hasPack() && json.data.examinationCode) {
         try {
+          await OfflineStore.setOpenedRoom(
+            String(sessionId).replace(/^offline-/, ''),
+            String(roomId),
+            json.data.examinationCode,
+            'lobby_open',
+          );
           await PeerExamServer.start({
             scheduleId: sessionId,
             roomId,
@@ -246,11 +340,10 @@ export const LobbyRepository = {
       }
       return json.data;
     } catch (error) {
-      if (error instanceof ApiError || !offlineConfirmed) throw error;
-      // Pack already on phone + Laravel unreachable → host on this device.
-      if (hasPack) {
-        await OfflineStore.setOfflineMode(true);
-        return startPeerHost();
+      // A pack may finish downloading while the cloud request is in flight.
+      // Re-enter through the same account, integrity, schedule, and room checks.
+      if (!options.claimUnassignedOnline && await OfflineStore.hasPack()) {
+        return this.openLobby(sessionId, questionBankId, roomId, options);
       }
       throw error instanceof Error
         ? error
@@ -263,6 +356,7 @@ export const LobbyRepository = {
     sessionId: string,
     questionBankId?: number,
     roomId?: string,
+    options: OpenLobbyOptions = {},
   ): Promise<LobbySnapshot> {
     const { assertProctorWifiForRoomOpen } = await import(
       '@/features/monitoring/services/proctorWifiLock'
@@ -270,14 +364,13 @@ export const LobbyRepository = {
     await assertProctorWifiForRoomOpen();
 
     const hasPack = await OfflineStore.hasPack();
-    const networkState = await Network.getNetworkStateAsync().catch(() => null);
-    const offlineConfirmed =
-      networkState?.isInternetReachable === false || networkState?.isConnected === false;
 
-    // Offline / peer: always (re)start the local server so a QR with a live host IP exists.
-    if (hasPack && offlineConfirmed) {
+    // A valid account-bound pack is sufficient to host the prepared LAN room.
+    // Internet reachability can be null on isolated examination Wi-Fi and must
+    // not turn opening a local peer lobby into a cloud dependency.
+    if (hasPack && !options.claimUnassignedOnline) {
       await OfflineStore.setOfflineMode(true);
-      return this.openLobby(sessionId, questionBankId, roomId);
+      return this.openLobby(sessionId, questionBankId, roomId, options);
     }
 
     try {
@@ -298,18 +391,17 @@ export const LobbyRepository = {
         }
         return existing;
       }
-      return this.openLobby(sessionId, questionBankId, roomId);
+      return this.openLobby(sessionId, questionBankId, roomId, options);
     } catch (error) {
-      if (error instanceof ApiError || !offlineConfirmed) throw error;
       if (
         error instanceof Error &&
         /Connect to the examination Wi‑Fi|no Wi‑Fi address/i.test(error.message)
       ) {
         throw error;
       }
-      if (hasPack) {
+      if (hasPack && !options.claimUnassignedOnline) {
         await OfflineStore.setOfflineMode(true);
-        return this.openLobby(sessionId, questionBankId, roomId);
+        return this.openLobby(sessionId, questionBankId, roomId, options);
       }
       throw error;
     }

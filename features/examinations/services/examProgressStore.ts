@@ -16,6 +16,7 @@ export type ExamCheckpoint = {
   answers: Record<string, ExamAnswer>;
   flags?: Record<string, boolean>;
   navMode?: 'scroll' | 'one_at_a_time';
+  currentIndex?: number;
   remainingSeconds: number;
   totalDurationSeconds?: number;
   startedAt: string | null;

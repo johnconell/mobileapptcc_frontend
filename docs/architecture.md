@@ -41,8 +41,19 @@ Path alias `@/*` maps to the repo root in both `tsconfig.json` and
 
 ## Offline LAN
 
-Proctor phone runs `features/examinations/services/peerExamServer.ts` (HTTP on 9777).
-Applicant uses `features/examinations/services/peerExamClient.ts`.
+Proctor phone runs `features/examinations/services/peerExamServer.ts` on port
+9777; applicant traffic uses `features/examinations/services/peerExamClient.ts`.
+The HTTP socket carries only a public-key handshake and AES-256-GCM ciphertext.
+The proctor's room-specific X25519 identity public key is embedded in the room QR
+code and pinned by the applicant before any exam request. Handshake failures,
+identity mismatches, and replayed/out-of-order messages fail closed; there is
+no plaintext request fallback.
+
+No certificate installation is required. The current proctor QR is the
+out-of-band identity provisioning step, so an applicant joining offline for the
+first time must scan it. Typed-code discovery may reuse a previously pinned
+target for that same code, but it does not scan the subnet or trust an
+unverified host. If the proctor identity changes, scan the new room QR.
 Pack persistence: `features/synchronization/services/offlineStore.ts` and
 `offlineExamRepository.ts`.
 
@@ -52,9 +63,14 @@ change restarts the listener on port 9777, updates the live lobby snapshot/QR,
 and syncs the current session address for code-based discovery. The address is
 not retained in the local peer-session record. Peer QR JSON carries `h` (host),
 `p` (port), `c` (exam code), `s` (schedule), `r` (room), and `w` (Wi-Fi name).
-Applicants probe `/p2p/health` before validating a key; an unreachable host is
-reported as a connection/Wi-Fi issue, not as a rejected key. Direct peer joins
-do not require internet access.
+Applicants establish the authenticated encrypted channel before probing
+`/p2p/health` or submitting a passkey. An unreachable host is reported as a
+connection/Wi-Fi issue, not as a rejected key. QR-based peer joins do not
+require internet access.
+Other data-bearing API calls use HTTPS in release builds; the app rejects
+cleartext API base URLs instead of falling back to HTTP. The peer listener is
+the only LAN exam-data path and accepts requests only through its encrypted
+channel. Network-discovery probes carry no credentials or exam answers.
 
 ### Proctor phone during a room
 

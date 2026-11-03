@@ -471,7 +471,6 @@ class ExamHostForegroundService : Service() {
  * Hardens the Android exam build:
  * - resizeableActivity=false blocks split-screen / multi-window
  * - supportsPictureInPicture=false blocks PiP
- * - excludeFromRecents=true removes app from Recent Apps tray
  * - lockTaskMode=if_whitelisted enables silent kiosk on MDM / Device Owner
  * - HIDE_OVERLAY_WINDOWS permission hides chatheads and floating windows
  * - registers ExamKioskModule for immersive mode & screen pinning
@@ -491,9 +490,8 @@ function withExamSecurity(config) {
     mainActivity.$['android:resizeableActivity'] = 'false';
     mainActivity.$['android:supportsPictureInPicture'] = 'false';
 
-    // Hide the exam app from the Recent Apps switcher so students cannot
-    // tap a previous app's thumbnail or use Recent Apps to navigate away.
-    mainActivity.$['android:excludeFromRecents'] = 'true';
+    // Keep the app available in Recent Apps outside an intentionally pinned exam.
+    delete mainActivity.$['android:excludeFromRecents'];
 
     // Lock Task Mode — active only when the device is Device Owner / MDM whitelisted.
     // No-op on regular BYOD phones, but enables full kiosk lock on institution-managed devices.

@@ -27,6 +27,7 @@ import { colors, shadows } from '@/shared/theme';
 import { safeBack } from '@/shared/utils';
 import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
+import { getProctorScheduleAvailability } from '@/features/schedules/utils/proctorScheduleWindow';
 import type { ExamRoom } from '@/shared/types';
 
 function roomTone(status: string): 'success' | 'warning' | 'danger' | 'default' {
@@ -82,6 +83,17 @@ export default function RoomsScreen() {
     'Morning Schedule';
 
   const sessionLabel = session?.timeLabel ?? 'Time Slot';
+  const scheduleAvailability = session
+    ? getProctorScheduleAvailability(
+        {
+          date: schedule?.examinationDateIso || schedule?.examinationDate || '',
+          startTime: session.startTime,
+          endTime: session.endTime,
+          timeLabel: session.timeLabel,
+        },
+        Date.now(),
+      )
+    : 'invalid';
 
   // STEP 3: Dynamic route-aware breadcrumbs: Examination > Morning Schedule > 9:30 AM - 10:30 AM
   const breadcrumbs = [
@@ -101,7 +113,7 @@ export default function RoomsScreen() {
   /**
    * STEP 6 & 7: Comprehensive Validation and Direct Navigation to Existing Lobby
    */
-  const handleOpenRoom = async (skipTodayCheck?: boolean) => {
+  const handleOpenRoom = async (skipTodayCheck?: boolean, claimConfirmed?: boolean) => {
     if (!selectedRoom || !sessionId) {
       Alert.alert('Unable to Open Room', 'Missing room or session identification.');
       return;
@@ -109,6 +121,18 @@ export default function RoomsScreen() {
 
     const isEnded = selectedRoom.status === 'ended';
     const isOpen = selectedRoom.status === 'lobby_open' || selectedRoom.status === 'in_progress';
+
+    if (!isEnded && !isOpen && scheduleAvailability !== 'available') {
+      Alert.alert(
+        'Schedule Not Active',
+        scheduleAvailability === 'ended'
+          ? 'This examination schedule has ended and cannot be opened.'
+          : scheduleAvailability === 'too_early'
+            ? 'This examination schedule is not open yet.'
+            : 'This examination schedule is not available for opening.',
+      );
+      return;
+    }
 
     // Query parameters for the existing lobby
     const query = new URLSearchParams({
@@ -249,7 +273,12 @@ export default function RoomsScreen() {
       }
 
       // 4. Initialize / Ensure Lobby via LobbyRepository
-      const snapshot = await LobbyRepository.ensureLobby(sessionId, undefined, selectedRoom.id);
+      const snapshot = await LobbyRepository.ensureLobby(
+        sessionId,
+        undefined,
+        selectedRoom.id,
+        { claimConfirmed: Boolean(claimConfirmed || selectedRoom.claimRequired) },
+      );
       console.log('Room opened successfully via LobbyRepository:', snapshot);
 
       // 5. Invalidate rooms query so cached room status updates immediately
@@ -343,20 +372,77 @@ export default function RoomsScreen() {
         }
         renderItem={({ item, index }) => {
           const isOpen = item.status === 'lobby_open' || item.status === 'in_progress';
+          const isAssignedToOther = Boolean(
+            (!item.canOpen && item.assignedProctorName && !item.canControl) ||
+            (item.ownerName && !item.canControl) ||
+            (item.assignedProctorId != null && !item.canControl && !item.canOpen)
+          );
+          const isAssignedToYou = Boolean(
+            item.canControl ||
+            (item.assignedProctorId != null && item.canOpen && !item.claimRequired)
+          );
+          const isUnassigned = Boolean(
+            item.assignedProctorId == null && !item.ownerName
+          );
+
+          let indicatorLabel = 'Unassigned — Claim Room';
+          let chipTone: 'success' | 'warning' | 'danger' | 'default' = 'default';
+
+          if (isAssignedToOther) {
+            indicatorLabel = 'Assigned to Another Proctor — Locked';
+            chipTone = 'danger';
+          } else if (isAssignedToYou) {
+            if (isOpen) {
+              indicatorLabel = 'Assigned to You — Lobby Open';
+              chipTone = 'success';
+            } else {
+              indicatorLabel = 'Assigned to You — Open Room';
+              chipTone = 'success';
+            }
+          } else if (isUnassigned) {
+            if (item.claimRequired && item.canOpen) {
+              indicatorLabel = 'Unassigned — Claim Room';
+              chipTone = 'warning';
+            } else if (!item.canOpen) {
+              indicatorLabel = 'Unassigned — Locked';
+              chipTone = 'danger';
+            } else {
+              indicatorLabel = 'Unassigned — Claim Room';
+              chipTone = 'default';
+            }
+          }
+
           return (
             <Pressable
               onPress={() => {
-                if (item.ownerName && !item.canControl) {
+                if (isAssignedToOther || (!item.canOpen && item.assignedProctorName && !item.canControl)) {
                   Alert.alert(
-                    'Room Currently Managed',
-                    `${item.roomName} is currently managed by ${item.ownerName}.`,
+                    'Restricted Room Assignment',
+                    'This room is assigned to another proctor. Please select your assigned room or an available unassigned room.',
                   );
                   return;
                 }
-                if (!item.canOpen && item.assignedProctorName && !item.canControl) {
+                if (
+                  item.status !== 'ended' &&
+                  item.status !== 'lobby_open' &&
+                  item.status !== 'in_progress' &&
+                  scheduleAvailability !== 'available'
+                ) {
                   Alert.alert(
-                    'Restricted Room Assignment',
-                    `${item.roomName} is assigned to ${item.assignedProctorName}.`,
+                    'Schedule Not Active',
+                    scheduleAvailability === 'ended'
+                      ? 'This examination schedule has ended and cannot be opened.'
+                      : scheduleAvailability === 'too_early'
+                        ? 'This examination schedule is not open yet.'
+                        : 'This examination schedule is not available for opening.',
+                  );
+                  return;
+                }
+                if (!item.canOpen) {
+                  Alert.alert(
+                    'Room Unavailable',
+                    item.authorizationReason ||
+                      'This room is assigned to another proctor. Please select your assigned room or an available unassigned room.',
                   );
                   return;
                 }
@@ -390,14 +476,20 @@ export default function RoomsScreen() {
                     <View style={styles.infoRow}>
                       <Layers size={14} color="#7A1F2B" />
                       <Text style={styles.applicants} numberOfLines={1} maxFontSizeMultiplier={1.15}>
-                        {item.ownerName ? `Managing: ${item.ownerName}` : `Assigned: ${item.assignedProctorName || 'Any available proctor'}`}
+                        {item.ownerName
+                          ? `Managing: ${item.ownerName}`
+                          : isAssignedToYou
+                            ? 'Assigned: You'
+                            : isAssignedToOther
+                              ? `Assigned: ${item.assignedProctorName || 'Another Proctor'}`
+                              : 'Assigned: None (Available to Claim)'}
                       </Text>
                     </View>
 
                     <View style={styles.badgeRow}>
                       <StatusChip
-                        label={item.ownerName ? `Managed by ${item.ownerName}` : roomStatusLabel(item.status)}
-                        tone={item.ownerName ? (item.canControl ? 'success' : 'warning') : roomTone(item.status)}
+                        label={indicatorLabel}
+                        tone={chipTone}
                       />
                     </View>
                   </View>
@@ -430,10 +522,10 @@ export default function RoomsScreen() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.modalTitle} maxFontSizeMultiplier={1.2}>
-                  Open Examination Room
+                  {selectedRoom?.claimRequired ? 'Claim Examination Room' : 'Open Examination Room'}
                 </Text>
                 <Text style={styles.modalSubtitle} maxFontSizeMultiplier={1.15}>
-                  Confirm room details to launch the lobby
+                  {selectedRoom?.claimRequired ? 'Confirm room claim to launch the lobby' : 'Confirm room details to launch the lobby'}
                 </Text>
               </View>
             </View>
@@ -464,7 +556,11 @@ export default function RoomsScreen() {
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Assigned Proctor</Text>
                 <Text style={styles.detailValue} maxFontSizeMultiplier={1.15}>
-                  {selectedRoom?.assignedProctorName || 'Any available proctor'}
+                  {selectedRoom?.claimRequired
+                    ? 'Unassigned — You will claim this room'
+                    : selectedRoom?.canControl
+                      ? 'You (Active Proctor)'
+                      : selectedRoom?.assignedProctorName || 'Any available proctor'}
                 </Text>
               </View>
 
@@ -487,17 +583,35 @@ export default function RoomsScreen() {
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Status</Text>
                 <StatusChip
-                  label={selectedRoom?.ownerName ? `Managed by ${selectedRoom.ownerName}` : roomStatusLabel(selectedRoom?.status || 'idle')}
-                  tone={selectedRoom?.ownerName ? (selectedRoom.canControl ? 'success' : 'warning') : roomTone(selectedRoom?.status || 'idle')}
+                  label={
+                    selectedRoom?.claimRequired
+                      ? 'Unassigned — Claim Room'
+                      : selectedRoom?.ownerName
+                        ? `Managed by ${selectedRoom.ownerName}`
+                        : selectedRoom?.status === 'lobby_open' || selectedRoom?.status === 'in_progress'
+                          ? 'Assigned to You — Lobby Open'
+                          : selectedRoom?.status === 'ended'
+                            ? 'Ended'
+                            : 'Assigned to You — Ready to Open'
+                  }
+                  tone={
+                    selectedRoom?.claimRequired
+                      ? 'warning'
+                      : selectedRoom?.status === 'ended'
+                        ? 'danger'
+                        : 'success'
+                  }
                 />
               </View>
             </View>
 
             <Text style={styles.modalNotice} maxFontSizeMultiplier={1.15}>
-              Opening this room will generate the examination QR code, start the local Wi-Fi peer server, and allow examinees to enter the lobby.
+              {selectedRoom?.claimRequired
+                ? 'Claiming this room will make you the active proctor, generate the examination QR code, and start the local Wi-Fi peer server.'
+                : 'Opening this room will generate the examination QR code, start the local Wi-Fi peer server, and allow examinees to enter the lobby.'}
             </Text>
 
-            {/* MODAL ACTIONS: [Cancel] [Open Room] */}
+            {/* MODAL ACTIONS: [Cancel] [Open Room / Claim Room] */}
             <View style={styles.modalActions}>
               <Button
                 title="Cancel"
@@ -512,11 +626,40 @@ export default function RoomsScreen() {
                     ? 'Enter Lobby'
                     : selectedRoom?.status === 'ended'
                       ? 'View Results'
-                      : 'Open Room'
+                      : scheduleAvailability === 'ended'
+                        ? 'Schedule Ended'
+                      : selectedRoom?.claimRequired
+                        ? 'Claim Room'
+                        : 'Open Room'
                 }
                 variant="primary"
                 loading={busy}
-                onPress={handleOpenRoom}
+                disabled={
+                  Boolean(
+                    selectedRoom &&
+                    selectedRoom.status !== 'ended' &&
+                    selectedRoom.status !== 'lobby_open' &&
+                    selectedRoom.status !== 'in_progress' &&
+                    scheduleAvailability !== 'available',
+                  )
+                }
+                onPress={() => {
+                  if (selectedRoom?.claimRequired) {
+                    Alert.alert(
+                      'Confirm Room Claim',
+                      `Are you sure you want to claim ${selectedRoom.roomName} for ${scheduleName}? You will become the active proctor responsible for this room.`,
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Confirm Claim',
+                          onPress: () => void handleOpenRoom(false, true),
+                        },
+                      ],
+                    );
+                    return;
+                  }
+                  void handleOpenRoom();
+                }}
                 style={{
                   ...styles.openButton,
                   backgroundColor:

@@ -18,6 +18,18 @@ export function isLoopbackApiHost(url: string): boolean {
   }
 }
 
+export function assertSecureApiBase(
+  apiBaseUrl: string,
+  allowHttp = __DEV__,
+): void {
+  const protocol = new URL(apiBaseUrl).protocol;
+  if (protocol === 'https:' || (allowHttp && protocol === 'http:')) return;
+
+  throw new Error(
+    'Release builds require HTTPS for API requests. Use the QR-pinned secure peer connection for campus LAN exam traffic.',
+  );
+}
+
 /** True when this build is running on a physical (or Emulator that needs LAN) device. */
 export function requiresLanApiHost(): boolean {
   // Web on the PC can use 127.0.0.1. Native apps generally cannot.

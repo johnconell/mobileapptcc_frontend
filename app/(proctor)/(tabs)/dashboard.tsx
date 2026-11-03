@@ -9,15 +9,13 @@ import {
   Modal,
   Alert,
 } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Users,
   UserCheck,
   Award,
   Clock,
-  DoorOpen,
-  BarChart3,
   RefreshCw,
   Calendar,
   ShieldCheck,
@@ -38,14 +36,6 @@ import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
 
-type ActiveLobbyDetails = {
-  sessionId: string;
-  roomId: string;
-  roomName: string;
-  code: string;
-  status: 'lobby_open' | 'in_progress' | 'ended';
-};
-
 function formatTime12(timeStr?: string): string {
   if (!timeStr) return '';
   const trimmed = timeStr.trim();
@@ -60,13 +50,11 @@ function formatTime12(timeStr?: string): string {
 }
 
 export default function ProctorDashboardScreen() {
-  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors, isDark, themeMode, setThemeMode, fontMultiplier } = useAppTheme();
   const profile = useProctorStore((s) => s.profile);
   const [refreshing, setRefreshing] = useState(false);
   const [rulesModalOpen, setRulesModalOpen] = useState(false);
-  const [activeLobby, setActiveLobby] = useState<ActiveLobbyDetails | null>(null);
 
   const [stats, setStats] = useState({
     totalApplicants: 0,
@@ -87,7 +75,6 @@ export default function ProctorDashboardScreen() {
     endTime: '04:00 PM',
     timeWindowLabel: 'Starts 7:30 AM (Morning) - 4:00 PM (Noon)',
     questionCount: 60,
-    pendingSyncCount: 0,
   });
 
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -100,63 +87,16 @@ export default function ProctorDashboardScreen() {
   const loadData = async () => {
     try {
       setRefreshing(true);
-      const [pack, queued, openedRooms] = await Promise.all([
+      const [pack, queued] = await Promise.all([
         OfflineStore.getPack(),
         OfflineStore.getResults(),
-        OfflineStore.getOpenedRooms(),
       ]);
 
-      const pendingSyncCount = queued.filter((r) => !r.synced).length;
-
-      // Active room: look for any room opened on this phone that isn't ended
-      const activeEntry = Object.entries(openedRooms).find(
-        ([, v]) => v.status === 'lobby_open' || v.status === 'in_progress',
-      );
-
-      let examTitle = 'Entrance Examination';
-      let activeRoomName = 'Room CL 1';
-      let activeCode = '';
-      let activeStatus: 'lobby_open' | 'in_progress' | 'ended' = 'ended';
-      let activeDetails: ActiveLobbyDetails | null = null;
-
-      if (activeEntry) {
-        const [schedId, rmId] = activeEntry[0].split(':');
-        activeCode = activeEntry[1].code;
-        activeStatus = activeEntry[1].status;
-        activeRoomName = `Room ${activeCode}`;
-
-        if (pack?.schedules?.length) {
-          for (const s of pack.schedules) {
-            if (String(s.id) === String(schedId)) {
-              examTitle = s.title || examTitle;
-              const rMatch = s.rooms?.find((r) => String(r.id) === String(rmId));
-              if (rMatch) {
-                activeRoomName = rMatch.room_name;
-              }
-              break;
-            }
-          }
-        }
-
-        activeDetails = {
-          sessionId: schedId,
-          roomId: rmId,
-          roomName: activeRoomName,
-          code: activeCode,
-          status: activeStatus,
-        };
-      } else if (pack?.schedules?.length) {
-        examTitle = pack.schedules[0].title || 'Entrance Examination';
-        if (pack.schedules[0].rooms?.length) {
-          activeRoomName = pack.schedules[0].rooms[0].room_name;
-        }
-      }
-
-      setActiveLobby(activeDetails);
+      const primarySchedule = pack?.schedules?.[0];
+      const examTitle = primarySchedule?.title || 'Entrance Examination';
 
       // Registered applicants for today's examination
       let todayRegistered = 0;
-      const primarySchedule = pack?.schedules?.[0];
       if (primarySchedule && pack?.registrations?.length) {
         const matching = pack.registrations.filter(
           (r) => r.examination_schedule_id === primarySchedule.id,
@@ -210,7 +150,6 @@ export default function ProctorDashboardScreen() {
         endTime: schedEnd,
         timeWindowLabel: `${schedStart} - ${schedEnd}`,
         questionCount: 60,
-        pendingSyncCount,
       });
     } finally {
       setRefreshing(false);
@@ -231,22 +170,6 @@ export default function ProctorDashboardScreen() {
     if (status === 'LOBBY OPEN' || status === 'IN PROGRESS') return colors.success;
     if (status === 'TODAY' || status === 'SCHEDULED') return colors.accent;
     return colors.textMuted;
-  };
-
-  // Open Lobby: If active lobby exists, enters directly. If none, navigates to examination to pick room & open immediately!
-  const handleOpenLobbyPress = () => {
-    if (activeLobby) {
-      const query = new URLSearchParams({
-        sessionId: activeLobby.sessionId,
-        roomId: activeLobby.roomId,
-        roomName: activeLobby.roomName,
-        roomCode: activeLobby.code,
-        roomStatus: activeLobby.status,
-      }).toString();
-      router.push(`/(proctor)/lobby?${query}` as any);
-    } else {
-      router.push('/(proctor)/(tabs)/examination');
-    }
   };
 
   const handleLogout = () => {
@@ -825,144 +748,6 @@ export default function ProctorDashboardScreen() {
           </Pressable>
         </View>
 
-        {/* 5. QUICK ACTIONS (Open Lobby, Recent Exam, Sync & Pack, Account) */}
-        <Text
-          style={[styles.groupHeading, { color: colors.textPrimary }]}
-          maxFontSizeMultiplier={fontMultiplier}
-        >
-          Quick Actions
-        </Text>
-
-        <View style={styles.actionsGrid}>
-          {/* ACTION 1: OPEN LOBBY (Always clickable, enters lobby or takes to room picker) */}
-          <Pressable
-            style={[
-              styles.actionBtn,
-              { backgroundColor: colors.card, borderColor: colors.cardBorder },
-              activeLobby && {
-                borderColor: colors.success,
-                backgroundColor: colors.successMuted,
-              },
-            ]}
-            onPress={handleOpenLobbyPress}
-            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-            android_ripple={{ color: colors.cardBorder }}
-            accessibilityRole="button"
-          >
-            <View
-              style={[
-                styles.actionIcon, { backgroundColor: '#7A1F2B' },
-              ]}
-            >
-              <DoorOpen size={20} color="#FFFFFF" />
-            </View>
-            <Text
-              style={[styles.actionText, { color: colors.textPrimary }]}
-              numberOfLines={1}
-              maxFontSizeMultiplier={fontMultiplier}
-            >
-              Open Lobby
-            </Text>
-            {activeLobby && (
-              <View
-                style={[
-                  styles.activeLobbyBadge,
-                  { backgroundColor: colors.successMuted },
-                ]}
-              >
-                <View
-                  style={[styles.activePulseDot, { backgroundColor: colors.success }]}
-                />
-                <Text
-                  style={[styles.activeLobbyBadgeText, { color: colors.success }]}
-                  maxFontSizeMultiplier={fontMultiplier}
-                >
-                  Active
-                </Text>
-              </View>
-            )}
-          </Pressable>
-
-          {/* ACTION 2: RECENT EXAMINATION */}
-          <Pressable
-            style={[
-              styles.actionBtn,
-              { backgroundColor: colors.card, borderColor: colors.cardBorder },
-            ]}
-            onPress={() => router.push('/(proctor)/(tabs)/results')}
-            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-            android_ripple={{ color: colors.cardBorder }}
-            accessibilityRole="button"
-          >
-            <View style={[styles.actionIcon, { backgroundColor: isDark ? '#222222' : colors.cardMuted }]}>
-              <BarChart3 size={20} color={isDark ? '#FFFFFF' : colors.textPrimary} />
-              {stats.pendingSyncCount > 0 && (
-                <View style={styles.actionRedDot} />
-              )}
-            </View>
-            <Text
-              style={[styles.actionText, { color: colors.textPrimary }]}
-              numberOfLines={1}
-              maxFontSizeMultiplier={fontMultiplier}
-            >
-              Recent Exam
-            </Text>
-          </Pressable>
-
-          {/* ACTION 3: SYNC & PACK (Merged Sync Exam and Exam Pack) */}
-          <Pressable
-            style={[
-              styles.actionBtn,
-              { backgroundColor: colors.card, borderColor: colors.cardBorder },
-            ]}
-            onPress={() => router.push('/offline-prepare' as any)}
-            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-            android_ripple={{ color: colors.cardBorder }}
-            accessibilityRole="button"
-          >
-            <View style={[styles.actionIcon, { backgroundColor: colors.warning }]}>
-              <RefreshCw size={20} color="#FFFFFF" />
-              {stats.pendingSyncCount > 0 && (
-                <View style={styles.actionRedDot} />
-              )}
-            </View>
-            <Text
-              style={[styles.actionText, { color: colors.textPrimary }]}
-              numberOfLines={1}
-              maxFontSizeMultiplier={fontMultiplier}
-            >
-              Sync & Pack
-            </Text>
-          </Pressable>
-
-          {/* ACTION 4: ACCOUNT SETTINGS (New action requested) */}
-          <Pressable
-            style={[
-              styles.actionBtn,
-              { backgroundColor: colors.card, borderColor: colors.cardBorder },
-            ]}
-            onPress={() =>
-              router.push({
-                pathname: '/(proctor)/account',
-                params: { from: 'dashboard' },
-              } as any)
-            }
-            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-            android_ripple={{ color: colors.cardBorder }}
-            accessibilityRole="button"
-          >
-            <View style={[styles.actionIcon, { backgroundColor: '#7C3AED' }]}>
-              <ShieldCheck size={20} color="#FFFFFF" />
-            </View>
-            <Text
-              style={[styles.actionText, { color: colors.textPrimary }]}
-              numberOfLines={1}
-              maxFontSizeMultiplier={fontMultiplier}
-            >
-              Account
-            </Text>
-          </Pressable>
-        </View>
       </ScrollView>
 
       {/* FULL RULES & REGULATIONS MODAL */}
@@ -1340,58 +1125,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   viewFullRulesText: { fontSize: 12, fontWeight: '700' },
-
-  // Quick Actions (4 Equal Columns)
-  groupHeading: { fontSize: 16, fontWeight: '800', marginTop: 6, marginBottom: -4 },
-  actionsGrid: { flexDirection: 'row', gap: 8 },
-  actionBtn: {
-    flex: 1,
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 4,
-    alignItems: 'center',
-    borderWidth: 1,
-    gap: 8,
-    position: 'relative',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-  },
-  actionIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  actionRedDot: {
-    position: 'absolute',
-    top: -2,
-    right: -2,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#DC3545',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-  },
-  actionText: { fontSize: 10, fontWeight: '700', textAlign: 'center' },
-  activeLobbyBadge: {
-    position: 'absolute',
-    top: 4,
-    right: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 999,
-  },
-  activePulseDot: { width: 5, height: 5, borderRadius: 2.5 },
-  activeLobbyBadgeText: { fontSize: 8, fontWeight: '800' },
 
   // Rules Modal
   modalOverlay: {

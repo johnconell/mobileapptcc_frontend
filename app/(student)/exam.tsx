@@ -207,6 +207,7 @@ function ExamScreenInner() {
         answers: state.answers,
         flags: state.flags,
         navMode: state.navMode,
+        currentIndex: state.currentIndex,
         remainingSeconds: state.remainingSeconds,
         totalDurationSeconds: state.totalDurationSeconds,
         startedAt: state.startedAt,
@@ -278,9 +279,8 @@ function ExamScreenInner() {
     void LobbyRepository.acknowledgeStart('entered');
   }, []);
 
-  // Flush answers to local storage on visibility/pagehide
+  // Flush encrypted exam progress before the OS backgrounds or closes the app.
   useEffect(() => {
-    if (typeof document === 'undefined') return;
     const flush = () => {
       const state = useExamStore.getState();
       const student = useStudentStore.getState().verifiedStudent;
@@ -292,22 +292,32 @@ function ExamScreenInner() {
         answers: state.answers,
         flags: state.flags,
         navMode: state.navMode,
+        currentIndex: state.currentIndex,
         remainingSeconds: state.remainingSeconds,
         totalDurationSeconds: state.totalDurationSeconds,
         startedAt: state.startedAt,
         deadline: state.deadline,
         scheduleClosingTime: state.scheduleClosingTime,
         timeSync: state.timeSync ?? undefined,
-      });
+      }).catch((error) => console.warn('[EXAM CHECKPOINT] Background save failed:', error));
     };
-    const onVisibility = () => {
-      if (document.visibilityState === 'hidden') flush();
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('pagehide', flush);
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'inactive' || state === 'background') flush();
+    });
+    if (typeof document !== 'undefined') {
+      const onVisibility = () => {
+        if (document.visibilityState === 'hidden') flush();
+      };
+      document.addEventListener('visibilitychange', onVisibility);
+      window.addEventListener('pagehide', flush);
+      return () => {
+        appStateSubscription.remove();
+        document.removeEventListener('visibilitychange', onVisibility);
+        window.removeEventListener('pagehide', flush);
+      };
+    }
     return () => {
-      document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('pagehide', flush);
+      appStateSubscription.remove();
     };
   }, []);
 
@@ -418,6 +428,7 @@ function ExamScreenInner() {
         answers,
         flags,
         navMode,
+        currentIndex: state.currentIndex,
         remainingSeconds: state.remainingSeconds,
         totalDurationSeconds: state.totalDurationSeconds,
         startedAt: state.startedAt,
@@ -427,7 +438,7 @@ function ExamScreenInner() {
       });
     }, 2000);
     return () => clearTimeout(timer);
-  }, [answers, flags, navMode, sessionId, verifiedStudent?.id, startedAt, questions.length]);
+  }, [answers, flags, navMode, currentIndex, sessionId, verifiedStudent?.id, startedAt, questions.length]);
 
   // Restore progress on mount
   useEffect(() => {
@@ -441,6 +452,7 @@ function ExamScreenInner() {
         answers: checkpoint.answers,
         flags: checkpoint.flags,
         navMode: checkpoint.navMode,
+        currentIndex: checkpoint.currentIndex,
         remainingSeconds: checkpoint.remainingSeconds,
         totalDurationSeconds: checkpoint.totalDurationSeconds,
         startedAt: checkpoint.startedAt,
@@ -836,6 +848,7 @@ function ExamScreenInner() {
           answers: state.answers,
           flags: state.flags,
           navMode: state.navMode,
+          currentIndex: state.currentIndex,
           remainingSeconds: state.remainingSeconds,
           startedAt: state.startedAt,
         });
@@ -855,6 +868,7 @@ function ExamScreenInner() {
           answers: state.answers,
           flags: state.flags,
           navMode: state.navMode,
+          currentIndex: state.currentIndex,
           remainingSeconds: state.remainingSeconds,
           startedAt: state.startedAt,
         });

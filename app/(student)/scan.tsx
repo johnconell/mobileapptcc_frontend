@@ -254,13 +254,14 @@ export default function JoinExaminationScreen() {
         // Cloud unreachable on offline Wi-Fi: proceed to LAN discovery
       }
 
-      if (cloudResolved) {
+      if (cloudResolved?.peer_identity_public_key) {
         await PeerExamClient.setTarget({
           host: cloudResolved.proctor_local_ip,
           port: cloudResolved.proctor_local_port,
           code: cloudResolved.session_code,
           scheduleId: cloudResolved.schedule_id ?? null,
           roomId: cloudResolved.room_id ?? null,
+          peerPublicKey: cloudResolved.peer_identity_public_key,
         });
 
         if (cloudResolved.passkey) {

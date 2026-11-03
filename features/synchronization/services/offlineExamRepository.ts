@@ -1,5 +1,6 @@
-import { apiRequest, getCloudApiBaseUrl, getApiBaseUrl, getSyncToken } from '@/shared/services/api';
+import { apiRequest, getCloudApiBaseUrl, getApiBaseUrl } from '@/shared/services/api';
 import {
+  assertSecureApiBase,
   describeApiReachabilityProblem,
   studentPackDownloadFailureMessage,
 } from '@/shared/services/apiReachability';
@@ -24,6 +25,12 @@ import {
   validateOfflineRoomAssignment,
   type OfflineRoomAuthority,
 } from '@/features/examinations/services/offlineRoomAssignment';
+import {
+  matchOfflinePasskeyRegistrations,
+  selectOfflinePasskeyRegistration,
+  validateOfflinePasskeyEligibility,
+} from '@/features/examinations/services/offlinePasskeyEligibility';
+import { compareStudentNames } from '@/features/synchronization/utils/studentNameOrder';
 
 /** Pull typed exam code from plain text or METCC QR JSON. */
 export function extractExaminationCode(raw: string): string {
@@ -55,6 +62,7 @@ async function cloudFetch<T>(
   } = {},
 ): Promise<T> {
   const base = cloudBase();
+  assertSecureApiBase(base);
   const loopbackIssue = describeApiReachabilityProblem(base);
   if (loopbackIssue) {
     throw new Error(loopbackIssue);
@@ -94,11 +102,6 @@ async function cloudFetch<T>(
   if (!res.ok) {
     console.error(`[CLOUD FETCH] ${options.method ?? 'GET'} ${path} → HTTP ${res.status}`, json);
     const serverMsg = (json as { message?: string })?.message || '';
-    if (res.status === 401 && /unauthorized sync/i.test(serverMsg)) {
-      throw new Error(
-        'Unauthorized sync: ADMIN_SYNC_TOKEN on api.masterexam.pro must match EXPO_PUBLIC_SYNC_TOKEN (metcc-lan-sync-secret). Set it in Hostinger .env, then run php artisan config:clear.',
-      );
-    }
     throw new Error(
       serverMsg ||
         `Request failed (${res.status}).`,
@@ -735,15 +738,14 @@ export const OfflineExamRepository = {
     return regs.map((r) => {
       const a = pack.applicants.find((x) => Number(x.id) === Number(r.applicant_id));
       const name = (a?.name || '').trim() || 'Student';
-      const parts = name.trim().split(/\s+/);
       const id = String(a?.id ?? r.applicant_id);
       const claimed = claims.has(id);
       return {
         id,
         studentId: a?.applicant_code || String(r.applicant_id),
-        firstName: parts[0] || name,
-        middleName: '',
-        lastName: parts.slice(1).join(' ') || '',
+        firstName: a?.first_name || '',
+        middleName: a?.middle_name || '',
+        lastName: a?.last_name || '',
         fullName: name,
         email: a?.gmail || a?.email || '',
         programId: a?.course_applied || '',
@@ -761,7 +763,10 @@ export const OfflineExamRepository = {
         selectionStatus: claimed ? ('ready' as const) : ('available' as const),
         statusLabel: claimed ? 'Ready' : 'Not scanned',
       };
-    });
+    }).sort((left, right) => compareStudentNames(
+      { firstName: left.firstName, middleName: left.middleName, lastName: left.lastName, id: Number(left.registration_id) },
+      { firstName: right.firstName, middleName: right.middleName, lastName: right.lastName, id: Number(right.registration_id) },
+    ));
   },
 
   /**
@@ -806,17 +811,31 @@ export const OfflineExamRepository = {
 
     if (scheduleId == null) return null;
 
+    const scheduleRegistrations = pack.registrations.filter(
+      (registration) => Number(registration.examination_schedule_id) === scheduleId,
+    );
+    const scheduleHasPasskeyData = scheduleRegistrations.some(
+      (registration) =>
+        /^[0-9a-f]{64}$/i.test(String(registration.exam_passkey_hash || '')) ||
+        Boolean(String(registration.exam_passkey || '').trim()),
+    );
+    if (scheduleRegistrations.length > 0 && !scheduleHasPasskeyData) {
+      return {
+        classification: 'invalid',
+        message:
+          'Passkey records are missing from the proctor phone examination pack. Ask the proctor to update the pack and reopen this room.',
+      };
+    }
+
     const normalized = passkey.trim().toUpperCase();
     const normalizedHash = await Crypto.digestStringAsync(
       Crypto.CryptoDigestAlgorithm.SHA256,
       normalized,
     );
-    const matches = pack.registrations.filter(
-      (r) => {
-        const storedHash = String(r.exam_passkey_hash || '').toLowerCase();
-        if (storedHash) return storedHash === normalizedHash.toLowerCase();
-        return String(r.exam_passkey || '').toUpperCase() === normalized;
-      },
+    const matches = matchOfflinePasskeyRegistrations(
+      pack.registrations,
+      normalized,
+      normalizedHash,
     );
     if (!matches.length) return null;
 
@@ -844,9 +863,7 @@ export const OfflineExamRepository = {
         classification,
         message:
           classification === 'wrong_schedule'
-            ? wrongDate
-              ? 'This key is for a different date.'
-              : `This examination key belongs to ${otherSchedule?.title || 'a different examination schedule'}. Use the correct key for this room.`
+            ? 'You are not scheduled for this examination session. Please check your assigned examination date and time.'
             : 'Invalid examination key for this session.',
         schedule: otherSchedule
           ? {
@@ -859,11 +876,12 @@ export const OfflineExamRepository = {
       };
     }
 
-    const reg = matches.find(
-      (registration) => Number(registration.examination_schedule_id) === scheduleId,
-    );
+    const reg = selectOfflinePasskeyRegistration(matches, scheduleId);
     if (!reg) return null;
 
+    // Laravel rescheduling moves this same registration row. Selecting another
+    // row only by applicant ID can substitute a different schedule or room and
+    // reject the exact registration whose passkey hash matched.
     const a = pack.applicants.find((x) => Number(x.id) === Number(reg.applicant_id));
     if (!a) return null;
     const name = (a.name || '').trim() || 'Student';
@@ -881,6 +899,20 @@ export const OfflineExamRepository = {
         classification:
           roomDecision.code === 'wrong_schedule' ? 'wrong_schedule' : 'invalid',
         message: roomDecision.message,
+        schedule: {
+          id: schedule.id,
+          title: schedule.title,
+          exam_date: schedule.exam_date,
+          time_slot: schedule.time_slot,
+        },
+      };
+    }
+
+    const eligibility = validateOfflinePasskeyEligibility(reg);
+    if (!eligibility.ok) {
+      return {
+        classification: eligibility.classification,
+        message: eligibility.message,
         schedule: {
           id: schedule.id,
           title: schedule.title,
@@ -1178,13 +1210,6 @@ export const OfflineExamRepository = {
 
     await assertCloudInternetReachable();
 
-    const syncToken = getSyncToken();
-    if (!syncToken) {
-      throw new Error(
-        'Missing EXPO_PUBLIC_SYNC_TOKEN in the app .env (must match ADMIN_SYNC_TOKEN on the server).',
-      );
-    }
-
     // FIX 2 & FIX 3: Filter and auto-repair any invalid schedule IDs before payload creation
     const pack = await OfflineStore.getPack();
     const validPending = pending.map((r) => {
@@ -1209,23 +1234,19 @@ export const OfflineExamRepository = {
 
     const payload = {
       results: validPending.map((r) => ({
-        lan_registration_id: 0,
         client_local_id: r.local_id,
         applicant_code: r.applicant_code,
         examination_schedule_id: r.examination_schedule_id,
-        attendance_status: r.attendance_status,
-        result_status: r.result_status,
-        score: r.score,
-        items_correct: r.items_correct,
-        items_total: r.items_total,
-        grade_point: r.grade_point,
-        answers: r.answers,
+        answers: r.answers.map(({ exam_question_id, selected_answer }) => ({
+          exam_question_id,
+          selected_answer,
+        })),
       })),
     };
 
     let json: any = null;
     try {
-      json = await cloudFetch<{
+      json = await apiRequest<{
         success: boolean;
         message?: string;
         data?: {
@@ -1235,10 +1256,11 @@ export const OfflineExamRepository = {
           created?: number;
           updated?: number;
         };
-      }>('/sync/offline-results', {
+      }>('/proctor/sync/offline-results', {
         method: 'POST',
         body: payload,
-        token: syncToken,
+        auth: true,
+        baseUrl: cloudBase(),
       });
     } catch (error) {
       console.error('[SYNC AUDIT ERROR] Network request failed:', error);

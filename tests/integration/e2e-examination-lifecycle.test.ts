@@ -260,7 +260,7 @@ test('MOB-RECOVERY-001: Student Admission → Correct Room vs Wrong Room / Missi
   assert.equal(wrongRoomAdmission.ok, false);
   if (!wrongRoomAdmission.ok) {
     assert.equal(wrongRoomAdmission.code, 'wrong_room');
-    assert.match(wrongRoomAdmission.message, /does not match the examination room/);
+    assert.match(wrongRoomAdmission.message, /You are assigned to Room|does not match the examination room/);
   }
 
   // Case C: Missing Room Assignment -> Denied, requires proctor recovery

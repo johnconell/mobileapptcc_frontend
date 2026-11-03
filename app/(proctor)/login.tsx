@@ -6,16 +6,16 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Image,
+  Pressable,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as Linking from 'expo-linking';
-import { Shield } from 'lucide-react-native';
+import { ArrowLeft } from 'lucide-react-native';
 import { Button } from '@/shared/components/ui/Button';
-import { Header } from '@/shared/components/ui/Header';
 import { Input } from '@/shared/components/ui/Input';
-import { Card } from '@/shared/components/ui/Card';
 import {
   proctorLoginSchema,
   type ProctorLoginValues,
@@ -30,11 +30,13 @@ import {
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { colors } from '@/shared/theme';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 let lastConsumedGoogleUrl: string | null = null;
 
 export default function ProctorLoginScreen() {
-  const { colors: themeColors, isDark } = useAppTheme();
+  const { colors: themeColors } = useAppTheme();
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const profile = useProctorStore((s) => s.profile);
   const setProfile = useProctorStore((s) => s.setProfile);
@@ -148,19 +150,39 @@ export default function ProctorLoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={[styles.screen, { backgroundColor: themeColors.background }]}
+      style={[styles.screen, { backgroundColor: themeColors.card }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Header title="Proctor Login" subtitle="Internet required to sign in" onBack={goToLanding} />
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <Card style={{ backgroundColor: themeColors.card, borderColor: themeColors.cardBorder }}>
-          <View style={[styles.iconWrap, { backgroundColor: themeColors.accentMuted }]}>
-            <Shield size={28} color={colors.primary} />
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingTop: insets.top + 10, paddingBottom: Math.max(insets.bottom, 20) },
+        ]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to home"
+          onPress={goToLanding}
+          style={styles.backButton}
+          hitSlop={10}
+        >
+          <ArrowLeft size={21} color={colors.ink} />
+        </Pressable>
+
+        <View style={styles.form}>
+          <View style={styles.logoFrame}>
+            <Image
+              source={require('../../assets/tcc-logo.png')}
+              style={styles.logo}
+              accessibilityLabel="Tagoloan Community College seal"
+              resizeMode="contain"
+            />
           </View>
-          <Text style={[styles.title, { color: themeColors.textPrimary }]}>Sign in</Text>
+          <Text style={[styles.title, { color: colors.primary }]}>Proctor Sign In</Text>
           <Text style={[styles.sub, { color: themeColors.textSecondary }]}>
-            Sign in online with your proctor account. Offline exam access starts after you
-            download the exam pack from the Examination tab.
+            Authorized proctor access only. Sign in with your assigned account.
           </Text>
 
           <Controller
@@ -176,10 +198,11 @@ export default function ProctorLoginScreen() {
                 onChangeText={onChange}
                 onBlur={onBlur}
                 error={errors.username?.message}
+                style={styles.input}
               />
             )}
           />
-          <View style={{ height: 12 }} />
+          <View style={{ height: 14 }} />
           <Controller
             control={control}
             name="password"
@@ -193,20 +216,30 @@ export default function ProctorLoginScreen() {
                 onBlur={onBlur}
                 error={errors.password?.message}
                 onSubmitEditing={onSubmit}
+                style={styles.input}
               />
             )}
           />
 
-          {formError ? <Text style={styles.error}>{formError}</Text> : null}
+          {formError ? (
+            <Text accessibilityRole="alert" style={styles.error}>{formError}</Text>
+          ) : null}
 
           <Button
-            title="Sign in"
+            title="Sign In"
             size="lg"
             fullWidth
             loading={isSubmitting}
             onPress={onSubmit}
-            style={{ marginTop: 16 }}
+            style={{ marginTop: 18 }}
           />
+
+          <View style={styles.divider}>
+            <View style={[styles.dividerLine, { backgroundColor: themeColors.cardBorder }]} />
+            <Text style={[styles.dividerText, { color: themeColors.textMuted }]}>OR</Text>
+            <View style={[styles.dividerLine, { backgroundColor: themeColors.cardBorder }]} />
+          </View>
+
           <Button
             title="Continue with Google"
             variant="outline"
@@ -214,27 +247,108 @@ export default function ProctorLoginScreen() {
             fullWidth
             loading={googleLoading}
             onPress={() => void onGoogle()}
-            style={{ marginTop: 12 }}
+            style={{ marginTop: 14 }}
+            icon={<Text style={styles.googleMark}>G</Text>}
           />
-        </Card>
+        </View>
+
+        <View style={styles.footer}>
+          <Text style={[styles.footerText, { color: themeColors.textSecondary }]}>
+            Looking for the examination home screen?
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={goToLanding}
+            hitSlop={8}
+          >
+            <Text style={styles.footerLink}>Return to the public portal</Text>
+          </Pressable>
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.background },
-  content: { padding: 20, paddingBottom: 40 },
-  iconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: '#F0D9DC',
+  screen: { flex: 1, backgroundColor: colors.white },
+  content: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
+    paddingBottom: 24,
+    justifyContent: 'space-between',
+  },
+  backButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: colors.white,
   },
-  title: { fontSize: 22, fontWeight: '700', color: colors.ink, marginBottom: 6 },
-  sub: { fontSize: 14, lineHeight: 21, color: colors.inkSecondary, marginBottom: 16 },
+  form: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+    paddingVertical: 20,
+  },
+  logoFrame: {
+    width: 68,
+    height: 68,
+    alignSelf: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 4,
+    borderRadius: 34,
+    borderWidth: 1,
+    borderColor: '#7B102033',
+    backgroundColor: '#FBF7F1',
+    marginBottom: 16,
+  },
+  logo: { width: '100%', height: '100%', borderRadius: 30 },
+  title: {
+    fontSize: 24,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  sub: {
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+    marginBottom: 22,
+  },
+  input: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: 9,
+    borderColor: '#D1D5DB',
+    backgroundColor: colors.white,
+    fontSize: 14,
+  },
   error: { marginTop: 10, color: colors.danger, fontWeight: '600', fontSize: 13 },
+  googleMark: {
+    color: '#4285F4',
+    fontSize: 18,
+    fontWeight: '700',
+    marginRight: 2,
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 20,
+  },
+  dividerLine: { height: 1, flex: 1 },
+  dividerText: { fontSize: 11, fontWeight: '600', letterSpacing: 1 },
+  footer: { alignItems: 'center', paddingTop: 12 },
+  footerText: { fontSize: 12, textAlign: 'center' },
+  footerLink: {
+    marginTop: 4,
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
 });

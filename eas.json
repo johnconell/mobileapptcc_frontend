@@ -12,8 +12,7 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api.masterexam.pro/api/v1",
-        "EXPO_PUBLIC_CLOUD_API_URL": "https://api.masterexam.pro/api/v1",
-        "EXPO_PUBLIC_SYNC_TOKEN": "metcc-lan-sync-secret"
+        "EXPO_PUBLIC_CLOUD_API_URL": "https://api.masterexam.pro/api/v1"
       },
       "channel": "development"
     },
@@ -24,8 +23,7 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api.masterexam.pro/api/v1",
-        "EXPO_PUBLIC_CLOUD_API_URL": "https://api.masterexam.pro/api/v1",
-        "EXPO_PUBLIC_SYNC_TOKEN": "metcc-lan-sync-secret"
+        "EXPO_PUBLIC_CLOUD_API_URL": "https://api.masterexam.pro/api/v1"
       },
       "channel": "preview"
     },
@@ -37,8 +35,7 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api.masterexam.pro/api/v1",
-        "EXPO_PUBLIC_CLOUD_API_URL": "https://api.masterexam.pro/api/v1",
-        "EXPO_PUBLIC_SYNC_TOKEN": "metcc-lan-sync-secret"
+        "EXPO_PUBLIC_CLOUD_API_URL": "https://api.masterexam.pro/api/v1"
       }
     },
     "production-store": {
@@ -48,8 +45,7 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api.masterexam.pro/api/v1",
-        "EXPO_PUBLIC_CLOUD_API_URL": "https://api.masterexam.pro/api/v1",
-        "EXPO_PUBLIC_SYNC_TOKEN": "metcc-lan-sync-secret"
+        "EXPO_PUBLIC_CLOUD_API_URL": "https://api.masterexam.pro/api/v1"
       },
       "channel": "production-store"
     }

@@ -121,6 +121,8 @@ export interface ExamRoom {
   canOpen?: boolean;
   canControl?: boolean;
   canReopen?: boolean;
+  claimRequired?: boolean;
+  authorizationReason?: string | null;
 }
 
 export type StudentSelectionStatus = 'available' | 'ready' | 'completed';
