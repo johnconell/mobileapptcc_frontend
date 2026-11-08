@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { forwardRef } from 'react';
 import {
   Text,
   TextInput,
@@ -15,31 +15,34 @@ interface InputProps extends TextInputProps {
   hint?: string;
 }
 
-export function Input({ label, error, hint, style, ...props }: InputProps) {
-  const { colors: themeColors } = useAppTheme();
+export const Input = forwardRef<TextInput, InputProps>(
+  function Input({ label, error, hint, style, ...props }, ref) {
+    const { colors: themeColors } = useAppTheme();
 
-  return (
-    <View style={styles.wrap}>
-      {label ? <Text style={[styles.label, { color: themeColors.textSecondary }]}>{label}</Text> : null}
-      <TextInput
-        placeholderTextColor={themeColors.textMuted}
-        style={[
-          styles.input,
-          {
-            backgroundColor: themeColors.inputBg,
-            borderColor: themeColors.inputBorder,
-            color: themeColors.textPrimary,
-          },
-          error ? styles.inputError : null,
-          style,
-        ]}
-        {...props}
-      />
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      {!error && hint ? <Text style={[styles.hint, { color: themeColors.textMuted }]}>{hint}</Text> : null}
-    </View>
-  );
-}
+    return (
+      <View style={styles.wrap}>
+        {label ? <Text style={[styles.label, { color: themeColors.textSecondary }]}>{label}</Text> : null}
+        <TextInput
+          ref={ref}
+          placeholderTextColor={themeColors.textMuted}
+          style={[
+            styles.input,
+            {
+              backgroundColor: themeColors.inputBg,
+              borderColor: themeColors.inputBorder,
+              color: themeColors.textPrimary,
+            },
+            error ? styles.inputError : null,
+            style,
+          ]}
+          {...props}
+        />
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+        {!error && hint ? <Text style={[styles.hint, { color: themeColors.textMuted }]}>{hint}</Text> : null}
+      </View>
+    );
+  },
+);
 
 const styles = StyleSheet.create({
   wrap: { width: '100%', gap: 6 },

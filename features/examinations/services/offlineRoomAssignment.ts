@@ -5,12 +5,14 @@ export type OfflineRoomAuthority = {
 
 export type OfflineRoomSchedule = {
   id: number;
+  status?: string;
   rooms_managed?: boolean;
   rooms?: Array<{
     id: number;
     examination_schedule_id?: number;
     room_name?: string;
     proctor_id?: number | null;
+    emergency_suspended?: boolean;
   }>;
 };
 
@@ -31,6 +33,9 @@ export type OfflineRoomDecision =
       ok: false;
       code:
         | 'wrong_schedule'
+        | 'schedule_suspended'
+        | 'room_suspended'
+        | 'schedule_cancelled'
         | 'wrong_room'
         | 'assignment_data_unavailable'
         | 'unauthorized_proctor'
@@ -77,6 +82,10 @@ export function validateOfflineRoomAssignment(input: {
       recoveryRequired: false,
     };
   }
+  const scheduleStatus = schedule.status?.trim().toLowerCase();
+  if (scheduleStatus === 'suspended' || scheduleStatus === 'cancelled') {
+    return unavailableScheduleDecision(scheduleStatus);
+  }
 
   // The backend always exports this boolean. Undefined means a legacy or
   // incomplete pack; allowing it would silently bypass a possibly managed room.
@@ -101,6 +110,17 @@ export function validateOfflineRoomAssignment(input: {
     };
   }
 
+  function unavailableScheduleDecision(status: 'suspended' | 'cancelled'): OfflineRoomDecision {
+    return {
+      ok: false,
+      code: status === 'suspended' ? 'schedule_suspended' : 'schedule_cancelled',
+      message: status === 'suspended'
+        ? 'This examination schedule is suspended by the administrator. Rooms cannot be opened until it is resumed.'
+        : 'This examination schedule was cancelled and cannot be opened.',
+      recoveryRequired: false,
+    };
+  }
+
   const roomBelongsToSchedule = (room: NonNullable<OfflineRoomSchedule['rooms']>[number]) =>
     Number(room.id) > 0 &&
     Number(room.examination_schedule_id) === scheduleId;
@@ -116,6 +136,14 @@ export function validateOfflineRoomAssignment(input: {
       code: 'assignment_data_unavailable',
       message: RECOVERY_MESSAGE,
       recoveryRequired: true,
+    };
+  }
+  if (targetRoom.emergency_suspended || assignedRoom.emergency_suspended) {
+    return {
+      ok: false,
+      code: 'room_suspended',
+      message: 'This examination room is suspended by an active emergency incident.',
+      recoveryRequired: false,
     };
   }
   if (assignedRoomId !== targetRoomId) {
@@ -235,6 +263,10 @@ export function validateOfflineHostRoom(input: {
       recoveryRequired: false,
     };
   }
+  const scheduleStatus = schedule.status?.trim().toLowerCase();
+  if (scheduleStatus === 'suspended' || scheduleStatus === 'cancelled') {
+    return unavailableScheduleDecision(scheduleStatus);
+  }
   if (typeof schedule.rooms_managed !== 'boolean') {
     return { ok: false, code: 'assignment_data_unavailable', message: RECOVERY_MESSAGE, recoveryRequired: true };
   }
@@ -248,7 +280,24 @@ export function validateOfflineHostRoom(input: {
           Number(candidate.examination_schedule_id) === scheduleId,
       );
   return room
-    ? { ok: true }
+    ? room.emergency_suspended
+      ? {
+          ok: false,
+          code: 'room_suspended',
+          message: 'This examination room is suspended by an active emergency incident.',
+          recoveryRequired: false,
+        }
+      : { ok: true }
     : { ok: false, code: 'assignment_data_unavailable', message: RECOVERY_MESSAGE, recoveryRequired: true };
 }
 
+function unavailableScheduleDecision(status: 'suspended' | 'cancelled'): OfflineRoomDecision {
+  return {
+    ok: false,
+    code: status === 'suspended' ? 'schedule_suspended' : 'schedule_cancelled',
+    message: status === 'suspended'
+      ? 'This examination schedule is suspended by the administrator. Rooms cannot be opened until it is resumed.'
+      : 'This examination schedule was cancelled and cannot be opened.',
+    recoveryRequired: false,
+  };
+}

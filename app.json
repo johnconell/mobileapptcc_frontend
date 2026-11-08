@@ -10,7 +10,9 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "edu.tcc.entranceexam",
+      "buildNumber": "1",
       "infoPlist": {
+        "CFBundleDisplayName": "MasterExam – TCC",
         "ITSAppUsesNonExemptEncryption": false,
         "UIRequiresFullScreen": true,
         "NSLocalNetworkUsageDescription": "MasterExam connects to the local proctor examination server on the campus Wi-Fi network to synchronize examination schedules, download exam questions, and submit your answers offline.",
@@ -72,7 +74,8 @@
         }
       ],
       "expo-font",
-      "expo-asset"
+      "expo-asset",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

@@ -21,6 +21,7 @@ import {
 import { resolveWifiLanIp } from '@/features/monitoring/services/wifiLanIp';
 import { clampViolationLimit } from '@/shared/utils/violationLimit';
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
+import { normalizePasskey } from '@/features/examinations/services/passkeyFormat';
 import {
   formatScheduleOpeningTime,
   getProctorScheduleAvailability,
@@ -107,6 +108,7 @@ type PeerStudentState = {
   hashVerified: boolean;
   moduleReady: boolean;
   startPhase: 'waiting' | 'received' | 'entered';
+  examSet?: string;
 };
 
 type PeerViolation = {
@@ -132,6 +134,8 @@ type PeerSessionState = {
   startedAt: string | null;
   endedAt: string | null;
   endsAt?: string | null;
+  emergencySuspendedAt?: string | null;
+  emergencyReason?: string | null;
   durationMinutes: number;
   /** Auto-warn / auto-submit threshold from admin examination settings (pack). */
   violationLimit: number;
@@ -157,7 +161,7 @@ type JsonResponse = {
 let session: PeerSessionState | null = null;
 let routesRegistered = false;
 let running = false;
-export type PeerListenerState = 'live' | 'reconnecting' | 'stopped';
+export type PeerListenerState = 'live' | 'reconnecting' | 'unavailable' | 'stopped';
 let listenerState: PeerListenerState = 'stopped';
 let hostIp: string | null = null;
 let listeners: Array<() => void> = [];
@@ -410,6 +414,7 @@ function toLobbyStudent(state: PeerStudentState): LobbyStudent {
     hashVerified: Boolean(state.hashVerified ?? state.isReady),
     moduleReady: Boolean(state.moduleReady ?? state.isReady),
     startPhase: state.startPhase ?? (state.status === 'taking_exam' ? 'entered' : 'waiting'),
+    examSet: state.examSet ?? 'Set 1',
   };
 }
 
@@ -450,7 +455,12 @@ function statusPayload(student: PeerStudentState | null, token?: string) {
     examStarted: session.status === 'in_progress',
     roomStatus: session.status,
     authorityStatus: authorityOf(session.status),
+    emergencySuspended: Boolean(session.emergencySuspendedAt),
+    emergencySuspendedAt: session.emergencySuspendedAt ?? null,
+    emergencyReason: session.emergencyReason ?? null,
     myStatus: student?.status ?? 'anonymous',
+    submissionConfirmed: Boolean(student?.submissionConfirmed && student?.submittedAt),
+    submittedAt: student?.submissionConfirmed ? student.submittedAt : null,
     startPhase: student?.startPhase ?? 'waiting',
     startSeq: session.startSeq ?? 0,
     serverTime: Date.now(),
@@ -476,7 +486,10 @@ function remainingSeconds(state: PeerSessionState): number | null {
   const endsAtMs = state.endsAt
     ? new Date(state.endsAt).getTime()
     : new Date(state.startedAt).getTime() + state.durationMinutes * 60_000;
-  return Math.max(0, Math.round((endsAtMs - Date.now()) / 1000));
+  const nowMs = state.emergencySuspendedAt
+    ? new Date(state.emergencySuspendedAt).getTime()
+    : Date.now();
+  return Math.max(0, Math.round((endsAtMs - nowMs) / 1000));
 }
 
 function allStudentsFinished(state: PeerSessionState): boolean {
@@ -501,7 +514,7 @@ function startExamWatchdog() {
   stopExamWatchdog();
   examWatchdog = setInterval(() => {
     void (async () => {
-      if (!session || session.status !== 'in_progress' || endingExam) return;
+      if (!session || session.status !== 'in_progress' || session.emergencySuspendedAt || endingExam) return;
       const rem = remainingSeconds(session);
       // Keep proctor countdown fresh even while the snapshot cache is warm.
       if (rem != null) {
@@ -634,13 +647,17 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
       durationMinutes: state.durationMinutes,
       startedAt: state.startedAt,
       endsAt:
-        state.startedAt && state.durationMinutes
+        state.endsAt ??
+        (state.startedAt && state.durationMinutes
           ? new Date(
               new Date(state.startedAt).getTime() + state.durationMinutes * 60_000,
             ).toISOString()
-          : null,
+          : null),
     },
     status: state.status,
+    emergencySuspended: Boolean(state.emergencySuspendedAt),
+    emergencySuspendedAt: state.emergencySuspendedAt ?? null,
+    emergencyReason: state.emergencyReason ?? null,
     examinationCode: state.examCode,
     qrValue: peerQrPayload(state),
     roomName: resolved?.session?.roomName ?? null,
@@ -943,6 +960,9 @@ function registerRoutes(mod: HttpServerModule) {
         session: resolved.session,
         examinationCode: session.examCode,
         status: session.status,
+        emergencySuspended: Boolean(session.emergencySuspendedAt),
+        emergencySuspendedAt: session.emergencySuspendedAt ?? null,
+        emergencyReason: session.emergencyReason ?? null,
       },
       resolved.message,
     );
@@ -956,8 +976,11 @@ function registerRoutes(mod: HttpServerModule) {
       });
     }
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    if (session.emergencySuspendedAt) {
+      return fail(423, 'This examination is emergency-suspended. Please wait for the proctor.');
+    }
     const body = parseBody(request.body);
-    const passkey = String(body.passkey ?? '').trim().toUpperCase();
+    const passkey = normalizePasskey(body.passkey);
     if (!passkey) return fail(422, 'Enter your examination key.');
 
     const validated = await OfflineExamRepository.validatePasskey(
@@ -1049,8 +1072,11 @@ function registerRoutes(mod: HttpServerModule) {
    */
   secureRoute(p('/package'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    if (session.emergencySuspendedAt) {
+      return fail(423, 'This examination is emergency-suspended. Please wait for the proctor.');
+    }
     const body = parseBody(request.body);
-    const passkey = String(body.passkey ?? '').trim().toUpperCase();
+    const passkey = normalizePasskey(body.passkey);
 
     if (!passkey) return fail(422, 'Enter your examination key before downloading the examination package.');
     const validated = await OfflineExamRepository.validatePasskey(
@@ -1133,12 +1159,15 @@ function registerRoutes(mod: HttpServerModule) {
 
   secureRoute(p('/join'), 'POST', async (request) => {
     if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    if (session.emergencySuspendedAt) {
+      return fail(423, 'This examination is emergency-suspended. Please wait for the proctor.');
+    }
     if (session.status === 'ended') {
       return fail(409, 'This examination has already ended.');
     }
 
     const body = parseBody(request.body);
-    const passkey = String(body.passkey ?? '').trim().toUpperCase();
+    const passkey = normalizePasskey(body.passkey);
 
     // Compatibility check: track applicant's module hash without blocking valid examinees
     const studentPackHash = String(body.student_pack_hash || body.package_hash || '').trim();
@@ -1254,7 +1283,9 @@ function registerRoutes(mod: HttpServerModule) {
         student.moduleReady = moduleReady;
         console.log(`[SESSION] Student ${student.applicantCode} rejoined.`);
       } else {
-        const paper = buildStudentExamPaper(pack);
+        const reg = pack.registrations.find((r) => Number(r.id) === registrationId);
+        const studentExamSet = reg?.exam_set || validated.student?.examSet || 'Set 1';
+        const paper = buildStudentExamPaper(pack, studentExamSet);
         student = {
           token: makeToken(registrationId),
           deviceId: providedDeviceId || undefined,
@@ -1275,6 +1306,7 @@ function registerRoutes(mod: HttpServerModule) {
           answers: {},
           order: paper.questions.map((q) => q.id),
           choiceMaps: paper.choiceMaps,
+          examSet: studentExamSet,
           submittedAt: null,
           score: null,
           reconnectCode: null,
@@ -1394,6 +1426,7 @@ function registerRoutes(mod: HttpServerModule) {
       durationMinutes: session.durationMinutes,
       violationLimit: 0,
       answers: student.answers,
+      examSet: student.examSet || 'Set 1',
     });
   });
 
@@ -1427,6 +1460,7 @@ function registerRoutes(mod: HttpServerModule) {
       durationMinutes: session.durationMinutes,
       violationLimit: 0,
       answers: student.answers,
+      examSet: student.examSet || 'Set 1',
     });
   });
 
@@ -1462,20 +1496,14 @@ function registerRoutes(mod: HttpServerModule) {
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
     if (!student) return fail(404, 'You are no longer joined to this examination.');
-    const roomFailure = await enforceStudentRoom(session, student);
-    if (roomFailure) return roomFailure;
-    if (student.submissionConfirmed) {
-      // A previous submit may have reached the host even if its reply was lost.
-      // Return a receipt so the student can safely retry until it gets an ACK.
-      return ok({ submitted: true, alreadySubmitted: true });
-    }
-
     const answers = body.answers;
+    const submittedAnswers: Record<string, string | null> = {};
     if (answers && typeof answers === 'object') {
       for (const [questionId, choice] of Object.entries(
         answers as Record<string, unknown>,
       )) {
-        student.answers[questionId] = choice == null ? null : String(choice).toUpperCase();
+        submittedAnswers[questionId] =
+          choice == null ? null : String(choice).trim().toUpperCase();
       }
     }
 
@@ -1486,7 +1514,12 @@ function registerRoutes(mod: HttpServerModule) {
     let numericScheduleId = Number(session.scheduleId);
     if (!Number.isInteger(numericScheduleId) || numericScheduleId <= 0) {
       // Re-resolve from pack
-      numericScheduleId = resolveNumericScheduleId(session.scheduleId, pack);
+      numericScheduleId = resolveNumericScheduleId(
+        session.scheduleId,
+        pack,
+        student.applicantCode,
+        session.roomId,
+      );
       if (numericScheduleId > 0) {
         session.scheduleId = numericScheduleId;
       }
@@ -1502,12 +1535,23 @@ function registerRoutes(mod: HttpServerModule) {
       return fail(422, 'Validation Error: Student code is required for submission.');
     }
 
+    const idempotencyKey = String(body.idempotency_key ?? '').trim();
+    if (idempotencyKey.length < 8 || idempotencyKey.length > 120) {
+      return fail(422, 'Validation Error: A valid submission attempt identifier is required.');
+    }
+
     const queuedResults = await OfflineStore.getResults();
-    const existingResult = queuedResults.find((result) =>
-      (result.applicant_code || '').trim().toUpperCase() === student.applicantCode.trim().toUpperCase() &&
-      Number(result.examination_schedule_id) === numericScheduleId,
+    const { matchQueuedResult } = await import(
+      '@/features/synchronization/services/resultQueueIdentity'
     );
-    if (existingResult) {
+    const queuedMatch = matchQueuedResult(queuedResults, {
+      localId: idempotencyKey,
+      applicantCode: student.applicantCode,
+      scheduleId: numericScheduleId,
+      answers: submittedAnswers,
+    });
+    if (queuedMatch.kind === 'duplicate') {
+      const existingResult = queuedMatch.result;
       student.submittedAt = existingResult.submitted_at || new Date().toISOString();
       student.lastActivityAt = student.submittedAt;
       student.status = 'finished';
@@ -1518,19 +1562,47 @@ function registerRoutes(mod: HttpServerModule) {
       notify();
       return ok({ submitted: true, alreadySubmitted: true });
     }
+    if (queuedMatch.kind === 'conflict') {
+      return fail(409, 'A different finalized answer set is already recorded for this examination. Keep this submission saved and ask the proctor to verify it.');
+    }
+    if (student.submissionConfirmed) {
+      const recorded = queuedResults.find((row) =>
+        row.applicant_code.trim().toUpperCase() === student.applicantCode.trim().toUpperCase() &&
+        Number(row.examination_schedule_id) === numericScheduleId,
+      );
+      if (recorded && student.submittedAt && student.answers) {
+        const sameAnswers = matchQueuedResult([recorded], {
+          localId: recorded.local_id,
+          applicantCode: student.applicantCode,
+          scheduleId: numericScheduleId,
+          answers: submittedAnswers,
+        }).kind === 'duplicate';
+        if (sameAnswers) {
+          return ok({ submitted: true, alreadySubmitted: true, submittedAt: student.submittedAt });
+        }
+      }
+      return fail(409, 'A different finalized answer set is already recorded for this examination. Keep this submission saved and ask the proctor to verify it.');
+    }
 
+    const roomFailure = await enforceStudentRoom(session, student);
+    if (roomFailure) return roomFailure;
+
+    student.answers = submittedAnswers;
     const graded = grade(pack, answersForGrading(student));
     const now = new Date().toISOString();
 
     const queuedRow = {
-      local_id: `${student.applicantCode.trim()}-${numericScheduleId}-${Date.now()}`,
+      local_id: idempotencyKey,
       applicant_code: student.applicantCode.trim(),
       examination_schedule_id: numericScheduleId,
       applicant_name: student.fullName,
       attendance_status: 'present',
+      exam_set: student.examSet || 'Set 1',
       ...graded,
       submitted_at: now,
       synced: false,
+      sync_status: 'pending' as const,
+      sync_error: null,
     };
 
     if (!Number.isInteger(queuedRow.examination_schedule_id) || queuedRow.examination_schedule_id <= 0) {
@@ -1674,12 +1746,14 @@ function registerRoutes(mod: HttpServerModule) {
       });
     }
     if (!student) return fail(403, 'You are no longer joined to this examination.');
-    const roomFailure = await enforceStudentRoom(session, student);
-    if (roomFailure) return roomFailure;
+    if (!student.submissionConfirmed) {
+      const roomFailure = await enforceStudentRoom(session, student);
+      if (roomFailure) return roomFailure;
+    }
     if (providedDeviceId && student.deviceId && providedDeviceId !== student.deviceId) {
       return fail(403, 'This examination participation is reserved for another device.');
     }
-    if (student.status === 'terminated') {
+    if (student.status === 'terminated' && !student.submissionConfirmed) {
       return fail(403, 'You have been removed from this examination session.');
     }
     student.lastActivityAt = new Date().toISOString();
@@ -1727,8 +1801,13 @@ function registerRoutes(mod: HttpServerModule) {
     return ok({
       status: session.status,
       roomStatus: session.status,
+      emergencySuspended: Boolean(session.emergencySuspendedAt),
+      emergencySuspendedAt: session.emergencySuspendedAt ?? null,
+      emergencyReason: session.emergencyReason ?? null,
       remainingSeconds: remainingSeconds(session),
       isReady: student.isReady,
+      submissionConfirmed: Boolean(student.submissionConfirmed && student.submittedAt),
+      submittedAt: student.submissionConfirmed ? student.submittedAt : null,
       authorityStatus: authorityOf(session.status),
       startPhase: student.startPhase,
       startSeq: session.startSeq ?? 0,
@@ -1838,6 +1917,8 @@ async function resolveHostIp(): Promise<string | null> {
 export function resolveNumericScheduleId(
   rawScheduleId: string | number,
   pack: OfflinePack | null,
+  applicantCode?: string,
+  roomId?: number | null,
 ): number {
   if (!rawScheduleId) return 0;
 
@@ -1857,25 +1938,43 @@ export function resolveNumericScheduleId(
   }
 
   // 2. Composite date key: "date-YYYY-MM-DD-title-slug"
-  if (str.startsWith('date-')) {
-    const date = str.substring(5, 15); // "2026-08-25"
-    const titleSlug = str.substring(16).replace(/-/g, ' ').toLowerCase();
+  if (stripped.startsWith('date-')) {
+    const date = stripped.substring(5, 15); // "2026-08-25"
+    const titleSlug = stripped.substring(16).replace(/-/g, ' ').toLowerCase();
 
-    const match = pack.schedules.find((s) => {
+    let candidates = pack.schedules.filter((s) => {
       const sDate = (s.exam_date || '').trim();
       const sTitle = (s.title || 'Entrance Examination').trim().toLowerCase();
       return sDate === date && (sTitle === titleSlug || titleSlug.includes(sTitle) || sTitle.includes(titleSlug));
     });
 
-    if (match && Number.isInteger(Number(match.id)) && Number(match.id) > 0) {
-      return Number(match.id);
+    if (!candidates.length) {
+      candidates = pack.schedules.filter((s) => (s.exam_date || '').trim() === date);
     }
 
-    // Match by date alone if single schedule exists for that date
-    const dateMatches = pack.schedules.filter((s) => (s.exam_date || '').trim() === date);
-    if (dateMatches.length === 1 && Number.isInteger(Number(dateMatches[0].id)) && Number(dateMatches[0].id) > 0) {
-      return Number(dateMatches[0].id);
+    if (roomId != null) {
+      const roomCandidates = candidates.filter((schedule) =>
+        (schedule.rooms ?? []).some(
+          (room) => Number(room.id) === roomId || Number(room.room_id) === roomId,
+        ),
+      );
+      if (roomCandidates.length) candidates = roomCandidates;
     }
+
+    if (applicantCode) {
+      const applicant = pack.applicants.find(
+        (row) => row.applicant_code.trim().toUpperCase() === applicantCode.trim().toUpperCase(),
+      );
+      if (!applicant) return 0;
+      const assignedScheduleIds = new Set(
+        pack.registrations
+          .filter((registration) => Number(registration.applicant_id) === Number(applicant.id))
+          .map((registration) => Number(registration.examination_schedule_id)),
+      );
+      candidates = candidates.filter((schedule) => assignedScheduleIds.has(Number(schedule.id)));
+    }
+
+    return candidates.length === 1 ? Number(candidates[0].id) : 0;
   }
 
   // 3. Fallback: match by schedule.id string in pack
@@ -2030,17 +2129,17 @@ export const PeerExamServer = {
     console.log(`[SERVER] Pre-warmed ${_builtQuestionsCache.length} questions into memory cache.`);
 
     // FIX 1: Eliminate NaN Schedule IDs. Resolve real numeric ID from pack.
-    const scheduleId = resolveNumericScheduleId(input.scheduleId, pack);
+    const roomId =
+      input.roomId != null && String(input.roomId).trim() !== ''
+        ? Number(input.roomId)
+        : null;
+    const scheduleId = resolveNumericScheduleId(input.scheduleId, pack, undefined, roomId);
     if (!Number.isInteger(scheduleId) || scheduleId <= 0) {
       throw new Error(
         `CRITICAL INTEGRITY FAILURE: Unable to resolve a valid numeric examination schedule ID for "${input.scheduleId}". Examination cannot be started.`,
       );
     }
 
-    const roomId =
-      input.roomId != null && String(input.roomId).trim() !== ''
-        ? Number(input.roomId)
-        : null;
     const schedule = pack.schedules.find((candidate) => Number(candidate.id) === scheduleId);
     const hostRoomDecision = validateOfflineHostRoom({
       schedule,
@@ -2115,7 +2214,7 @@ export const PeerExamServer = {
     const netState = await Network.getNetworkStateAsync();
     const wifiSsid = netState.type === Network.NetworkStateType.WIFI ? (netState as any).ssid : null;
 
-    if (lan.type === Network.NetworkStateType.CELLULAR || (!lan.isWifi && lan.cellularLikely)) {
+    if (!hostIp && (lan.type === Network.NetworkStateType.CELLULAR || (!lan.isWifi && lan.cellularLikely))) {
       throw new Error(
         'Turn off mobile data and stay on examination Wi‑Fi only. Dual Wi‑Fi + mobile data can bind the room to an unreachable address.',
       );
@@ -2207,6 +2306,9 @@ export const PeerExamServer = {
 
   async startExam(): Promise<LobbySnapshot> {
     if (!session) throw new Error('Open the room lobby first.');
+    if (session.emergencySuspendedAt) {
+      throw new Error('This exam is emergency-suspended. Resume the room before starting examination actions.');
+    }
     for (const student of Object.values(session.students)) {
       const roomDecision = await OfflineExamRepository.validateRegistrationRoom(
         student.registrationId,
@@ -2244,6 +2346,51 @@ export const PeerExamServer = {
     return buildSnapshot(session);
   },
 
+  async suspendForEmergency(reason: string): Promise<LobbySnapshot> {
+    if (!session) throw new Error('Open the room lobby first.');
+    if (session.status === 'ended') throw new Error('An ended examination cannot be suspended.');
+    const normalizedReason = reason.trim();
+    if (normalizedReason.length < 5 || normalizedReason.length > 500) {
+      throw new Error('The emergency reason must be between 5 and 500 characters.');
+    }
+    if (!session.emergencySuspendedAt) {
+      session.emergencySuspendedAt = new Date().toISOString();
+      session.emergencyReason = normalizedReason;
+      invalidateSnapshot();
+      await persist();
+      notify();
+    }
+    return buildSnapshot(session);
+  },
+
+  async resumeAfterEmergency(): Promise<LobbySnapshot> {
+    if (!session) throw new Error('Open the room lobby first.');
+    if (!session.emergencySuspendedAt) {
+      throw new Error('This examination is not emergency-suspended.');
+    }
+    const suspendedAt = new Date(session.emergencySuspendedAt).getTime();
+    if (!Number.isFinite(suspendedAt)) {
+      throw new Error('The saved emergency suspension time is invalid.');
+    }
+    const pauseDuration = Math.max(0, Date.now() - suspendedAt);
+    if (session.startedAt) {
+      session.startedAt = new Date(
+        new Date(session.startedAt).getTime() + pauseDuration,
+      ).toISOString();
+      const currentEndsAt = session.endsAt
+        ? new Date(session.endsAt).getTime()
+        : new Date(session.startedAt).getTime() + session.durationMinutes * 60_000 - pauseDuration;
+      session.endsAt = new Date(currentEndsAt + pauseDuration).toISOString();
+    }
+    session.emergencySuspendedAt = null;
+    session.emergencyReason = null;
+    invalidateSnapshot();
+    await persist();
+    notify();
+    if (session.status === 'in_progress') startExamWatchdog();
+    return buildSnapshot(session);
+  },
+
   async endExam(): Promise<LobbySnapshot> {
     if (!session) throw new Error('Open the room lobby first.');
     if (session.status === 'lobby_open') {
@@ -2255,7 +2402,12 @@ export const PeerExamServer = {
     session.endedAt = now;
 
     const pack = await OfflineStore.getPack();
-    const numericScheduleId = resolveNumericScheduleId(session.scheduleId, pack);
+    const numericScheduleId = resolveNumericScheduleId(
+      session.scheduleId,
+      pack,
+      undefined,
+      session.roomId,
+    );
 
     for (const student of Object.values(session.students)) {
       if (student.status !== 'terminated') {
@@ -2265,23 +2417,33 @@ export const PeerExamServer = {
 
       // Auto-grade in-flight answers for students who didn't explicitly submit
       if (!student.submittedAt && pack && numericScheduleId > 0 && student.applicantCode) {
-        student.submittedAt = now;
         const graded = grade(pack, answersForGrading(student));
-        student.score = graded.score;
 
         const queuedRow = {
-          local_id: `${student.applicantCode.trim()}-${numericScheduleId}-${Date.now()}`,
+          local_id: `end-exam-${numericScheduleId}-${student.applicantCode.trim()}`,
           applicant_code: student.applicantCode.trim(),
           examination_schedule_id: numericScheduleId,
           applicant_name: student.fullName,
           attendance_status: 'present',
+          exam_set: student.examSet || 'Set 1',
           ...graded,
           submitted_at: now,
           synced: false,
+          sync_status: 'pending' as const,
         };
         try {
-          await OfflineStore.queueResult(queuedRow);
-          student.submissionConfirmed = true;
+          const { queueResultBeforeConfirm } = await import(
+            '@/features/synchronization/services/resultQueueIdentity'
+          );
+          await queueResultBeforeConfirm(
+            queuedRow,
+            (row) => OfflineStore.queueResult(row),
+            () => {
+              student.submittedAt = now;
+              student.score = graded.score;
+              student.submissionConfirmed = true;
+            },
+          );
         } catch (err) {
           console.error('[SERVER] Failed to queue result on endExam:', err);
         }
@@ -2408,9 +2570,15 @@ export const PeerExamServer = {
     const ip = await resolveHostIp();
     const previousHost = hostIp;
     if (ip !== previousHost) {
+      const shouldRecoverListener = listenerState !== 'stopped';
       hostIp = ip;
 
-      if (ip && listenerState === 'live') {
+      if (!ip && shouldRecoverListener) {
+        listenerState = 'unavailable';
+        running = false;
+        invalidateSnapshot();
+        notify();
+      } else if (ip && shouldRecoverListener) {
         const mod = loadHttpServer();
         if (!mod) {
           throw new Error('The local examination server is unavailable.');

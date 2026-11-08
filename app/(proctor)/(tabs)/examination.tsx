@@ -52,6 +52,7 @@ import type { ExamSchedule, ExamSession } from '@/shared/types';
 import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
 import { useHardwareBack } from '@/shared/hooks/useHardwareBack';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
+import { userFacingError } from '@/shared/utils/userFacingError';
 import { extractNumericScheduleId, matchOpenedRoom } from '@/features/schedules/utils/examScheduleStatus';
 import {
   compareScheduleTimeline,
@@ -96,6 +97,7 @@ export default function ProctorExaminationTabScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [internetAvailable, setInternetAvailable] = useState<boolean | null>(null);
   const [pack, setPack] = useState<PackSummary | null>(null);
+  const [packReadError, setPackReadError] = useState<string | null>(null);
   const [openedRooms, setOpenedRooms] = useState<
     Record<string, { code: string; openedAt: string; status: 'lobby_open' | 'in_progress' | 'ended' }>
   >({});
@@ -152,24 +154,32 @@ export default function ProctorExaminationTabScreen() {
   });
 
   const refreshPackData = useCallback(async () => {
-    const [summary, today, rooms, status] = await Promise.all([
-      OfflineStore.getPackSummary(),
-      OfflineStore.isPackDownloadedToday(),
-      OfflineStore.getOpenedRooms(),
-      OfflineExamRepository.checkPackUpdateStatus(),
-    ]);
-    setPack(summary);
-    setTodayStatus(today);
-    setOpenedRooms(rooms);
-    setPackNotice({
-      updateRequired: status.updateRequired || !today.downloadedToday,
-      message: status.message,
-      rescheduledSince: status.rescheduledSince,
-      rescheduledToday: status.rescheduledToday,
-      questionsChangedSince: status.questionsChangedSince,
-      questionsChangedToday: status.questionsChangedToday,
-      reason: status.reason,
-    });
+    try {
+      const [summary, today, rooms, status] = await Promise.all([
+        OfflineStore.getPackSummary(),
+        OfflineStore.isPackDownloadedToday(),
+        OfflineStore.getOpenedRooms(),
+        OfflineExamRepository.checkPackUpdateStatus(),
+      ]);
+      setPackReadError(null);
+      setPack(summary);
+      setTodayStatus(today);
+      setOpenedRooms(rooms);
+      setPackNotice({
+        updateRequired: status.updateRequired || !today.downloadedToday,
+        message: status.message,
+        rescheduledSince: status.rescheduledSince,
+        rescheduledToday: status.rescheduledToday,
+        questionsChangedSince: status.questionsChangedSince,
+        questionsChangedToday: status.questionsChangedToday,
+        reason: status.reason,
+      });
+    } catch (error) {
+      console.error('[EXAM SCHEDULES] Cached pack could not be read:', {
+        errorName: error instanceof Error ? error.name : 'StorageError',
+      });
+      setPackReadError(error instanceof Error ? error.message : 'Saved examination data could not be read.');
+    }
   }, []);
 
   useEffect(() => {
@@ -294,9 +304,19 @@ export default function ProctorExaminationTabScreen() {
   const downloadPack = async () => {
     setRefreshing(true);
     try {
+      const currentToday = await OfflineStore.isPackDownloadedToday();
+      if (currentToday.downloadedToday && internetAvailable === true) {
+        const freshness = await OfflineExamRepository.checkPackUpdateStatus();
+        if (!freshness.updateRequired) {
+          Alert.alert('Exam Pack Up to Date', 'Your Exam Pack is already up to date.');
+          await refreshPackData();
+          return;
+        }
+      }
       const result = await ensureExamPackCached({
         force: true,
         includeAuth: true,
+        allowCacheFallback: false,
       });
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.schedules });
       await refreshPackData();
@@ -321,10 +341,18 @@ export default function ProctorExaminationTabScreen() {
         );
       } else {
         Alert.alert(
-          "Today's Exam Pack Ready",
-          `${summary.students} student(s) and ${summary.questions} questionnaire items cached for today. Your proctor session is included so this phone can stay offline afterward.`,
+          'Exam Pack Updated Successfully',
+          'Exam Pack Updated Successfully. Your examination schedules, rooms, and student assignments are up to date.',
         );
       }
+    } catch (error) {
+      Alert.alert(
+        'Download failed',
+        userFacingError(
+          error,
+          'Unable to download the examination pack. Check your internet connection and try again.',
+        ),
+      );
     } finally {
       setRefreshing(false);
     }
@@ -353,8 +381,13 @@ export default function ProctorExaminationTabScreen() {
                 `Schedule: ${res.scheduleTitle}\nTime Window: ${res.timeSlot}\nRoom: ${res.roomName} (Cap: ${res.capacity})\nExaminees: ${res.examineesCount}\nQuestions: ${res.questionsCount}\nProctor: ${res.proctorName}\n\nThe room is ready to open immediately or host over Peer LAN.`,
               );
             } catch (err) {
-              console.error('Failed to seed local test data:', err);
-              Alert.alert('Seeding Failed', err instanceof Error ? err.message : 'Unable to seed test data.');
+              console.error('Failed to seed local test data:', {
+                errorName: err instanceof Error ? err.name : 'UnknownError',
+              });
+              Alert.alert(
+                'Seeding Failed',
+                userFacingError(err, 'Unable to prepare local test data. Please try again.'),
+              );
             } finally {
               setSeeding(false);
             }
@@ -453,10 +486,12 @@ export default function ProctorExaminationTabScreen() {
         router.push(`/(proctor)/lobby?${new URLSearchParams(queryParams).toString()}` as any);
         router.replace(`/(proctor)/lobby?${new URLSearchParams(queryParams).toString()}` as any);
       } catch (err) {
-        console.error('Failed to open examination room:', err);
+        console.error('Failed to open examination room:', {
+          errorName: err instanceof Error ? err.name : 'UnknownError',
+        });
         Alert.alert(
           'Unable to Open Room',
-          err instanceof Error ? err.message : 'Please check your connection and try again.',
+          userFacingError(err, 'Unable to open this examination room. Check the room data and local Wi-Fi, then try again.'),
         );
       } finally {
         setBusy(false);
@@ -517,8 +552,13 @@ export default function ProctorExaminationTabScreen() {
       void executeOpenRoom();
     } catch (err) {
       setBusy(false);
-      console.error('Validation error before opening room:', err);
-      Alert.alert('Validation Error', err instanceof Error ? err.message : 'Unable to validate room setup.');
+      console.error('Validation error before opening room:', {
+        errorName: err instanceof Error ? err.name : 'UnknownError',
+      });
+      Alert.alert(
+        'Validation Error',
+        userFacingError(err, 'Unable to validate the examination room setup. Please try again.'),
+      );
     }
   };
 
@@ -865,7 +905,7 @@ export default function ProctorExaminationTabScreen() {
                   <Text style={[styles.packTitle, { color: colors.textPrimary }]} numberOfLines={1}>
                     {todayStatus.downloadedToday
                       ? packNotice.updateRequired
-                        ? 'Update Examination Pack'
+                        ? 'Update Exam Pack'
                         : "Today's Exam Pack Ready"
                       : (pack?.questions ?? 0) > 0
                         ? 'Cached Exam Pack Ready'
@@ -880,8 +920,20 @@ export default function ProctorExaminationTabScreen() {
                         ? `Cached (${todayStatus.packDate ?? 'Saved'}) · ${pack?.students ?? 0} students · ${pack?.questions ?? 0} questions`
                         : "Download today's passkeys and latest module to include rescheduled applicants and new questions."}
                   </Text>
+                  {pack?.packRevision != null ? (
+                    <Text style={[styles.packSub, { color: colors.textSecondary }]} numberOfLines={1}>
+                      Exam Pack revision {pack.packRevision}
+                      {pack.lastUpdatedAt ? ` · Last updated ${new Date(pack.lastUpdatedAt).toLocaleString()}` : ''}
+                    </Text>
+                  ) : null}
                 </View>
               </View>
+
+              {packReadError ? (
+                <Text style={[styles.packSub, { color: isDark ? '#FCA5A5' : '#991B1B' }]} accessibilityRole="alert">
+                  {packReadError} Refresh to retry; saved data was preserved.
+                </Text>
+              ) : null}
 
               <View style={styles.packActionsRow}>
                 <Button
@@ -889,7 +941,7 @@ export default function ProctorExaminationTabScreen() {
                     refreshing
                       ? 'Updating…'
                       : todayStatus.downloadedToday || (pack?.questions ?? 0) > 0
-                        ? 'Update Examination'
+                        ? 'Update Exam Pack'
                         : 'Download Examination'
                   }
                   variant="primary"

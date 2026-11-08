@@ -43,14 +43,9 @@ export function classifySubmissionError(error: unknown): ClassifiedError {
         ? errObj.statusCode
         : undefined;
 
-  // Case 1: Lost response after successful server processing
-  // The server committed the submission, but the response was lost on the wire.
-  if (
-    lowerMsg.includes('already submitted') ||
-    lowerMsg.includes('already confirmed') ||
-    lowerMsg.includes('already completed') ||
-    lowerMsg.includes('cannot modify answers for a submitted examination')
-  ) {
+  // A message alone is not proof that the server durably recorded this result.
+  // Replays are confirmed by an explicit successful response from the proctor/API.
+  if (errObj?.verifiedSubmissionReceipt === true) {
     return {
       isTransient: false,
       statusCode: statusCode ?? 200,
@@ -82,6 +77,14 @@ export function classifySubmissionError(error: unknown): ClassifiedError {
       isTransient: false,
       statusCode: 404,
       message: 'Examination session not found on server.',
+      isAlreadySubmitted: false,
+    };
+  }
+  if (statusCode === 409) {
+    return {
+      isTransient: false,
+      statusCode: 409,
+      message: rawMsg || 'A different result is already recorded. Ask your proctor to verify it.',
       isAlreadySubmitted: false,
     };
   }
@@ -244,6 +247,32 @@ export const ExamSubmissionCoordinator = {
     return ExamSubmissionStore.load();
   },
 
+  async confirmFromPeerAcknowledgement(
+    submittedAt: string,
+  ): Promise<FinalizedSubmission | null> {
+    const confirmedAt = new Date(submittedAt);
+    if (!Number.isFinite(confirmedAt.getTime())) {
+      throw new Error('The proctor returned an invalid result confirmation timestamp.');
+    }
+
+    const current = await ExamSubmissionStore.load();
+    if (!current || current.status === 'confirmed') return current;
+
+    current.status = 'confirmed';
+    current.receipt = {
+      confirmedAt: confirmedAt.toISOString(),
+      destination: 'proctor_peer',
+      alreadySubmitted: true,
+      confirmationCode: generateSubmissionDigest(current),
+    };
+    current.lastError = null;
+    current.nextRetryAt = null;
+    await ExamSubmissionStore.save(current);
+    await performConfirmedCleanup(current);
+    notifyListeners(current);
+    return current;
+  },
+
   /**
    * Executes a single delivery attempt of the finalized submission.
    * Thread-safe against rapid repeated taps (isDeliveryInFlight guard).
@@ -284,6 +313,9 @@ export const ExamSubmissionCoordinator = {
         attemptId: current.attemptId,
       });
 
+      const peerAcknowledgement = await ExamSubmissionStore.load();
+      if (peerAcknowledgement?.status === 'confirmed') return peerAcknowledgement;
+
       // Delivery confirmed!
       current.status = 'confirmed';
       current.receipt = {
@@ -300,6 +332,9 @@ export const ExamSubmissionCoordinator = {
       notifyListeners(current);
       return current;
     } catch (err: unknown) {
+      const peerAcknowledgement = await ExamSubmissionStore.load();
+      if (peerAcknowledgement?.status === 'confirmed') return peerAcknowledgement;
+
       const classified = classifySubmissionError(err);
 
       // Case: Server had already committed the submission earlier!

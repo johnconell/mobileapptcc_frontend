@@ -38,11 +38,11 @@ test('backend-contract: seeds 30 students and two Manila-day schedules across tw
   assert.equal(proctor2Forbidden.status, 403);
 
   // Student list per schedule (15 students each, 30 total)
-  const students1 = await localApiRequest({ path: '/exam/students?code=TCC10126', method: 'GET' });
+  const students1 = await localApiRequest({ path: '/exam/students?code=TCC10126', method: 'GET', token: token1 });
   assert.equal(students1.body.data.length, 15);
   assert.equal(students1.body.data[0].studentId, 'APP-2026-0001');
 
-  const students2 = await localApiRequest({ path: '/exam/students?code=TCC10226', method: 'GET' });
+  const students2 = await localApiRequest({ path: '/exam/students?code=TCC10226', method: 'GET', token: token2 });
   assert.equal(students2.body.data.length, 15);
   assert.equal(students2.body.data[0].studentId, 'APP-2026-0016');
 });
@@ -54,7 +54,7 @@ test('backend-contract negative: rejects outdated camelCase join payload', async
 });
 
 test('backend-contract: submission is idempotent and preserves the first receipt', async () => {
-  await localApiRequest({ path: '/exam/join', method: 'POST', body: { code: 'TCC10126', applicant_id: 1 } });
+  await localApiRequest({ path: '/exam/join-passkey', method: 'POST', body: { code: 'TCC10126', passkey: 'P0000001' } });
   const participation_token = '00000000-0000-4000-8000-000000000001';
   const payload = { participation_token, answers: [{ exam_question_id: 5001, selected_answer: 'A' }] };
   const first = await localApiRequest({ path: '/exam/submit', method: 'POST', body: payload });

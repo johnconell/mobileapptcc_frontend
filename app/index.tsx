@@ -91,7 +91,14 @@ export default function HomeScreen() {
         const session = await AuthRepository.getCachedSessionFast();
         if (session && active) {
           useProctorStore.getState().setProfile(session);
-          router.replace('/(proctor)/(tabs)/dashboard');
+          const { restoreProctorDestination } = await import(
+            '@/features/examinations/services/restoreProctorDestination'
+          );
+          const destination = await restoreProctorDestination();
+          if (destination.recoveryMessage) {
+            Alert.alert('Room recovery', destination.recoveryMessage);
+          }
+          router.replace(destination.route as any);
           return;
         }
 
@@ -144,7 +151,10 @@ export default function HomeScreen() {
         }
         return;
       }
-      await clearApplicantExamMaterial();
+      // Landing-page initialization is not an authorized reason to erase an
+      // encrypted proctor pack. This can run after logout or a transient auth
+      // storage read failure; student-only exam material is still cleared.
+      await clearApplicantExamMaterial({ preserveOfflinePack: true });
     })();
   }, [router, showPendingExitNotice]);
 

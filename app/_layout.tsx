@@ -1,7 +1,7 @@
 import '../global.css';
 
-import React, { useEffect, useRef } from 'react';
-import { Alert, AppState, Platform } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Alert, AppState, Platform, Pressable, Text, View } from 'react-native';
 import { Stack, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
@@ -20,8 +20,15 @@ import { colors } from '@/shared/theme';
 import { startNetworkMonitoring } from '@/features/monitoring/services/networkMonitor';
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
 import { recoverOrphanedStudentKioskAtStartup } from '@/features/examinations/services/resumeExamSession';
-import { PeerExamServer } from '@/features/examinations/services/peerExamServer';
 import { LocalTestingBanner } from '@/features/local-testing/LocalTestingBanner';
+import { ErrorBoundary } from '@/shared/components/ErrorBoundary';
+import * as Network from 'expo-network';
+import { OfflineStore } from '@/features/synchronization/services/offlineStore';
+import {
+  isRetryableResultSyncError,
+  OfflineExamRepository,
+} from '@/features/synchronization/services/offlineExamRepository';
+import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
@@ -105,9 +112,75 @@ function ExamFlowKeepAwake() {
   return null;
 }
 
+function AutomaticResultSync() {
+  const token = useProctorStore((state) => state.profile?.token);
+  const offlineSession = useProctorStore((state) => state.profile?.offlineSession);
+
+  useEffect(() => {
+    if (!token || offlineSession) return;
+
+    let active = true;
+    let syncing = false;
+    let retryAttempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const syncWhenOnline = async () => {
+      if (!active || syncing) return;
+      syncing = true;
+      try {
+        const network = await Network.getNetworkStateAsync();
+        if (!active || network.isConnected !== true || network.isInternetReachable === false) return;
+
+        const pending = await OfflineStore.pendingResults();
+        if (!active || !pending.length) return;
+
+        const result = await OfflineExamRepository.syncQueuedToCloud();
+        console.info('[RESULT SYNC] Automatic synchronization completed:', {
+          confirmed: result.synced,
+        });
+        retryAttempt = 0;
+      } catch (error) {
+        console.warn('[RESULT SYNC] Automatic synchronization did not complete:', {
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        });
+        if (active && isRetryableResultSyncError(error)) {
+          const delay = Math.min(300_000, 5_000 * 2 ** Math.min(retryAttempt, 6));
+          retryAttempt += 1;
+          if (retryTimer) clearTimeout(retryTimer);
+          retryTimer = setTimeout(() => void syncWhenOnline(), delay);
+        }
+      } finally {
+        syncing = false;
+      }
+    };
+
+    const networkSubscription = Network.addNetworkStateListener((state) => {
+      if (state.isConnected === true && state.isInternetReachable !== false) {
+        retryAttempt = 0;
+        if (retryTimer) clearTimeout(retryTimer);
+        void syncWhenOnline();
+      }
+    });
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void syncWhenOnline();
+    });
+
+    void syncWhenOnline();
+    return () => {
+      active = false;
+      networkSubscription.remove();
+      appStateSubscription.remove();
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [offlineSession, token]);
+
+  return null;
+}
+
 export default function RootLayout() {
   const hydrate = useSettingsStore((s) => s.hydrate);
-  const hostRestoreStarted = useRef(false);
+  const [startupError, setStartupError] = useState(false);
+  const [startupAttempt, setStartupAttempt] = useState(0);
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
@@ -115,54 +188,85 @@ export default function RootLayout() {
   });
 
   useEffect(() => {
-    const cleanupNetwork = startNetworkMonitoring();
+    let cleanupNetwork: () => void = () => {};
+    let active = true;
 
     async function prepare() {
-      await hydrateApiBaseUrl();
-      await hydrate();
-      await recoverOrphanedStudentKioskAtStartup();
-      if (!hostRestoreStarted.current) {
-        hostRestoreStarted.current = true;
-        // Bind a persisted proctor room after process restart without making
-        // the app shell wait on local server or foreground-service startup.
-        void PeerExamServer.restore().catch((error) => {
-          console.warn('[PEER RESTORE] Startup restore failed:', error);
+      setStartupError(false);
+      try {
+        cleanupNetwork = startNetworkMonitoring();
+        await hydrateApiBaseUrl();
+        await hydrate();
+        await recoverOrphanedStudentKioskAtStartup();
+      } catch (error) {
+        console.error('[APP STARTUP] Initialization failed:', {
+          errorName: error instanceof Error ? error.name : 'UnknownError',
         });
-      }
-      if (fontsLoaded) {
-        await SplashScreen.hideAsync();
+        if (active) setStartupError(true);
+      } finally {
+        if (fontsLoaded) {
+          await SplashScreen.hideAsync().catch((error) => {
+            console.warn('[APP STARTUP] Could not dismiss splash screen:', {
+              errorName: error instanceof Error ? error.name : 'UnknownError',
+            });
+          });
+        }
       }
     }
     void prepare();
 
     return () => {
+      active = false;
       cleanupNetwork();
     };
-  }, [hydrate, fontsLoaded]);
+  }, [hydrate, fontsLoaded, startupAttempt]);
 
   if (!fontsLoaded) {
     return null;
   }
 
-  return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <AppProviders>
-        <ExamFlowKeepAwake />
-        <StatusBar style="dark" />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: colors.background },
-            animation: 'fade',
-          }}
+  if (startupError) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', padding: 24, backgroundColor: colors.background }}>
+        <Text style={{ color: colors.ink, fontSize: 20, fontWeight: '700', textAlign: 'center' }}>
+          Unable to prepare the app
+        </Text>
+        <Text style={{ color: colors.inkSecondary, fontSize: 14, lineHeight: 21, textAlign: 'center', marginTop: 10 }}>
+          Local app data could not be loaded. Your saved examination data was not intentionally cleared. Retry to recover the session.
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setStartupAttempt((attempt) => attempt + 1)}
+          style={{ alignSelf: 'center', marginTop: 20, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12, backgroundColor: colors.primary }}
         >
-          <Stack.Screen name="index" />
-          <Stack.Screen name="offline-prepare" />
-          <Stack.Screen name="(student)" />
-          <Stack.Screen name="(proctor)" />
-        </Stack>
-        <LocalTestingBanner />
-      </AppProviders>
-    </GestureHandlerRootView>
+          <Text style={{ color: colors.white, fontWeight: '700' }}>Retry</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <ErrorBoundary fallbackTitle="The app needs to recover" fallbackMessage="An unexpected screen error occurred. Your examination data is kept locally; try again or reopen the app.">
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <AppProviders>
+          <ExamFlowKeepAwake />
+          <AutomaticResultSync />
+          <StatusBar style="dark" />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: colors.background },
+              animation: 'fade',
+            }}
+          >
+            <Stack.Screen name="index" />
+            <Stack.Screen name="offline-prepare" />
+            <Stack.Screen name="(student)" />
+            <Stack.Screen name="(proctor)" />
+          </Stack>
+          <LocalTestingBanner />
+        </AppProviders>
+      </GestureHandlerRootView>
+    </ErrorBoundary>
   );
 }

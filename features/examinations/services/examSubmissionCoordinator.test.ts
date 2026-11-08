@@ -76,11 +76,16 @@ test('submission error classifier: correctly identifies transient vs non-transie
   assert.equal(s422Class.isTransient, false);
   assert.equal(s422Class.statusCode, 422);
 
-  // 6. Lost response recovery: server committed result earlier (already submitted)
+  // A conflict message is not proof of receipt; it must not be treated as success.
   const errLostAck = new Error('Examination submission was already confirmed.');
   (errLostAck as any).status = 422;
   const lostClass = classifySubmissionError(errLostAck);
-  assert.equal(lostClass.isAlreadySubmitted, true);
+  assert.equal(lostClass.isAlreadySubmitted, false);
+  assert.equal(lostClass.isTransient, false);
+
+  const conflict = new Error('A different finalized result is already recorded.');
+  (conflict as any).status = 409;
+  assert.equal(classifySubmissionError(conflict).isTransient, false);
 });
 
 test('submission coordinator: bounded backoff calculation includes jitter and respects limits', () => {
@@ -195,12 +200,27 @@ test('submission coordinator: successful delivery transitions to confirmed and p
   }
 });
 
-test('submission coordinator: lost response after server commitment recovers as confirmed without creating duplicate', async () => {
+test('submission coordinator: a proctor acknowledgement confirms a force-ended queued result', async () => {
+  await ExamSubmissionStore.save(dummySubmission);
+
+  const result = await ExamSubmissionCoordinator.confirmFromPeerAcknowledgement(
+    '2026-11-02T08:05:00.000Z',
+  );
+
+  assert.ok(result != null);
+  assert.equal(result.status, 'confirmed');
+  assert.equal(result.receipt?.destination, 'proctor_peer');
+  assert.equal(result.receipt?.alreadySubmitted, true);
+  assert.equal(result.receipt?.confirmedAt, '2026-11-02T08:05:00.000Z');
+  assert.equal((await ExamSubmissionStore.load())?.status, 'confirmed');
+});
+
+test('submission coordinator: an already-submitted error message alone does not confirm a lost response', async () => {
   await ExamSubmissionStore.save(dummySubmission);
 
   const originalSubmit = QuestionRepository.submitAnswers;
   try {
-    // Simulate server returning 422 with message that student already submitted
+    // A text-only 422 cannot prove that this exact answer set was saved.
     QuestionRepository.submitAnswers = async () => {
       const err = new Error('Examination submission was already confirmed.');
       (err as any).status = 422;
@@ -209,9 +229,8 @@ test('submission coordinator: lost response after server commitment recovers as 
 
     const result = await ExamSubmissionCoordinator.deliver();
     assert.ok(result != null);
-    // Must be recognized as CONFIRMED success, not failure!
-    assert.equal(result.status, 'confirmed');
-    assert.equal(result.receipt?.alreadySubmitted, true);
+    assert.equal(result.status, 'action_required');
+    assert.equal(Boolean(result.receipt), false);
   } finally {
     QuestionRepository.submitAnswers = originalSubmit;
   }
@@ -370,5 +389,4 @@ test('scenario: restart while pending - resumes directly to submitting screen wi
   assert.equal(reloaded.attemptId, 'att-user-123');
   assert.deepEqual(reloaded.answers, dummySubmission.answers);
 });
-
 

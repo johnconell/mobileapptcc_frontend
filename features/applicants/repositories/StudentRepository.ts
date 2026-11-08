@@ -7,8 +7,8 @@ import { PeerExamClient } from '@/features/examinations/services/peerExamClient'
 import type { Program, StudentRecord } from '@/shared/types';
 
 /**
- * StudentRepository — applicants registered to the active exam schedule.
- * GET /api/v1/exam/students?code=
+ * StudentRepository — legacy name-list selection is retired.
+ * Live student admission is passkey-based.
  */
 export const StudentRepository = {
   async getAll(): Promise<StudentRecord[]> {
@@ -23,11 +23,7 @@ export const StudentRepository = {
       return OfflineExamRepository.getStudentsForSchedule(scheduleId);
     }
 
-    const json = await apiRequest<{ success: boolean; data: StudentRecord[] }>(
-      `/exam/students?code=${encodeURIComponent(code)}`,
-      { auth: false },
-    );
-    return json.data || [];
+    throw new Error('Student name selection is retired. Enter the examination passkey.');
   },
 
   async search(query: string): Promise<StudentRecord[]> {
@@ -49,9 +45,6 @@ export const StudentRepository = {
 
   /** Soft-claim a name so it shows Ready (green) and cannot be taken by others. */
   async claimStudent(student: StudentRecord): Promise<StudentRecord> {
-    const code = await appStorage.getItem(STORAGE_KEYS.examinationCode);
-    if (!code) throw new Error('Missing examination code. Scan QR again.');
-
     if (await OfflineStore.isOfflineMode()) {
       await OfflineStore.setLocalClaim(student.id);
       return {
@@ -62,30 +55,7 @@ export const StudentRepository = {
       };
     }
 
-    const json = await apiRequest<{
-      success: boolean;
-      message?: string;
-      data?: { registration_id: number; selectionStatus: string };
-    }>('/exam/claim', {
-      method: 'POST',
-      auth: false,
-      body: {
-        code,
-        applicant_id: Number(student.id),
-      },
-    });
-
-    if (!json.success) {
-      throw new Error(json.message || 'Unable to select this student.');
-    }
-
-    return {
-      ...student,
-      selectionStatus: 'ready',
-      statusLabel: 'Ready',
-      selectable: false,
-      registration_id: json.data?.registration_id ?? student.registration_id,
-    };
+    throw new Error('Student name selection is retired. Enter the examination passkey.');
   },
 
   async releaseClaim(studentId: string): Promise<void> {
@@ -111,16 +81,12 @@ export const StudentRepository = {
       return;
     }
 
-    const code = await appStorage.getItem(STORAGE_KEYS.examinationCode);
-    if (!code) return;
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) return;
 
-    await apiRequest('/exam/release-claim', {
+    await apiRequest('/exam/cancel', {
       method: 'POST',
-      auth: false,
-      body: {
-        code,
-        applicant_id: Number(studentId),
-      },
+      body: { participation_token: token },
     });
   },
 

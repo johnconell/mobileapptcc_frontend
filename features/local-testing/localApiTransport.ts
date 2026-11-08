@@ -1,5 +1,6 @@
 import { loadLocalApiState, saveLocalApiState } from './localApiStore';
 import type { LocalAttempt } from './fixtures';
+import { isValidPasskey, normalizePasskey } from '@/features/examinations/services/passkeyFormat';
 
 export type LocalTransportRequest = { path: string; method: string; body?: unknown; token?: string | null };
 export type LocalTransportResult = { status: number; body: any };
@@ -95,6 +96,7 @@ export async function localApiRequest(request: LocalTransportRequest): Promise<L
       success: true,
       data: {
         pack_version: 1,
+        pack_revision: state.fixtureVersion,
         exported_at: new Date().toISOString(),
         authorization: { actor_id: currentProctor!.id, scope: 'assigned_rooms', schedule_ids: [...authorizedScheduleIds] },
         schedules,
@@ -135,6 +137,7 @@ export async function localApiRequest(request: LocalTransportRequest): Promise<L
     const studentCount = authorizedRooms.reduce((sum, r) => sum + Number(r.student_count || 0), 0);
     return ok({ success: true, data: {
       update_required: false,
+      pack_revision: state.fixtureVersion,
       registration_count: studentCount,
       schedule_count: authorizedSchedules.length,
       content_fingerprint: `local-${state.fixtureVersion}-${[...authorizedScheduleIds].join('-')}`,
@@ -178,13 +181,21 @@ export async function localApiRequest(request: LocalTransportRequest): Promise<L
     return ok({ success: true, valid: true, message: 'Examination found.', data: snapshot, schedule: snapshot.schedule, session: snapshot.session, examinationCode: codeFor(scheduleId) });
   }
   if (path === '/exam/students' && method === 'GET') {
+    if (!currentProctor) return fail(401, 'Authentication required for legacy student lists.');
     const scheduleId = scheduleForCode(url.searchParams.get('code') ?? '');
     if (!scheduleId) return fail(404, 'Invalid or inactive examination code.');
+    if (!authorizedScheduleIds.has(scheduleId)) return fail(403, 'You are not assigned to this examination schedule.');
     const range = scheduleId === 101 ? [0, 15] : [15, 30];
-    return ok({ success: true, data: state.students.slice(range[0], range[1]) });
+    return ok({
+      success: true,
+      data: state.students.slice(range[0], range[1]).map(({ email, ...student }) => student),
+    });
   }
   if ((path === '/exam/claim' || path === '/exam/release-claim') && method === 'POST') {
+    if (!currentProctor) return fail(401, 'Authentication required for legacy student claims.');
     if (typeof body.code !== 'string' || !Number.isInteger(body.applicant_id)) return fail(422, 'The given data was invalid.', { applicant_id: ['The applicant id field must be an integer.'] });
+    const scheduleId = scheduleForCode(body.code);
+    if (!scheduleId || !authorizedScheduleIds.has(scheduleId)) return fail(403, 'You are not assigned to this examination schedule.');
     const student = state.students.find((row) => Number(row.id) === body.applicant_id);
     if (!student) return fail(422, 'The selected applicant id is invalid.');
     return ok({ success: true, message: path.endsWith('release-claim') ? 'Student name released.' : 'Student name reserved.', ...(path.endsWith('/claim') ? { data: { registration_id: student.registration_id, selectionStatus: 'ready' } } : {}) });
@@ -201,15 +212,15 @@ export async function localApiRequest(request: LocalTransportRequest): Promise<L
   }
   if (path === '/exam/passkey/validate' && method === 'POST') {
     const scheduleId = scheduleForCode(body.code);
-    if (!scheduleId || typeof body.passkey !== 'string' || !/^[A-Za-z0-9]{8}$/.test(body.passkey)) return fail(422, 'The given data was invalid.');
-    const applicantId = state.passkeys[body.passkey.toUpperCase()];
+    if (!scheduleId || typeof body.passkey !== 'string' || !isValidPasskey(body.passkey)) return fail(422, 'The given data was invalid.');
+    const applicantId = state.passkeys[normalizePasskey(body.passkey)];
     const validRange = scheduleId === 101 ? applicantId >= 1 && applicantId <= 15 : applicantId >= 16 && applicantId <= 30;
     if (!applicantId || !validRange) return fail(422, 'Invalid examination key for this schedule.');
     return ok({ success: true, message: 'Examination key verified.', data: { student: state.students[applicantId - 1], schedule: state.schedules.find((row) => Number(row.id) === scheduleId) } });
   }
   if (path === '/exam/join-passkey' && method === 'POST') {
     const scheduleId = scheduleForCode(body.code);
-    const applicantId = typeof body.passkey === 'string' ? state.passkeys[body.passkey.toUpperCase()] : undefined;
+    const applicantId = typeof body.passkey === 'string' ? state.passkeys[normalizePasskey(body.passkey)] : undefined;
     if (!scheduleId || !applicantId) return fail(422, 'Invalid examination key.');
     const student = state.students[applicantId - 1];
     const participationToken = uuid(applicantId);

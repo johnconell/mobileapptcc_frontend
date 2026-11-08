@@ -25,6 +25,7 @@ import { QUERY_KEYS } from '@/shared/constants';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { colors, shadows } from '@/shared/theme';
 import { safeBack } from '@/shared/utils';
+import { userFacingError } from '@/shared/utils/userFacingError';
 import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { getProctorScheduleAvailability } from '@/features/schedules/utils/proctorScheduleWindow';
@@ -291,7 +292,7 @@ export default function RoomsScreen() {
       console.error('Failed to open room lobby:', error);
       Alert.alert(
         'Unable to Open Room',
-        error instanceof Error ? error.message : 'Please check your connection and try again.',
+        userFacingError(error, 'Unable to open this examination room. Check the room data and local Wi-Fi, then try again.'),
       );
     } finally {
       setBusy(false);

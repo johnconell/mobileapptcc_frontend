@@ -166,6 +166,10 @@ export const QuestionRepository = {
         timeoutMs: 15000,
       });
 
+      if (response?.submitted !== true) {
+        throw new Error('The proctor did not confirm that this result was saved. Keep this submission and retry.');
+      }
+
       console.log('[OFFLINE] Submission confirmed. Safe to delete temporary data.');
       return {
         success: true,
@@ -227,16 +231,9 @@ export const QuestionRepository = {
         destination: 'cloud',
         alreadySubmitted: Boolean(json.already_submitted),
       };
-    } catch (err: any) {
-      const msg = String(err?.message || '').toLowerCase();
-      if (msg.includes('already submitted') || msg.includes('already confirmed')) {
-        return {
-          success: true,
-          submittedAt: new Date().toISOString(),
-          destination: 'cloud',
-          alreadySubmitted: true,
-        };
-      }
+    } catch (err) {
+      // A rejection message cannot prove durable receipt. Only an explicit
+      // successful API response above is accepted as submission confirmation.
       throw err;
     }
   },

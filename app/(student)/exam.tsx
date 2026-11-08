@@ -63,9 +63,11 @@ import { ExamLifecycle } from '@/features/examinations/services/examLifecycle';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { parseStartPulse } from '@/features/examinations/services/examStartCoordinator';
 import { playExamTimeWarning } from '@/features/examinations/services/examTimeWarning';
-import { stopExamLock } from '@/features/examinations/services/ExamSecurityService';
+import { releaseExamSessionRestrictions } from '@/features/examinations/services/examSessionRestrictions';
 import { recordStudentDisconnect } from '@/features/monitoring/services/studentDisconnectAudit';
 import type { StudentDisconnectReason } from '@/features/monitoring/services/studentDisconnectAudit';
+import { classifyPeerReconnectError } from '@/features/examinations/services/peerReconnectErrors';
+import { userFacingError } from '@/shared/utils/userFacingError';
 import {
   createSubmitController,
   type SubmitReason,
@@ -152,8 +154,14 @@ function ExamScreenInner() {
   const [reconnectLoading, setReconnectLoading] = useState(false);
   const [reconnectError, setReconnectError] = useState<string | null>(null);
   const [roomEnded, setRoomEnded] = useState(false);
+  const [emergencySuspended, setEmergencySuspended] = useState(false);
+  const [emergencyReason, setEmergencyReason] = useState<string | null>(null);
   const [manualReconnectFailed, setManualReconnectFailed] = useState(false);
   const [isLeavingExam, setIsLeavingExam] = useState(false);
+  const [checkpointError, setCheckpointError] = useState<string | null>(null);
+  const [checkpointSaving, setCheckpointSaving] = useState(false);
+  const [checkpointSaved, setCheckpointSaved] = useState(false);
+  const [checkpointLoadRetry, setCheckpointLoadRetry] = useState(0);
 
   // Store state & selectors
   const questions = useExamStore((s) => s.questions);
@@ -180,8 +188,10 @@ function ExamScreenInner() {
   const isReconciling = timerStatus === 'reconciliation_required';
 
   const restoredRef = useRef(false);
+  const checkpointRecoveryBlocked = useRef(false);
   const lowTimeWarnedRef = useRef(false);
   const autoSubmittedRef = useRef(false);
+  const forceEndSubmissionStarted = useRef(false);
   const exitStartedRef = useRef(false);
 
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
@@ -189,18 +199,16 @@ function ExamScreenInner() {
   const [guidedAccess] = useGuidedAccessStatus();
   const guidedAccessIncidentOpen = useRef(false);
 
-  useEffect(() => {
-    if (Platform.OS !== 'ios' || !securityEnabled || roomEnded || isLeavingExam) return;
-    if (guidedAccess === 'enabled') {
-      guidedAccessIncidentOpen.current = false;
-      return;
-    }
-    if (guidedAccessIncidentOpen.current) return;
-    guidedAccessIncidentOpen.current = true;
+  const persistLocalCheckpoint = useCallback(async () => {
+    if (checkpointRecoveryBlocked.current) return false;
     const state = useExamStore.getState();
     const student = useStudentStore.getState().verifiedStudent;
-    if (state.sessionId && student?.id) {
-      void ExamProgressStore.save({
+    if (!state.sessionId || !student?.id || !state.questions.length) return false;
+
+    setCheckpointSaving(true);
+    setCheckpointSaved(false);
+    try {
+      await ExamProgressStore.save({
         sessionId: state.sessionId,
         studentId: student.id,
         attemptId: state.attemptId ?? undefined,
@@ -214,7 +222,36 @@ function ExamScreenInner() {
         deadline: state.deadline,
         scheduleClosingTime: state.scheduleClosingTime,
         timeSync: state.timeSync ?? undefined,
-      }).catch((error) => console.warn('[GUIDED ACCESS] Checkpoint failed:', error));
+      });
+      markAutoSaved();
+      setCheckpointSaved(true);
+      setCheckpointError(null);
+      return true;
+    } catch (error) {
+      console.warn('[EXAM CHECKPOINT] Local save failed:', {
+        errorName: error instanceof Error ? error.name : 'StorageError',
+      });
+      setCheckpointError(
+        'Unable to save your answers on this device. Your answers remain on this screen; keep the exam open and retry.',
+      );
+      return false;
+    } finally {
+      setCheckpointSaving(false);
+    }
+  }, [markAutoSaved]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'ios' || !securityEnabled || roomEnded || isLeavingExam) return;
+    if (guidedAccess === 'enabled') {
+      guidedAccessIncidentOpen.current = false;
+      return;
+    }
+    if (guidedAccessIncidentOpen.current) return;
+    guidedAccessIncidentOpen.current = true;
+    const state = useExamStore.getState();
+    const student = useStudentStore.getState().verifiedStudent;
+    if (state.sessionId && student?.id) {
+      void persistLocalCheckpoint();
       void SecurityRepository.recordViolation({
         sessionId: state.sessionId,
         studentId: student.id,
@@ -225,7 +262,7 @@ function ExamScreenInner() {
           : 'Guided Access became inactive during examination.',
       }).catch((error) => console.warn('[GUIDED ACCESS] Incident log failed:', error));
     }
-  }, [guidedAccess, securityEnabled, roomEnded, isLeavingExam]);
+  }, [guidedAccess, securityEnabled, roomEnded, isLeavingExam, persistLocalCheckpoint]);
 
   // Sync mode with local storage
   useEffect(() => {
@@ -285,21 +322,7 @@ function ExamScreenInner() {
       const state = useExamStore.getState();
       const student = useStudentStore.getState().verifiedStudent;
       if (!state.sessionId || !student?.id || !state.questions.length) return;
-      void ExamProgressStore.save({
-        sessionId: state.sessionId,
-        studentId: student.id,
-        attemptId: state.attemptId ?? undefined,
-        answers: state.answers,
-        flags: state.flags,
-        navMode: state.navMode,
-        currentIndex: state.currentIndex,
-        remainingSeconds: state.remainingSeconds,
-        totalDurationSeconds: state.totalDurationSeconds,
-        startedAt: state.startedAt,
-        deadline: state.deadline,
-        scheduleClosingTime: state.scheduleClosingTime,
-        timeSync: state.timeSync ?? undefined,
-      }).catch((error) => console.warn('[EXAM CHECKPOINT] Background save failed:', error));
+      void persistLocalCheckpoint();
     };
     const appStateSubscription = AppState.addEventListener('change', (state) => {
       if (state === 'inactive' || state === 'background') flush();
@@ -319,7 +342,7 @@ function ExamScreenInner() {
     return () => {
       appStateSubscription.remove();
     };
-  }, []);
+  }, [persistLocalCheckpoint]);
 
   const onWifiDisconnect = useCallback(
     (reason: 'wifi_lost' | 'wrong_network' | 'proctor_network_change') => {
@@ -363,7 +386,7 @@ function ExamScreenInner() {
 
       // Release Android Lock Task before any storage cleanup so a failed local
       // write can never keep the student inside kiosk mode.
-      await stopExamLock().catch(() => undefined);
+      await releaseExamSessionRestrictions('exam_exit').catch(() => undefined);
 
       const token = await appStorage.getItem(STORAGE_KEYS.participationToken).catch(() => null);
       if (token) {
@@ -407,63 +430,61 @@ function ExamScreenInner() {
       const payload = Object.fromEntries(
         Object.values(answers).map((a) => [a.questionId, a.selectedAnswer]),
       );
-      void QuestionRepository.saveProgress(payload).then((result) => {
-        if (result.saved && result.savedAt) {
-          markAutoSaved(result.savedAt);
-        }
+      void QuestionRepository.saveProgress(payload).catch((error) => {
+        console.warn('[EXAM CHECKPOINT] Server autosave unavailable:', {
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        });
       });
     }, 1200);
     return () => clearTimeout(timer);
-  }, [answers, questions.length, markAutoSaved, wifiLocked]);
+  }, [answers, questions.length, wifiLocked]);
 
   // Periodic autosave to local offline store
   useEffect(() => {
     if (!questions.length || !sessionId || !verifiedStudent?.id) return;
     const timer = setTimeout(() => {
-      const state = useExamStore.getState();
-      void ExamProgressStore.save({
-        sessionId,
-        studentId: verifiedStudent.id,
-        attemptId: state.attemptId ?? undefined,
-        answers,
-        flags,
-        navMode,
-        currentIndex: state.currentIndex,
-        remainingSeconds: state.remainingSeconds,
-        totalDurationSeconds: state.totalDurationSeconds,
-        startedAt: state.startedAt,
-        deadline: state.deadline,
-        scheduleClosingTime: state.scheduleClosingTime,
-        timeSync: state.timeSync ?? undefined,
-      });
+      void persistLocalCheckpoint();
     }, 2000);
     return () => clearTimeout(timer);
-  }, [answers, flags, navMode, currentIndex, sessionId, verifiedStudent?.id, startedAt, questions.length]);
+  }, [answers, flags, navMode, currentIndex, sessionId, verifiedStudent?.id, startedAt, questions.length, persistLocalCheckpoint]);
 
   // Restore progress on mount
   useEffect(() => {
     if (restoredRef.current || !questions.length || !sessionId || !verifiedStudent?.id) return;
     restoredRef.current = true;
     void ExamProgressStore.load().then((checkpoint) => {
-      if (!checkpoint) return;
-      if (checkpoint.sessionId !== sessionId) return;
-      if (checkpoint.studentId !== verifiedStudent.id) return;
-      restoreProgress({
-        answers: checkpoint.answers,
-        flags: checkpoint.flags,
-        navMode: checkpoint.navMode,
-        currentIndex: checkpoint.currentIndex,
-        remainingSeconds: checkpoint.remainingSeconds,
-        totalDurationSeconds: checkpoint.totalDurationSeconds,
-        startedAt: checkpoint.startedAt,
-        deadline: checkpoint.deadline,
-        scheduleClosingTime: checkpoint.scheduleClosingTime,
-        attemptId: checkpoint.attemptId,
-        timeSync: checkpoint.timeSync,
+      if (checkpoint && checkpoint.sessionId === sessionId && checkpoint.studentId === verifiedStudent.id) {
+        restoreProgress({
+          answers: checkpoint.answers,
+          flags: checkpoint.flags,
+          navMode: checkpoint.navMode,
+          currentIndex: checkpoint.currentIndex,
+          remainingSeconds: checkpoint.remainingSeconds,
+          totalDurationSeconds: checkpoint.totalDurationSeconds,
+          startedAt: checkpoint.startedAt,
+          deadline: checkpoint.deadline,
+          scheduleClosingTime: checkpoint.scheduleClosingTime,
+          attemptId: checkpoint.attemptId,
+          timeSync: checkpoint.timeSync,
+        });
+        markAutoSaved(checkpoint.savedAt);
+        setCheckpointSaved(true);
+      }
+      checkpointRecoveryBlocked.current = false;
+      setCheckpointError(null);
+      setPaused(false);
+    }).catch((error) => {
+      console.warn('[EXAM CHECKPOINT] Could not restore local answers:', {
+        errorName: error instanceof Error ? error.name : 'StorageError',
       });
-      markAutoSaved(checkpoint.savedAt);
+      checkpointRecoveryBlocked.current = true;
+      setCheckpointSaved(false);
+      setPaused(true);
+      setCheckpointError(
+        'Saved exam progress could not be read. Answering is paused to protect your existing data. Retry loading the saved progress.',
+      );
     });
-  }, [questions.length, sessionId, verifiedStudent?.id, restoreProgress, markAutoSaved]);
+  }, [questions.length, sessionId, verifiedStudent?.id, restoreProgress, markAutoSaved, setPaused, checkpointLoadRetry]);
 
   // Heartbeat & Timer Sync with proctor
   useEffect(() => {
@@ -471,6 +492,10 @@ function ExamScreenInner() {
     let cancelled = false;
     const beat = async () => {
       const pulse = await LobbyRepository.sendHeartbeat();
+      if (typeof pulse.emergencySuspended === 'boolean') {
+        setEmergencySuspended(pulse.emergencySuspended);
+        setEmergencyReason(pulse.emergencySuspended ? pulse.emergencyReason ?? null : null);
+      }
       if (pulse.removed || pulse.myStatus === 'terminated') {
         cancelled = true;
         await exitToLanding('proctor_removed', 'The proctor removed you from this examination.');
@@ -556,10 +581,7 @@ function ExamScreenInner() {
       // 1. Freeze answering and mark submitting
       markSubmitting(true);
 
-      // 2. Leave kiosk lock before navigating
-      await stopExamLock().catch(() => undefined);
-
-      // 3. Durably persist finalized submission record BEFORE attempting network delivery
+      // Persist the finalized record before releasing the exam lock or leaving this screen.
       try {
         const state = useExamStore.getState();
         const sid = sessionId ?? 'unknown';
@@ -595,13 +617,34 @@ function ExamScreenInner() {
 
         await ExamSubmissionStore.save(finalizedRecord);
       } catch (error) {
-        console.warn('[SUBMIT] Finalized submission pre-save failed:', error);
+        console.warn('[SUBMIT] Finalized submission could not be saved:', {
+          errorName: error instanceof Error ? error.name : 'StorageError',
+        });
+        markSubmitting(false);
+        if (reason === 'proctor_ended') {
+          await releaseExamSessionRestrictions('session_ended').catch((releaseError) => {
+            console.error('[EXAM SECURITY] Could not release restrictions after proctor force-end:', {
+              errorName: releaseError instanceof Error ? releaseError.name : 'SecurityError',
+            });
+          });
+        }
+        await persistLocalCheckpoint();
+        throw new Error(
+          'Unable to safely save your submission on this device. Your answers remain on this screen; retry before leaving.',
+        );
       }
 
-      // 4. Navigate to submitting screen which drives the bounded retry coordinator
+      try {
+        await releaseExamSessionRestrictions('submission_confirmed');
+      } catch (error) {
+        console.error('[EXAM SECURITY] Could not release restrictions after saving submission:', {
+          errorName: error instanceof Error ? error.name : 'SecurityError',
+        });
+      }
+
       router.replace('/(student)/submitting');
     },
-    [answers, sessionId, verifiedStudent, markSubmitting, router],
+    [answers, sessionId, verifiedStudent, markSubmitting, router, persistLocalCheckpoint],
   );
   const finalizeSubmissionRef = useRef(finalizeSubmission);
   finalizeSubmissionRef.current = finalizeSubmission;
@@ -613,9 +656,10 @@ function ExamScreenInner() {
         onFailure: (error) => {
           Alert.alert(
             'Submission failed',
-            error instanceof Error
-              ? error.message
-              : 'Submission failed. Please stay on the exam Wi-Fi and try again.',
+            userFacingError(
+              error,
+              'Unable to safely save your submission on this device. Your answers remain on this screen; retry before leaving.',
+            ),
           );
         },
       }),
@@ -637,6 +681,12 @@ function ExamScreenInner() {
   const leaveEndedExam = useCallback(() => {
     requestSubmit('proctor_ended');
   }, [requestSubmit]);
+
+  useEffect(() => {
+    if (!roomEnded || forceEndSubmissionStarted.current) return;
+    forceEndSubmissionStarted.current = true;
+    requestSubmit('proctor_ended');
+  }, [roomEnded, requestSubmit]);
 
   const confirmSubmit = useCallback(
     (typedPhrase: string) => {
@@ -666,6 +716,7 @@ function ExamScreenInner() {
   const isIosUnguided = Platform.OS === 'ios' && guidedAccess !== 'enabled';
   const paused =
     wifiLocked ||
+    emergencySuspended ||
     isAndroidUnpinned ||
     isIosUnguided ||
     roomEnded ||
@@ -723,7 +774,12 @@ function ExamScreenInner() {
           return;
         }
         if (!pulse.ok) {
-          setReconnectError(pulse.message || 'Cannot reach the proctor.');
+          const message = classifyPeerReconnectError(pulse.message || 'Cannot reach the proctor');
+          setReconnectError(
+            message === 'Cannot reach the proctor'
+              ? "Cannot connect to the proctor's device. Check your local Wi-Fi connection and retry."
+              : message,
+          );
           setManualReconnectFailed(true);
           return;
         }
@@ -736,7 +792,13 @@ function ExamScreenInner() {
         }
         setReconnectError(null);
       } catch (error) {
-        setReconnectError(error instanceof Error ? error.message : 'Reconnect failed.');
+        const rawMessage = error instanceof Error ? error.message : '';
+        const peerMessage = classifyPeerReconnectError(rawMessage);
+        setReconnectError(
+          peerMessage === 'Cannot reach the proctor'
+            ? "Cannot connect to the proctor's device. Check your local Wi-Fi connection and retry."
+            : userFacingError(error, 'Unable to reconnect to the proctor. Check your local Wi-Fi and retry.'),
+        );
         setManualReconnectFailed(true);
       } finally {
         if (!exitStartedRef.current) setReconnectLoading(false);
@@ -766,7 +828,12 @@ function ExamScreenInner() {
         return;
       }
       if (!pulse.ok) {
-        throw new Error(pulse.message || 'Cannot reach the proctor.');
+        const message = classifyPeerReconnectError(pulse.message || 'Cannot reach the proctor');
+        throw new Error(
+          message === 'Cannot reach the proctor'
+            ? "Cannot connect to the proctor's device. Check your local Wi-Fi connection."
+            : message,
+        );
       }
 
       const unlocked = await unlockAfterReconnect();
@@ -779,7 +846,13 @@ function ExamScreenInner() {
       setManualReconnectFailed(false);
     } catch (error) {
       if (exitStartedRef.current) return;
-      setReconnectError(error instanceof Error ? error.message : 'Cannot reach the proctor.');
+      const rawMessage = error instanceof Error ? error.message : '';
+      const peerMessage = classifyPeerReconnectError(rawMessage);
+      setReconnectError(
+        peerMessage === 'Cannot reach the proctor'
+          ? "Cannot connect to the proctor's device. Check your local Wi-Fi connection and retry."
+          : userFacingError(error, 'Unable to reconnect to the proctor. Check your local Wi-Fi and retry.'),
+      );
       setManualReconnectFailed(true);
       router.push({ pathname: '/(student)/scan', params: { mode: 'reconnect' } } as any);
     } finally {
@@ -841,40 +914,20 @@ function ExamScreenInner() {
       setCurrentIndex(index);
       if (verifiedStudent?.id) {
         void LobbyRepository.touchActivity(verifiedStudent.id);
-        const state = useExamStore.getState();
-        void ExamProgressStore.save({
-          sessionId: state.sessionId || 'default',
-          studentId: verifiedStudent.id,
-          answers: state.answers,
-          flags: state.flags,
-          navMode: state.navMode,
-          currentIndex: state.currentIndex,
-          remainingSeconds: state.remainingSeconds,
-          startedAt: state.startedAt,
-        });
+        void persistLocalCheckpoint();
       }
     },
-    [paused, selectAnswer, setCurrentIndex, verifiedStudent?.id],
+    [paused, selectAnswer, setCurrentIndex, verifiedStudent?.id, persistLocalCheckpoint],
   );
 
   const handleToggleFlag = useCallback(
     (questionId: string) => {
       toggleFlag(questionId);
       if (verifiedStudent?.id) {
-        const state = useExamStore.getState();
-        void ExamProgressStore.save({
-          sessionId: state.sessionId || 'default',
-          studentId: verifiedStudent.id,
-          answers: state.answers,
-          flags: state.flags,
-          navMode: state.navMode,
-          currentIndex: state.currentIndex,
-          remainingSeconds: state.remainingSeconds,
-          startedAt: state.startedAt,
-        });
+        void persistLocalCheckpoint();
       }
     },
-    [toggleFlag, verifiedStudent?.id],
+    [toggleFlag, verifiedStudent?.id, persistLocalCheckpoint],
   );
 
   const handleJumpToQuestion = useCallback(
@@ -1052,6 +1105,71 @@ function ExamScreenInner() {
           <Text style={{ color: theme.textSecondary, fontSize: 12, lineHeight: 16 }}>
             A system clock change was detected. Your examination answers are safely preserved. Please stay connected to the exam Wi‑Fi to synchronize time with the proctor.
           </Text>
+        </View>
+      ) : null}
+
+      {emergencySuspended ? (
+        <View
+          accessibilityRole="alert"
+          style={{
+            marginHorizontal: 16,
+            marginTop: 8,
+            marginBottom: 4,
+            padding: 12,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: theme.accent,
+            backgroundColor: theme.accentSoft,
+          }}
+        >
+          <Text style={{ color: theme.text, fontWeight: '700', fontSize: 13, marginBottom: 3 }}>
+            Emergency suspension
+          </Text>
+          <Text style={{ color: theme.textSecondary, fontSize: 12, lineHeight: 17 }}>
+            {emergencyReason || 'The proctor has temporarily paused this examination. Your saved answers are preserved.'}
+          </Text>
+        </View>
+      ) : null}
+
+      {checkpointError || checkpointSaving || checkpointSaved ? (
+        <View
+          accessibilityRole={checkpointError ? 'alert' : undefined}
+          style={{
+            marginHorizontal: 16,
+            marginTop: 8,
+            marginBottom: 4,
+            padding: 10,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: checkpointError ? theme.accent : theme.border,
+            backgroundColor: checkpointError ? theme.accentSoft : theme.surface,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+          }}
+        >
+          <Text style={{ flex: 1, color: checkpointError ? theme.text : theme.textSecondary, fontSize: 12, lineHeight: 17 }}>
+            {checkpointError || (checkpointSaving ? 'Saving answers on this device…' : 'Answers saved on this device.')}
+          </Text>
+          {checkpointError ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                if (checkpointRecoveryBlocked.current) {
+                  restoredRef.current = false;
+                  setCheckpointLoadRetry((attempt) => attempt + 1);
+                } else {
+                  void persistLocalCheckpoint();
+                }
+              }}
+              style={{ paddingHorizontal: 10, paddingVertical: 6 }}
+            >
+              <Text style={{ color: theme.accent, fontSize: 12, fontWeight: '700' }}>
+                {checkpointRecoveryBlocked.current ? 'Retry load' : 'Retry save'}
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
 

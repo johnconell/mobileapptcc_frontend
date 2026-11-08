@@ -19,3 +19,42 @@ export function compareStudentNames(left: StructuredStudentName, right: Structur
   }
   return left.id - right.id;
 }
+
+export function extractSurnameSortKey(student: {
+  lastName?: string | null;
+  fullName?: string | null;
+  name?: string | null;
+}): string {
+  if (student.lastName && student.lastName.trim()) {
+    return normalized(student.lastName);
+  }
+  const raw = (student.fullName || student.name || '').trim();
+  if (raw.includes(',')) {
+    return normalized(raw.split(',')[0]);
+  }
+  const parts = raw.split(/\s+/);
+  return normalized(parts[parts.length - 1] || raw);
+}
+
+export function sortStudentsAlphabetical<
+  T extends {
+    id?: string | number;
+    fullName?: string | null;
+    name?: string | null;
+    lastName?: string | null;
+    firstName?: string | null;
+  }
+>(students: T[]): T[] {
+  return [...students].sort((a, b) => {
+    const aLast = extractSurnameSortKey(a);
+    const bLast = extractSurnameSortKey(b);
+    const cmpLast = aLast.localeCompare(bLast, undefined, { sensitivity: 'base', numeric: true });
+    if (cmpLast !== 0) return cmpLast;
+    const aFirst = normalized(a.firstName || a.fullName || a.name || '');
+    const bFirst = normalized(b.firstName || b.fullName || b.name || '');
+    const cmpFirst = aFirst.localeCompare(bFirst, undefined, { sensitivity: 'base', numeric: true });
+    if (cmpFirst !== 0) return cmpFirst;
+    return String(a.id ?? '').localeCompare(String(b.id ?? ''));
+  });
+}
+

@@ -21,6 +21,7 @@ export type EnsurePackResult = {
 export async function ensureExamPackCached(options?: {
   force?: boolean;
   includeAuth?: boolean;
+  allowCacheFallback?: boolean;
   onProgress?: (progress: PackProgress) => void;
 }): Promise<EnsurePackResult> {
   const force = options?.force ?? true;
@@ -75,7 +76,7 @@ export async function ensureExamPackCached(options?: {
       };
     }
 
-    if (meta.ready) {
+    if (meta.ready && options?.allowCacheFallback !== false) {
       return {
         ok: true,
         message:

@@ -26,7 +26,7 @@ export type LocalApiState = {
   generatedAt: string;
   academicYear: { id: number; name: string; is_current: true };
   programs: Array<{ id: number; code: string; name: string }>;
-  settings: { duration_minutes: number; allow_late_entry: boolean; shuffle_questions: boolean; shuffle_categories: boolean; shuffle_both: boolean; disconnect_grace_seconds: number; room_student_limit: number };
+  settings: { duration_minutes: number; allow_late_entry: false; shuffle_questions: boolean; shuffle_categories: boolean; shuffle_both: boolean; disconnect_grace_seconds: number; room_student_limit: number };
   proctor: LocalProctor;
   proctors: LocalProctor[];
   schedules: Array<Record<string, unknown>>;

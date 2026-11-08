@@ -8,6 +8,7 @@ export { useExamStore } from '@/features/examinations/stores/examStore';
 export { PeerExamServer } from '@/features/examinations/services/peerExamServer';
 export { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 export { ExamLifecycle } from '@/features/examinations/services/examLifecycle';
+export { formatPasskey, isValidPasskey, normalizePasskey } from '@/features/examinations/services/passkeyFormat';
 export { mapServerToAuthority } from '@/features/examinations/services/examAuthority';
 export * from '@/features/examinations/services/examStartCoordinator';
 export { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';

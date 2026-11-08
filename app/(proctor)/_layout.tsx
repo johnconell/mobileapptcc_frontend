@@ -4,6 +4,7 @@ import { Stack } from 'expo-router';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { AuthRepository } from '@/features/authentication/repositories/AuthRepository';
+import * as Network from 'expo-network';
 
 /**
  * Auth switch: logged-out proctors stay on a real Stack (Login only) so hardware
@@ -20,10 +21,23 @@ export default function ProctorRootLayout() {
     void (async () => {
       try {
         if (useProctorStore.getState().profile) return;
-        const session = await AuthRepository.getCachedSessionFast();
-        if (session && active) {
-          useProctorStore.getState().setProfile(session);
+        const cachedSession = await AuthRepository.getCachedSessionFast();
+        if (!active) return;
+        if (cachedSession) {
+          useProctorStore.getState().setProfile(cachedSession);
         }
+
+        if (active) setReady(true);
+        if (!cachedSession) return;
+
+        const network = await Network.getNetworkStateAsync().catch(() => null);
+        if (!active || network?.isInternetReachable !== true) return;
+
+        const verifiedSession = await AuthRepository.getSession();
+        if (!active) return;
+        const currentProfile = useProctorStore.getState().profile;
+        if (currentProfile?.token !== cachedSession.token) return;
+        useProctorStore.getState().setProfile(verifiedSession);
       } catch (err) {
         console.warn('[PROCTOR AUTH] Session hydrate failed:', err);
       } finally {

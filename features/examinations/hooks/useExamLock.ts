@@ -24,7 +24,8 @@ interface UseExamLockOptions {
  * - If not locked, calls startExamLock() and polls every 500ms for user confirmation.
  * - Polls every 1.5s while enabled to detect unpinning or late pin approval.
  * - On iOS: isKioskActive defaults to and remains true (AppState monitoring handles anti-cheat).
- * - On unmount: calls stopExamLock() to unpin cleanly.
+ * - Lock release is explicit at submit/exit; transient rerenders and Wi-Fi
+ *   recovery must never unpin because some Android devices lock after unpinning.
  */
 export function useExamLock({ enabled, onViolation }: UseExamLockOptions) {
   const [isKioskActive, setIsKioskActive] = useState(Platform.OS !== 'android');
@@ -168,8 +169,6 @@ export function useExamLock({ enabled, onViolation }: UseExamLockOptions) {
       if (pollIntervalId !== null) clearInterval(pollIntervalId);
       appStateSub?.remove();
 
-      // Unpin cleanly — fire-and-forget, best effort
-      void stopExamLock().catch(() => { /* ignore */ });
       setIsKioskActive(false);
       wasEverLockedRef.current = false;
     };

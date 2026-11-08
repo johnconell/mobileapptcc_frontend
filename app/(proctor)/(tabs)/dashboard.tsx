@@ -55,6 +55,7 @@ export default function ProctorDashboardScreen() {
   const profile = useProctorStore((s) => s.profile);
   const [refreshing, setRefreshing] = useState(false);
   const [rulesModalOpen, setRulesModalOpen] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [stats, setStats] = useState({
     totalApplicants: 0,
@@ -80,35 +81,31 @@ export default function ProctorDashboardScreen() {
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    const timer = setInterval(() => setCurrentTime(new Date()), 60_000);
     return () => clearInterval(timer);
   }, []);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setRefreshing(true);
-      const [pack, queued] = await Promise.all([
-        OfflineStore.getPack(),
+      setLoadError(null);
+      const [packSummary, queued] = await Promise.all([
+        OfflineStore.getPackDashboardSnapshot(),
         OfflineStore.getResults(),
       ]);
 
-      const primarySchedule = pack?.schedules?.[0];
+      const primarySchedule = packSummary?.schedules?.[0];
       const examTitle = primarySchedule?.title || 'Entrance Examination';
 
       // Registered applicants for today's examination
-      let todayRegistered = 0;
-      if (primarySchedule && pack?.registrations?.length) {
-        const matching = pack.registrations.filter(
-          (r) => r.examination_schedule_id === primarySchedule.id,
-        );
-        todayRegistered = matching.length;
-      }
-      if (!todayRegistered && pack?.applicants?.length) {
-        todayRegistered = pack.applicants.length;
-      }
+      const todayRegistered =
+        (primarySchedule &&
+          packSummary?.registrationsBySchedule[String(primarySchedule.id)]) ||
+        packSummary?.students ||
+        0;
 
-      const durationMins = pack?.examination_settings?.duration_minutes ?? 60;
-      const passingPercentage = (pack as any)?.grading_settings?.[0]?.passing_percentage ?? 75;
+      const durationMins = packSummary?.durationMinutes ?? 60;
+      const passingPercentage = packSummary?.passingPercentage ?? 75;
       const takenCount = queued.length;
 
       // Extract start and end times strictly based on the schedule
@@ -129,7 +126,7 @@ export default function ProctorDashboardScreen() {
       const venueText = primarySchedule?.venue || 'Testing Center · Main Campus';
 
       setStats({
-        totalApplicants: pack?.applicants?.length ?? 0,
+        totalApplicants: packSummary?.students ?? 0,
         examineesTaken: takenCount,
         todayRegistered,
         passingGrade: `${Number(passingPercentage).toFixed(1)}%`,
@@ -149,21 +146,22 @@ export default function ProctorDashboardScreen() {
         startTime: schedStart,
         endTime: schedEnd,
         timeWindowLabel: `${schedStart} - ${schedEnd}`,
-        questionCount: 60,
+        questionCount: packSummary?.questions ?? 0,
       });
+    } catch (error) {
+      console.warn('[PROCTOR DASHBOARD] Local data could not be loaded:', {
+        errorName: error instanceof Error ? error.name : 'StorageError',
+      });
+      setLoadError('Downloaded examination data could not be read. Your saved pack was not removed. Tap refresh to retry.');
     } finally {
       setRefreshing(false);
     }
-  };
-
-  useEffect(() => {
-    void loadData();
   }, []);
 
   useFocusEffect(
     useCallback(() => {
       void loadData();
-    }, []),
+    }, [loadData]),
   );
 
   const getStatusColor = (status: string) => {
@@ -248,6 +246,11 @@ export default function ProctorDashboardScreen() {
           <Text style={[styles.screenHeading, { color: colors.textPrimary }]}>Dashboard</Text>
           <Text style={[styles.screenSubheading, { color: colors.textSecondary }]}>Proctor Command Center · Offline Mode</Text>
         </View>
+        {loadError ? (
+          <Text accessibilityRole="alert" style={{ color: colors.danger, fontSize: 13 }}>
+            {loadError}
+          </Text>
+        ) : null}
         {/* 1. WELCOME CARD */}
         <View
           style={[

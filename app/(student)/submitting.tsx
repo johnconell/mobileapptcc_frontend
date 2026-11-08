@@ -10,7 +10,6 @@ import {
   ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useKeepAwake } from 'expo-keep-awake';
 import {
   CheckCircle2,
   AlertTriangle,
@@ -29,32 +28,26 @@ import {
   type FinalizedSubmission,
 } from '@/features/examinations/services/examSubmissionStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
-import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
+import { userFacingError } from '@/shared/utils/userFacingError';
+import { releaseExamSessionRestrictions } from '@/features/examinations/services/examSessionRestrictions';
 
 export default function SubmittingScreen() {
-  useKeepAwake();
   const router = useRouter();
   const { colors: themeColors, isDark } = useAppTheme();
 
   const [submission, setSubmission] = useState<FinalizedSubmission | null>(null);
   const [isDelivering, setIsDelivering] = useState(false);
+  const [operationError, setOperationError] = useState<string | null>(null);
+  const [retryLoad, setRetryLoad] = useState(0);
   const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
   const [showProofModal, setShowProofModal] = useState(false);
 
   // 1. Subscribe to submission coordinator updates
   useEffect(() => {
     let active = true;
-
-    void (async () => {
-      const current = await ExamSubmissionCoordinator.getActiveSubmission();
-      if (active && current) {
-        setSubmission(current);
-      }
-    })();
-
     const unsubscribe = ExamSubmissionCoordinator.subscribe((updated) => {
       if (active) {
         setSubmission(updated);
@@ -72,22 +65,60 @@ export default function SubmittingScreen() {
   useEffect(() => {
     let active = true;
     void (async () => {
-      const current = await ExamSubmissionCoordinator.getActiveSubmission();
+      setOperationError(null);
+      let current: FinalizedSubmission | null;
+      try {
+        current = await ExamSubmissionCoordinator.getActiveSubmission();
+      } catch (error) {
+        console.warn('[SUBMISSION] Could not recover the saved submission:', {
+          errorName: error instanceof Error ? error.name : 'StorageError',
+        });
+        if (active) {
+          setOperationError(
+            'Unable to read the saved submission on this device. Your answers have not been deleted. Retry loading the saved submission.',
+          );
+        }
+        return;
+      }
       if (!current) {
         // If no submission is stored, check if already completed in store
         const store = useExamStore.getState();
         if (store.submittedAt) {
-          router.replace({
-            pathname: '/',
-            params: { examExitNotice: 'Your answers were submitted successfully.' },
-          } as any);
+          await releaseExamSessionRestrictions('submission_confirmed').catch(() => undefined);
+          router.replace('/(student)/completed');
+        }
+        if (active && !store.submittedAt) {
+          setOperationError('The saved submission could not be found on this device. Keep the app open and ask your proctor for help.');
         }
         return;
+      }
+      if (active) setSubmission(current);
+      if (current.status !== 'confirmed' && current.destination === 'proctor_peer') {
+        try {
+          const pulse = await LobbyRepository.sendHeartbeat();
+          if (pulse.submissionConfirmed && pulse.submittedAt) {
+            await ExamSubmissionCoordinator.confirmFromPeerAcknowledgement(pulse.submittedAt);
+            return;
+          }
+        } catch (error) {
+          console.warn('[SUBMISSION] Could not check for a proctor result acknowledgement:', {
+            errorName: error instanceof Error ? error.name : 'NetworkError',
+          });
+        }
       }
       if (current.status !== 'confirmed') {
         setIsDelivering(true);
         try {
           await ExamSubmissionCoordinator.deliver();
+        } catch (error) {
+          if (active) {
+            setOperationError(
+              userFacingError(
+                error,
+                'Unable to deliver the saved submission. Your answers remain on this device; retry or ask your proctor for help.',
+              ),
+            );
+          }
         } finally {
           if (active) setIsDelivering(false);
         }
@@ -96,7 +127,7 @@ export default function SubmittingScreen() {
     return () => {
       active = false;
     };
-  }, [router]);
+  }, [router, retryLoad]);
 
   // 3. Countdown timer for retrying state
   useEffect(() => {
@@ -124,7 +155,14 @@ export default function SubmittingScreen() {
       if (!active || inFlight) return;
       inFlight = true;
       try {
-        await LobbyRepository.sendHeartbeat();
+        const pulse = await LobbyRepository.sendHeartbeat();
+        if (active && pulse.submissionConfirmed && pulse.submittedAt) {
+          await ExamSubmissionCoordinator.confirmFromPeerAcknowledgement(pulse.submittedAt);
+        }
+      } catch (error) {
+        console.warn('[SUBMISSION] Proctor heartbeat failed:', {
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        });
       } finally {
         inFlight = false;
       }
@@ -156,27 +194,36 @@ export default function SubmittingScreen() {
   const handleManualRetry = useCallback(async () => {
     if (isDelivering) return;
     setIsDelivering(true);
+    setOperationError(null);
     try {
       await ExamSubmissionCoordinator.deliver({ isManualRetry: true });
+    } catch (error) {
+      setOperationError(
+        userFacingError(
+          error,
+          'Unable to deliver the saved submission. Your answers remain on this device; retry or ask your proctor for help.',
+        ),
+      );
     } finally {
       setIsDelivering(false);
     }
   }, [isDelivering]);
 
   const handleExit = useCallback(async () => {
-    useExamStore.getState().reset();
-    useStudentStore.getState().reset();
+    setOperationError(null);
+    try {
+      await releaseExamSessionRestrictions('submission_confirmed');
+    } catch (error) {
+      setOperationError(
+        error instanceof Error
+          ? error.message
+          : 'Examination restrictions could not be released. Follow your device instructions and try again.',
+      );
+      return;
+    }
     useLobbyStore.getState().reset();
-
-    const exitNotice =
-      submission?.finalReason === 'time_expired'
-        ? 'Your time ended and your examination was confirmed.'
-        : submission?.finalReason === 'proctor_terminated'
-          ? 'The proctor ended the examination and your answers were confirmed.'
-          : 'Your answers were submitted successfully.';
-
-    router.replace({ pathname: '/', params: { examExitNotice: exitNotice } } as any);
-  }, [router, submission?.finalReason]);
+    router.replace('/(student)/completed');
+  }, [router]);
 
   const verificationDigest = useMemo(() => {
     return submission ? generateSubmissionDigest(submission) : '----';
@@ -207,7 +254,34 @@ export default function SubmittingScreen() {
     <ExamProcessChrome step={5} title="Submission" stepLabel="Step 6 of 6 · Finalize">
       <View style={styles.container}>
         {/* State 1: Confirmed Success */}
-        {submission?.status === 'confirmed' ? (
+        {operationError ? (
+          <View
+            style={[
+              styles.card,
+              {
+                backgroundColor: isDark ? '#261C1C' : '#FEF2F2',
+                borderColor: themeColors.danger,
+              },
+            ]}
+          >
+            <View style={styles.iconCircleError}>
+              <AlertTriangle color={themeColors.danger} size={42} strokeWidth={2.2} />
+            </View>
+            <Text style={[styles.title, { color: isDark ? '#FCA5A5' : '#991B1B' }]}>
+              Submission recovery needed
+            </Text>
+            <Text style={[styles.description, { color: isDark ? '#E5E7EB' : '#374151' }]}>
+              {operationError}
+            </Text>
+            <Pressable
+              onPress={() => setRetryLoad((attempt) => attempt + 1)}
+              disabled={isDelivering}
+              style={[styles.primaryButton, { backgroundColor: themeColors.accent, opacity: isDelivering ? 0.6 : 1 }]}
+            >
+              {isDelivering ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.buttonText}>Retry recovery</Text>}
+            </Pressable>
+          </View>
+        ) : submission?.status === 'confirmed' ? (
           <View
             style={[
               styles.card,
@@ -222,13 +296,15 @@ export default function SubmittingScreen() {
             </View>
 
             <Text style={[styles.title, { color: isDark ? '#E5E7EB' : '#111827' }]}>
-              Submission Confirmed!
+              Examination Submitted Successfully
             </Text>
 
             <Text style={[styles.description, { color: isDark ? '#9CA3AF' : '#4B5563' }]}>
               {submission.receipt?.destination === 'proctor_peer'
                 ? 'Your answers were received and graded by the proctor phone. They will sync to the central system.'
-                : 'Your answers were successfully received and confirmed by the examination system.'}
+                : submission.receipt?.destination === 'cloud'
+                  ? 'Your answers were received and confirmed by the examination system.'
+                  : 'Your answers are saved on this device and will sync when a connection is available.'}
             </Text>
 
             <View

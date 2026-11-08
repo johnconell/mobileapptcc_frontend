@@ -1,3 +1,5 @@
+import { normalizePasskey } from './passkeyFormat';
+
 export type OfflinePasskeyEligibilityRegistration = {
   id?: number;
   examination_schedule_id?: number;
@@ -16,7 +18,7 @@ export function matchOfflinePasskeyRegistrations<T extends OfflinePasskeyEligibi
   return registrations.filter((registration) => {
     const storedHash = String(registration.exam_passkey_hash || '').toLowerCase();
     if (storedHash) return storedHash === normalizedHash.toLowerCase();
-    return String(registration.exam_passkey || '').trim().toUpperCase() === normalizedPasskey;
+    return normalizePasskey(registration.exam_passkey) === normalizePasskey(normalizedPasskey);
   });
 }
 

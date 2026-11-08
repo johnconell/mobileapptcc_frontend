@@ -17,6 +17,8 @@ import android.provider.Settings
 import android.net.Uri
 import android.content.Intent
 import android.content.pm.PackageManager
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import android.view.View
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -84,12 +86,12 @@ class ExamKioskModule(private val reactContext: ReactApplicationContext) :
         }
         activity.runOnUiThread {
             try {
+                activity.startLockTask()
                 isKioskActive = true
                 applyOverlayProtections(activity, true)
-                activity.startLockTask()
                 promise.resolve(null)
             } catch (e: Exception) {
-                promise.resolve(null)
+                promise.reject("LOCK_TASK_START_FAILED", e)
             }
         }
     }
@@ -103,12 +105,16 @@ class ExamKioskModule(private val reactContext: ReactApplicationContext) :
         }
         activity.runOnUiThread {
             try {
+                val am = activity.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+                    as android.app.ActivityManager
+                if (am.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE) {
+                    activity.stopLockTask()
+                }
                 isKioskActive = false
                 applyOverlayProtections(activity, false)
-                activity.stopLockTask()
                 promise.resolve(null)
             } catch (e: Exception) {
-                promise.resolve(null)
+                promise.reject("LOCK_TASK_STOP_FAILED", e)
             }
         }
     }
@@ -183,6 +189,52 @@ class ExamKioskModule(private val reactContext: ReactApplicationContext) :
             promise.resolve(am.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE)
         } catch (e: Exception) {
             promise.resolve(false)
+        }
+    }
+
+    @ReactMethod
+    fun moveTaskToBackground(promise: Promise) {
+        val activity = reactContext.currentActivity
+        if (activity == null) {
+            promise.resolve(false)
+            return
+        }
+        activity.runOnUiThread {
+            try {
+                promise.resolve(activity.moveTaskToBack(true))
+            } catch (e: Exception) {
+                promise.resolve(false)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun getPreferredLanIp(promise: Promise) {
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            val preferredPrefixes = listOf("wlan", "wifi", "ap", "swlan", "softap", "eth", "rndis")
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                val networkInterface = interfaces.nextElement()
+                val name = networkInterface.name.lowercase()
+                if (!networkInterface.isUp || networkInterface.isLoopback ||
+                    preferredPrefixes.none { name.startsWith(it) }) continue
+
+                val addresses = networkInterface.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val address = addresses.nextElement()
+                    if (address is Inet4Address && !address.isLoopbackAddress && !address.isLinkLocalAddress) {
+                        val ip = address.hostAddress ?: continue
+                        if (ip.startsWith("10.") || ip.startsWith("192.168.") ||
+                            Regex("^172\\.(1[6-9]|2[0-9]|3[01])\\.").containsMatchIn(ip)) {
+                            promise.resolve(ip)
+                            return
+                        }
+                    }
+                }
+            }
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.resolve(null)
         }
     }
 
@@ -492,6 +544,10 @@ function withExamSecurity(config) {
 
     // Keep the app available in Recent Apps outside an intentionally pinned exam.
     delete mainActivity.$['android:excludeFromRecents'];
+    delete mainActivity.$['android:noHistory'];
+    delete mainActivity.$['android:clearTaskOnLaunch'];
+    delete mainActivity.$['android:finishOnTaskLaunch'];
+    delete mainActivity.$['android:documentLaunchMode'];
 
     // Lock Task Mode — active only when the device is Device Owner / MDM whitelisted.
     // No-op on regular BYOD phones, but enables full kiosk lock on institution-managed devices.

@@ -14,9 +14,6 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { CampusWifiBlockedCard } from '@/features/monitoring/components/CampusWifiBlockedCard';
-import { useCampusWifiJoinGate } from '@/features/monitoring/hooks/useCampusWifiJoinGate';
-import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { ScheduleRepository } from '@/features/schedules/repositories/ScheduleRepository';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
@@ -36,6 +33,7 @@ import { DeviceService } from '@/shared/services/DeviceService';
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
 import { examProcess } from '@/shared/theme/examProcess';
+import { userFacingError } from '@/shared/utils/userFacingError';
 
 const codeSchema = z.object({
   code: z
@@ -64,9 +62,7 @@ export default function JoinExaminationScreen() {
   const [scanning, setScanning] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [wifiBlocked, setWifiBlocked] = useState(false);
   const setScannedSession = useStudentStore((s) => s.setScannedSession);
-  const wifiGate = useCampusWifiJoinGate({ requireServer: true });
   const lastScanAt = useRef(0);
 
   React.useEffect(() => {
@@ -111,7 +107,6 @@ export default function JoinExaminationScreen() {
     setBusy(true);
     if (type === 'qr') setScanning(false);
     setError(null);
-    setWifiBlocked(false);
 
     try {
       const trimmed = (input || '').trim();
@@ -185,7 +180,7 @@ export default function JoinExaminationScreen() {
           const isAlive = await PeerExamClient.ping();
           if (!isAlive) {
             throw new Error(
-              `Cannot reach the Proctor device at ${peerTarget.host}.\n\nPlease ensure you are connected to the official examination Wi-Fi network ("${peerTarget.wifiSsid || 'exam Wi-Fi'}") and try again.`,
+              `The proctor examination host at ${peerTarget.host} is not reachable on this local network. Check that the room is still open and scan the current QR code again.`,
             );
           }
         }
@@ -199,6 +194,10 @@ export default function JoinExaminationScreen() {
         await OfflineStore.setOfflineMode(true);
         router.replace('/(student)/passkey');
         return;
+      }
+
+      if (type === 'qr' && trimmed.startsWith('{')) {
+        throw new Error('Invalid or unreadable proctor examination QR code. Please scan the current room QR code again.');
       }
 
       // 2. Extract code / token for manual typing or plain QR text
@@ -331,7 +330,17 @@ export default function JoinExaminationScreen() {
       } else if (err?.status === 404) {
         setError('This code is no longer valid, ask your proctor for a new one.');
       } else {
-        setError(err instanceof Error ? err.message : 'This code is no longer valid, ask your proctor for a new one.');
+        const peerError = classifyPeerReconnectError(
+          err instanceof Error ? err.message : '',
+        );
+        setError(
+          peerError === 'Cannot reach the proctor'
+            ? "Cannot connect to the proctor's device. Check your local network connection and scan the current room QR code again."
+            : userFacingError(
+                err,
+                "Cannot connect to the proctor's device. Check your local network connection and scan the current room QR code again.",
+              ),
+        );
       }
       if (type === 'qr') {
         setScanning(true);
@@ -363,7 +372,7 @@ export default function JoinExaminationScreen() {
       }
       setMode('code');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to simulate scan.');
+      setError(userFacingError(err, 'Unable to read the saved examination code. Please scan the proctor QR code.'));
     }
   };
 
@@ -393,45 +402,6 @@ export default function JoinExaminationScreen() {
       </Pressable>
     </View>
   );
-
-  if (wifiBlocked) {
-    return (
-      <ExamProcessChrome
-        step={0}
-        title="Join Examination"
-        stepLabel="Step 1 of 6 · Join"
-        onBack={close}
-        backLabel="Cancel"
-      >
-        <CampusWifiBlockedCard
-          title="Different examination network"
-          message={
-            error ??
-            wifiGate.message ??
-            'You are connected to a different examination network. Please connect to the same Wi‑Fi network as the proctor and try again.'
-          }
-          checking={wifiGate.checking}
-          onRetry={() => {
-            setWifiBlocked(false);
-            setError(null);
-            setScanning(true);
-            setBusy(false);
-          }}
-        />
-        <ExamProcessActions>
-          <ExamProcessButton
-            title="Try Again"
-            onPress={() => {
-              setWifiBlocked(false);
-              setError(null);
-              setScanning(true);
-              setBusy(false);
-            }}
-          />
-        </ExamProcessActions>
-      </ExamProcessChrome>
-    );
-  }
 
   const cameraReady = Boolean(permission?.granted);
   const title = mode === 'code' ? 'Enter Examination Code' : 'Scan QR Code';

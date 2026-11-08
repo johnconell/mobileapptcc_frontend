@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { questionMatchesFilter } from '@/features/examinations/utils/questionNavigation';
 import assert from 'node:assert/strict';
 import { useExamStore } from '../../features/examinations/stores/examStore';
 import { buildCategoryProgress } from '../../features/examinations/utils/categoryProgress';
@@ -72,6 +73,27 @@ test('exam features: navigation mode, flags, category progress, and type-to-conf
     assert.equal(science.answered, 0);
     assert.equal(science.total, 1);
     assert.equal(`${science.label} (${science.answered}/${science.total})`, 'Science (0/1)');
+  });
+
+  await t.test('question status controls filter without changing answer or review state', () => {
+    const answered = {
+      questionId: 'q1',
+      selectedAnswer: 'A' as const,
+      answeredAt: '2026-11-04T09:00:00+08:00',
+    };
+    const unanswered = {
+      questionId: 'q2',
+      selectedAnswer: null,
+      answeredAt: null,
+    };
+
+    assert.equal(questionMatchesFilter('answered', answered, false), true);
+    assert.equal(questionMatchesFilter('answered', unanswered, false), false);
+    assert.equal(questionMatchesFilter('not_sure', answered, true), true);
+    assert.equal(questionMatchesFilter('unanswered', unanswered, false), true);
+    assert.equal(questionMatchesFilter('review', answered, true), true);
+    assert.equal(questionMatchesFilter('review', unanswered, false), true);
+    assert.equal(answered.selectedAnswer, 'A');
   });
 
   await t.test('type-to-confirm only validates exact "exam submit" phrase', () => {

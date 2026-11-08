@@ -1,14 +1,20 @@
-/**
- * Convert raw Error / API / network text into a short message safe to show in UI.
- * Logs the original detail for debugging; never exposes stack traces, SQL, or host internals.
- */
+type ErrorDetails = {
+  message?: string;
+  status?: number;
+  statusCode?: number;
+  name?: string;
+  response?: {
+    status?: number;
+    data?: { message?: string; error?: string };
+  };
+};
+
 const TECHNICAL_PATTERNS = [
   /SQLSTATE/i,
   /SQL:/i,
   /PDOException/i,
   /Illuminate\\/i,
   /Stack trace/i,
-  /at Object\./i,
   /TypeError:/i,
   /ReferenceError:/i,
   /SyntaxError:/i,
@@ -23,70 +29,122 @@ const TECHNICAL_PATTERNS = [
   /Request rejected/i,
   /Unexpected token/i,
   /JSON\.parse/i,
-  /http:\/\//i,
-  /https:\/\//i,
+  /https?:\/\//i,
   /localhost/i,
   /127\.0\.0\.1/i,
   /\/api\/v1/i,
-  /Bearer /i,
   /Integrity Failure/i,
   /CRITICAL/i,
   /Exception/i,
   /\{.*".*":.*\}/s,
 ];
 
-const FRIENDLY_FALLBACK = 'Something went wrong. Please try again.';
+const FRIENDLY_FALLBACK = 'Unable to complete this request. Please try again.';
 
-function firstLine(text: string): string {
-  return text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .find(Boolean) ?? '';
+function isTechnical(text: string): boolean {
+  return text.length > 280 || TECHNICAL_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-function looksTechnical(text: string): boolean {
-  if (!text || text.length > 280) return true;
-  return TECHNICAL_PATTERNS.some((re) => re.test(text));
+function errorDetails(error: unknown): ErrorDetails {
+  if (error instanceof Error) {
+    return error as ErrorDetails;
+  }
+  if (typeof error === 'string') {
+    return { message: error };
+  }
+  return error && typeof error === 'object' ? (error as ErrorDetails) : {};
 }
 
-/** Prefer API `message` when it is already human-readable. */
+function classifyMessage(text: string, status?: number): string | null {
+  const message = text.toLowerCase();
+
+  if (
+    status === 401 &&
+    /login|sign.?in|credential|password|unauthori[sz]ed/.test(message)
+  ) {
+    return 'Incorrect email or password. Please try again.';
+  }
+  if (/session expired|token expired/.test(message)) {
+    return 'Your session has expired. Please log in again.';
+  }
+  if (/invalid.{0,20}(passkey|exam(?:ination)? key)|passkey.{0,20}invalid/.test(message)) {
+    return 'Invalid passkey. Please check and try again.';
+  }
+  if (/wrong room|different room|room assignment/.test(message)) {
+    return 'You are assigned to a different examination room.';
+  }
+  if (/not scheduled|incorrect schedule|wrong schedule/.test(message)) {
+    return 'Your examination is not scheduled for this session.';
+  }
+  if (/qr.{0,20}(expired|no longer valid)|expired.{0,20}qr/.test(message)) {
+    return 'This QR code is no longer valid. Request a new code from your proctor.';
+  }
+  if (/room.{0,20}(already assigned|assigned to another)/.test(message)) {
+    return 'This room is assigned to another proctor.';
+  }
+  if (/room.{0,20}(unavailable|not available)/.test(message)) {
+    return 'This examination room is not currently available.';
+  }
+  if (/pack.{0,30}(missing|unavailable|not downloaded)/.test(message)) {
+    return 'Examination data is unavailable. Download the examination pack before opening the room.';
+  }
+  if (/storage|secure.?store|file.?system|decrypt/i.test(message)) {
+    return 'Unable to save your data. Please try again.';
+  }
+  if (/sync|synchroni[sz]/i.test(message)) {
+    return 'Results are saved locally but could not be synchronized. Retry when internet is available.';
+  }
+  if (
+    /proctor.{0,50}(connect|reach|network|wifi|wi-fi|unreachable)|(?:connect|reach).{0,50}proctor/i.test(
+      message,
+    )
+  ) {
+    return "Cannot connect to the proctor's device. Check your local network connection.";
+  }
+  if (
+    /network request failed|failed to fetch|econnrefused|enotfound|etimedout|aborterror|timed? out/i.test(
+      message,
+    )
+  ) {
+    return 'The server could not be reached. Check your connection and try again.';
+  }
+  if (status === 401) {
+    return 'Your session has expired. Please log in again.';
+  }
+  return null;
+}
+
+/** Convert raw failures to concise UI text without logging credentials or payloads. */
 export function userFacingError(
-  err: unknown,
+  error: unknown,
   fallback: string = FRIENDLY_FALLBACK,
 ): string {
-  let raw = '';
+  const details = errorDetails(error);
+  const raw =
+    details.response?.data?.message ||
+    details.response?.data?.error ||
+    details.message ||
+    '';
+  const status = details.status ?? details.statusCode ?? details.response?.status;
+  const cleaned = raw.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? '';
+  const classified = classifyMessage(cleaned, status);
 
-  if (typeof err === 'string') {
-    raw = err;
-  } else if (err instanceof Error) {
-    raw = err.message;
-  } else if (err && typeof err === 'object') {
-    const anyErr = err as {
-      message?: string;
-      response?: { data?: { message?: string; error?: string } };
-    };
-    raw =
-      anyErr.response?.data?.message ||
-      anyErr.response?.data?.error ||
-      anyErr.message ||
-      '';
+  if (__DEV__ && (raw || status !== undefined)) {
+    console.warn('[userFacingError] Request failure', {
+      errorName: details.name || 'Error',
+      status,
+      category: classified ? 'known' : isTechnical(cleaned) ? 'technical' : 'request',
+    });
   }
 
-  if (__DEV__ && raw) {
-    console.warn('[userFacingError]', raw);
-  }
-
-  const cleaned = firstLine(String(raw || '').replace(/\s+/g, ' ').trim());
-  if (!cleaned) return fallback;
-  if (looksTechnical(cleaned)) return fallback;
-
-  // Keep known product messages (Examination Already Completed, Wi‑Fi, etc.)
-  return cleaned;
+  if (classified) return classified;
+  if (!cleaned || isTechnical(cleaned)) return fallback;
+  return cleaned.replace(/\s+/g, ' ');
 }
 
 export function userFacingAlertMessage(
-  err: unknown,
+  error: unknown,
   fallback: string = FRIENDLY_FALLBACK,
 ): string {
-  return userFacingError(err, fallback);
+  return userFacingError(error, fallback);
 }

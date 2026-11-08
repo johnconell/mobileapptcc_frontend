@@ -5,7 +5,10 @@ import { OfflineExamRepository } from '@/features/synchronization/services/offli
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { appStorage } from '@/shared/services/storage';
 import type { ExamCodeValidation, ExamRoom, ExamSchedule, ExamSession } from '@/shared/types';
-import { getProctorScheduleAvailability } from '@/features/schedules/utils/proctorScheduleWindow';
+import {
+  getProctorScheduleAvailability,
+  isPersistedOpenedRoomActive,
+} from '@/features/schedules/utils/proctorScheduleWindow';
 
 type BackendSchedule = {
   id: number;
@@ -22,6 +25,9 @@ type BackendSchedule = {
   registrations_count?: number;
   rooms_count?: number;
   completed_rooms_count?: number;
+  session_type?: 'regular' | 'rescheduled';
+  reschedule_state?: 'proposed' | 'confirmed' | 'review_required' | null;
+  schedule_revision?: number;
 };
 
 const SCHEDULE_CATALOG_KEY = 'tcc.offline.schedule.catalog';
@@ -118,6 +124,9 @@ function toMobileSession(row: BackendSchedule): ExamSession {
       Number(row.completed_rooms_count ?? 0) > 0 || row.status === 'completed'
         ? 'completed'
         : 'missed',
+    sessionType: row.session_type || 'regular',
+    rescheduleState: row.reschedule_state ?? null,
+    scheduleRevision: Number(row.schedule_revision ?? 1),
   };
 }
 
@@ -286,6 +295,9 @@ export const ScheduleRepository = {
             batch_code: row.batch_code,
             course: row.course,
             status: row.status,
+            session_type: row.session_type,
+            reschedule_state: row.reschedule_state,
+            schedule_revision: row.schedule_revision,
             registrations_count: pack.registrations.filter(
               (r) => Number(r.examination_schedule_id) === Number(row.id),
             ).length,
@@ -295,9 +307,21 @@ export const ScheduleRepository = {
     };
 
     const hasPack = await OfflineStore.hasPack();
+    let localError: unknown = null;
+    if (hasPack) {
+      try {
+        // The downloaded pack is the fast path even when the phone reports
+        // internet access. Avoid one cloud request per cached schedule.
+        return await fromPack();
+      } catch (error) {
+        localError = error;
+      }
+    }
     const networkState = await Network.getNetworkStateAsync().catch(() => null);
     if (hasPack && networkState?.isInternetReachable !== true) {
-      return fromPack();
+      throw localError instanceof Error
+        ? localError
+        : new Error('Cached examination times are unavailable. Reconnect and refresh the exam pack.');
     }
 
     try {
@@ -326,6 +350,7 @@ export const ScheduleRepository = {
       }
       if (hasPack) {
         await OfflineStore.setOfflineMode(true);
+        if (localError) throw localError;
         return fromPack();
       }
       throw new Error('Unable to load examination times. Download the offline pack while online first.');
@@ -361,14 +386,25 @@ export const ScheduleRepository = {
       const assignedRoomIds = rooms
         .filter((room) => Number(room.proctor_id) === actorId)
         .map((room) => Number(room.id));
+      const nowMs = Date.now();
       const activeRoomKeys = Object.entries(opened)
-        .filter(([, value]) => value.status === 'lobby_open' || value.status === 'in_progress')
+        .filter(([key, value]) =>
+          isPersistedOpenedRoomActive(pack.schedules, key, value.status, nowMs),
+        )
         .map(([key]) => key);
 
       return rooms.map((row) => {
         const key = OfflineStore.roomKey(sid, row.id);
-        const live = opened[key];
-        const status = live?.status ?? 'idle';
+        const persisted = opened[key];
+        const live = isPersistedOpenedRoomActive(
+          pack.schedules,
+          key,
+          persisted?.status,
+          nowMs,
+        )
+          ? persisted
+          : undefined;
+        const status = persisted && !live ? 'ended' : (live?.status ?? 'idle');
         const isLive = status === 'lobby_open' || status === 'in_progress';
         const liveOwnerId = live?.ownerId != null ? Number(live.ownerId) : null;
         const ownedByCurrent = Boolean(
@@ -411,8 +447,8 @@ export const ScheduleRepository = {
               endTime: schedule.end_time,
               timeLabel: schedule.time_slot,
             },
-            Date.now(),
-          ) === 'active' &&
+            nowMs,
+          ) === 'available' &&
           (assignedToCurrent || locallyClaimed || unassignedEligible);
 
         const claimRequired = unassignedEligible && !locallyClaimed;

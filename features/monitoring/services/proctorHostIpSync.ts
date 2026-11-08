@@ -39,7 +39,7 @@ export async function syncProctorHostIp(force = false): Promise<string | null> {
     return lastSyncedIp;
   }
   const info = PeerExamServer.info();
-  if (!info.running && !options.examSessionId) return null;
+  if (!info.running && info.listenerState === 'stopped' && !options.examSessionId) return null;
 
   syncing = true;
   try {

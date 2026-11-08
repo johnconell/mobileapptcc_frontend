@@ -7,6 +7,7 @@ import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { getCloudApiBaseUrl, getApiBaseUrl } from '@/shared/services/api';
 import { colors } from '@/shared/theme';
 import { safeBack } from '@/shared/utils';
+import { userFacingError } from '@/shared/utils/userFacingError';
 import { useSkeletonLoadingTimeout } from '@/components/skeleton';
 
 export default function OfflinePrepareScreen() {
@@ -39,9 +40,7 @@ export default function OfflinePrepareScreen() {
       setPending(queuedResults.length);
     } catch (error) {
       console.error('Failed to load offline exam-pack status:', error);
-      setMetadataError(
-        error instanceof Error ? error.message : 'Unable to load exam-pack status.',
-      );
+      setMetadataError(userFacingError(error, 'Unable to load cached examination data.'));
     } finally {
       setMetadataLoading(false);
     }
@@ -67,9 +66,10 @@ export default function OfflinePrepareScreen() {
     } catch (error) {
       Alert.alert(
         'Download failed',
-        error instanceof Error
-          ? error.message
-          : 'Connect to the internet / school Wi‑Fi and try again.',
+        userFacingError(
+          error,
+          'Unable to download the examination pack. Connect to the internet and try again.',
+        ),
       );
     } finally {
       setBusy(false);
@@ -80,15 +80,24 @@ export default function OfflinePrepareScreen() {
   const sync = async () => {
     setBusy(true);
     try {
+      const pendingBeforeSync = pending;
       const result = await OfflineExamRepository.syncQueuedToCloud();
       await refresh();
-      Alert.alert('Synced', result.message);
+      Alert.alert(
+        result.synced === 0
+          ? 'No results to sync'
+          : result.synced < pendingBeforeSync
+            ? 'Partial sync'
+            : 'Sync complete',
+        result.message,
+      );
     } catch (error) {
       Alert.alert(
         'Sync failed',
-        error instanceof Error
-          ? error.message
-          : 'Turn on internet, then sync again.',
+        userFacingError(
+          error,
+          'Results are saved locally but could not be synchronized. Reconnect to the internet and retry.',
+        ),
       );
     } finally {
       setBusy(false);
@@ -104,7 +113,10 @@ export default function OfflinePrepareScreen() {
     } catch (error) {
       Alert.alert(
         'Recovery Failed',
-        error instanceof Error ? error.message : 'Could not recover unsynced results.',
+        userFacingError(
+          error,
+          'Unable to recover unsynchronized results. Your local queue has been kept; retry after checking storage.',
+        ),
       );
     } finally {
       setBusy(false);

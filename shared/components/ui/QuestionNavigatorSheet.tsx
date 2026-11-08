@@ -8,10 +8,15 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { ChevronDown, ChevronUp, Flag, X } from 'lucide-react-native';
+import { ChevronDown, ChevronUp, X } from 'lucide-react-native';
 import { useThemeTokens } from '@/shared/contexts/ThemeContext';
 import { Row } from './primitives';
 import type { ChoiceKey, ExamAnswer, Question } from '@/shared/types';
+import {
+  isQuestionAnswered,
+  questionMatchesFilter,
+  type QuestionNavigatorFilter,
+} from '@/features/examinations/utils/questionNavigation';
 
 export interface QuestionNavigatorSheetProps {
   visible: boolean;
@@ -24,7 +29,7 @@ export interface QuestionNavigatorSheetProps {
   onJumpToQuestion: (index: number) => void;
 }
 
-export type QuestionNavigatorFilter = 'all' | 'not_sure' | 'unanswered' | 'review';
+export type { QuestionNavigatorFilter } from '@/features/examinations/utils/questionNavigation';
 
 function categoryKeyOf(question: Question): string {
   return (question.category || question.subjectId || 'General').trim() || 'General';
@@ -62,7 +67,7 @@ function QuestionNavigatorSheetComponent({
 
     return Array.from(map.entries()).map(([name, items]) => {
       const answeredCount = items.filter(
-        (it) => answers[it.question.id]?.selectedAnswer !== null && answers[it.question.id]?.selectedAnswer !== undefined,
+        (it) => isQuestionAnswered(answers[it.question.id]),
       ).length;
       return {
         name,
@@ -103,18 +108,11 @@ function QuestionNavigatorSheetComponent({
 
   const unansweredIndices = useMemo(() => {
     return questions
-      .map((q, idx) => (answers[q.id]?.selectedAnswer ? -1 : idx))
+      .map((q, idx) => (isQuestionAnswered(answers[q.id]) ? -1 : idx))
       .filter((idx) => idx !== -1);
   }, [questions, answers]);
 
-  // Review not sure button cycles through flagged questions in order
-  const handleReviewNotSure = useCallback(() => {
-    if (flaggedIndices.length === 0) return;
-    const nextIdx = flaggedIndices.find((idx) => idx > currentIndex);
-    const targetIndex = nextIdx !== undefined ? nextIdx : flaggedIndices[0];
-    onJumpToQuestion(targetIndex);
-    onClose();
-  }, [flaggedIndices, currentIndex, onJumpToQuestion, onClose]);
+  const answeredCount = questions.length - unansweredIndices.length;
 
   const handleSelectQuestion = useCallback(
     (idx: number) => {
@@ -177,154 +175,56 @@ function QuestionNavigatorSheetComponent({
             </Pressable>
           </Row>
 
-          {/* Legend */}
-          <View style={styles.legendRow}>
-            {/* Answered */}
-            <View style={styles.legendItem}>
-              <View style={[styles.legendBox, { backgroundColor: theme.accent }]} />
-              <Text style={[styles.legendText, { color: theme.textSecondary }]}>
-                Answered
-              </Text>
-            </View>
-
-            {/* Not sure */}
-            <View style={styles.legendItem}>
-              <View
-                style={[
-                  styles.legendBox,
-                  {
-                    backgroundColor: theme.notSure.bg,
-                    borderColor: theme.notSure.border,
-                    borderWidth: 1,
-                  },
-                ]}
-              >
-                <View style={[styles.dot, { backgroundColor: theme.notSure.dot }]} />
-              </View>
-              <Text style={[styles.legendText, { color: theme.textSecondary }]}>
-                Not sure
-              </Text>
-            </View>
-
-            {/* Unanswered */}
-            <View style={styles.legendItem}>
-              <View
-                style={[
-                  styles.legendBox,
-                  {
-                    backgroundColor: theme.surfaceAlt,
-                    borderColor: theme.border,
-                    borderWidth: 0.5,
-                  },
-                ]}
-              />
-              <Text style={[styles.legendText, { color: theme.textSecondary }]}>
-                Unanswered
-              </Text>
-            </View>
-
-            {/* Current */}
-            <View style={styles.legendItem}>
-              <View
-                style={[
-                  styles.legendBox,
-                  {
-                    backgroundColor: theme.surfaceAlt,
-                    borderColor: theme.ring,
-                    borderWidth: 2,
-                  },
-                ]}
-              />
-              <Text style={[styles.legendText, { color: theme.textSecondary }]}>
-                Current
-              </Text>
-            </View>
-          </View>
-
-          {/* Filter Switch: 40px tall segmented bar */}
-          <View
-            style={[
-              styles.filterSwitch,
-              {
-                backgroundColor: theme.surfaceAlt,
-                borderColor: theme.border,
-              },
-            ]}
-          >
-            {/* All */}
-            <Pressable
-              onPress={() => setActiveFilter('all')}
-              accessibilityRole="button"
-              accessibilityLabel="Show all questions"
-              style={[
-                styles.filterSegment,
-                activeFilter === 'all' && {
-                  backgroundColor: theme.accent,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.filterText,
-                  {
-                    color: activeFilter === 'all' ? theme.onAccent : theme.textSecondary,
-                    fontWeight: activeFilter === 'all' ? '600' : '400',
-                  },
-                ]}
-              >
-                All
-              </Text>
-            </Pressable>
-
-            {/* Not sure (count) */}
-            <Pressable
-              onPress={() => setActiveFilter('not_sure')}
-              accessibilityRole="button"
-              accessibilityLabel={`Show not sure questions, ${flaggedIndices.length} total`}
-              style={[
-                styles.filterSegment,
-                activeFilter === 'not_sure' && {
-                  backgroundColor: theme.accent,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.filterText,
-                  {
-                    color: activeFilter === 'not_sure' ? theme.onAccent : theme.textSecondary,
-                    fontWeight: activeFilter === 'not_sure' ? '600' : '400',
-                  },
-                ]}
-              >
-                {`Not sure (${flaggedIndices.length})`}
-              </Text>
-            </Pressable>
-
-            {/* Unanswered */}
-            <Pressable
-              onPress={() => setActiveFilter('unanswered')}
-              accessibilityRole="button"
-              accessibilityLabel={`Show unanswered questions, ${unansweredIndices.length} total`}
-              style={[
-                styles.filterSegment,
-                activeFilter === 'unanswered' && {
-                  backgroundColor: theme.accent,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.filterText,
-                  {
-                    color: activeFilter === 'unanswered' ? theme.onAccent : theme.textSecondary,
-                    fontWeight: activeFilter === 'unanswered' ? '600' : '400',
-                  },
-                ]}
-              >
-                Unanswered
-              </Text>
-            </Pressable>
+          <View style={styles.statusFilters} accessibilityRole="tablist">
+            {([
+              ['answered', 'Answered', answeredCount],
+              ['not_sure', 'Not Sure', flaggedIndices.length],
+              ['unanswered', 'Unanswered', unansweredIndices.length],
+              ['all', 'All', questions.length],
+            ] as const).map(([filter, label, count]) => {
+              const selected = activeFilter === filter;
+              return (
+                <Pressable
+                  key={filter}
+                  onPress={() => setActiveFilter(filter)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`${label}, ${count} questions`}
+                  style={[
+                    styles.statusFilter,
+                    {
+                      backgroundColor: selected ? theme.accent : theme.surfaceAlt,
+                      borderColor: selected ? theme.accent : theme.border,
+                    },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.legendBox,
+                      filter === 'answered' && { backgroundColor: selected ? theme.onAccent : theme.accent },
+                      filter === 'not_sure' && {
+                        backgroundColor: selected ? theme.onAccent : theme.notSure.bg,
+                        borderColor: selected ? theme.onAccent : theme.notSure.border,
+                        borderWidth: 1,
+                      },
+                      (filter === 'unanswered' || filter === 'all') && {
+                        backgroundColor: selected ? theme.onAccent : theme.surface,
+                        borderColor: selected ? theme.onAccent : theme.border,
+                        borderWidth: 1,
+                      },
+                    ]}
+                  />
+                  <View style={styles.statusFilterCopy}>
+                    <Text style={[styles.statusFilterLabel, { color: selected ? theme.onAccent : theme.text }]}>
+                      {label}
+                    </Text>
+                    <Text style={[styles.statusFilterCount, { color: selected ? theme.onAccent : theme.textSecondary }]}>
+                      {count}
+                    </Text>
+                  </View>
+                </Pressable>
+              );
+            })}
           </View>
 
           {activeFilter === 'review' ? (
@@ -340,12 +240,11 @@ function QuestionNavigatorSheetComponent({
 
               // Filter category questions
               const filteredItems = cat.items.filter(({ question }) => {
-                if (activeFilter === 'not_sure') return !!flags[question.id];
-                if (activeFilter === 'unanswered') return !answers[question.id]?.selectedAnswer;
-                if (activeFilter === 'review') {
-                  return !!flags[question.id] || !answers[question.id]?.selectedAnswer;
-                }
-                return true;
+                return questionMatchesFilter(
+                  activeFilter,
+                  answers[question.id],
+                  Boolean(flags[question.id]),
+                );
               });
 
               return (
@@ -382,9 +281,7 @@ function QuestionNavigatorSheetComponent({
                     ) : (
                       <View style={styles.gridContainer}>
                         {filteredItems.map(({ question, index }) => {
-                          const isAnswered =
-                            answers[question.id]?.selectedAnswer !== null &&
-                            answers[question.id]?.selectedAnswer !== undefined;
+                          const isAnswered = isQuestionAnswered(answers[question.id]);
                           const isFlagged = !!flags[question.id];
                           const isCurrent = index === currentIndex;
 
@@ -461,39 +358,6 @@ function QuestionNavigatorSheetComponent({
             })}
           </ScrollView>
 
-          {/* Bottom Review not sure button */}
-          <View style={styles.footer}>
-            <Pressable
-              onPress={handleReviewNotSure}
-              disabled={flaggedIndices.length === 0}
-              accessibilityRole="button"
-              accessibilityLabel={`Review not sure questions, ${flaggedIndices.length} total`}
-              style={[
-                styles.reviewBtn,
-                {
-                  backgroundColor: flaggedIndices.length > 0 ? theme.accent : theme.surfaceAlt,
-                  borderColor: flaggedIndices.length > 0 ? theme.accent : theme.border,
-                },
-              ]}
-            >
-              <Flag
-                size={18}
-                color={flaggedIndices.length > 0 ? theme.onAccent : theme.textMuted}
-                strokeWidth={2}
-                fill={flaggedIndices.length > 0 ? theme.onAccent : 'transparent'}
-              />
-              <Text
-                style={[
-                  styles.reviewBtnText,
-                  {
-                    color: flaggedIndices.length > 0 ? theme.onAccent : theme.textMuted,
-                  },
-                ]}
-              >
-                {`Review not sure (${flaggedIndices.length})`}
-              </Text>
-            </Pressable>
-          </View>
         </View>
       </View>
     </Modal>
@@ -543,17 +407,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  legendRow: {
+  statusFilters: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-    paddingHorizontal: 4,
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 14,
   },
-  legendItem: {
+  statusFilter: {
+    width: '48%',
+    flexGrow: 1,
+    minHeight: 52,
+    borderRadius: 12,
+    borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    paddingHorizontal: 12,
+    gap: 10,
   },
   legendBox: {
     width: 14,
@@ -562,30 +431,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-  },
-  legendText: {
-    fontSize: 11,
-  },
-  filterSwitch: {
-    height: 40,
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 2,
-    flexDirection: 'row',
-    marginBottom: 14,
-  },
-  filterSegment: {
+  statusFilterCopy: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 9,
   },
-  filterText: {
+  statusFilterLabel: {
     fontSize: 13,
+    fontWeight: '600',
+  },
+  statusFilterCount: {
+    fontSize: 12,
+    marginTop: 2,
   },
   reviewFilterHint: {
     fontSize: 12,
@@ -646,22 +501,5 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-  },
-  footer: {
-    marginTop: 12,
-  },
-  reviewBtn: {
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-  },
-  reviewBtnText: {
-    fontSize: 14,
-    fontWeight: '600',
   },
 });

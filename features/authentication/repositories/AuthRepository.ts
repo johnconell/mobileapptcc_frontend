@@ -9,6 +9,7 @@ import { useExamStore } from '@/features/examinations/stores/examStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import type { AuthResult, ProctorProfile } from '@/shared/types';
 import { authStorageKeys, isLocalApiMode } from '@/features/local-testing/localMode';
+import { userFacingError } from '@/shared/utils/userFacingError';
 
 type LoginResponse = {
   success: boolean;
@@ -72,21 +73,63 @@ export const AuthRepository = {
     } catch (error) {
       if (error instanceof ApiError) {
         const unreachable = error.status === 0;
-        const host = getAuthApiBaseUrl();
         return {
           success: false,
           message: unreachable
-            ? `Cannot reach the sign-in server (${host}). Check mobile data/Wi‑Fi, then try again.`
+            ? 'Cannot connect to the sign-in server. Check your internet connection and try again.'
+            : error.status === 401
+              ? 'Incorrect email or password. Please try again.'
             : error.message,
         };
       }
 
       return {
         success: false,
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Unable to reach the server. Check your internet connection and try again.',
+        message: userFacingError(
+          error,
+          'Unable to reach the sign-in server. Check your internet connection and try again.',
+        ),
+      };
+    }
+  },
+
+  async loginWithGoogleIdToken(idToken: string): Promise<AuthResult> {
+    try {
+      const json = await apiRequest<LoginResponse>('/proctor/google-login', {
+        method: 'POST',
+        auth: false,
+        baseUrl: getAuthApiBaseUrl(),
+        body: { id_token: idToken },
+      });
+
+      const profile = json.data?.profile;
+      const token = json.data?.token;
+      if (!profile || !token) {
+        return { success: false, message: json.message || 'Google sign-in failed.' };
+      }
+
+      await OfflineStore.setOfflineMode(false);
+      return persistSession({ ...profile, offlineSession: false }, token);
+    } catch (error) {
+      if (error instanceof ApiError) {
+        return {
+          success: false,
+          message:
+            error.status === 0
+              ? 'Cannot connect to the sign-in server. Check your internet connection and try again.'
+              : error.status === 401
+                ? 'Google sign-in expired or could not be verified. Please try again.'
+                : error.status === 403
+                  ? 'This Google account is not an active registered proctor.'
+                  : error.status >= 500
+                    ? 'Google sign-in is temporarily unavailable. Please try again.'
+                    : error.message,
+        };
+      }
+
+      return {
+        success: false,
+        message: userFacingError(error, 'Google sign-in failed. Please try again.'),
       };
     }
   },
@@ -109,10 +152,10 @@ export const AuthRepository = {
     } catch (error) {
       return {
         success: false,
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Google sign-in failed. Connect to the internet and try again.',
+        message: userFacingError(
+          error,
+          'Google sign-in failed. Connect to the internet and try again.',
+        ),
       };
     }
   },
@@ -174,7 +217,14 @@ export const AuthRepository = {
           return profile;
         }
       } catch (error) {
-        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return cached;
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          await Promise.allSettled([
+            appStorage.deleteItem(authKeys.session),
+            appStorage.deleteItem(authKeys.token),
+            OfflineStore.clearBundledProctorSession(),
+          ]);
+          return null;
+        }
       }
 
       return cached;

@@ -13,6 +13,7 @@ import {
 } from '@/features/synchronization/services/offlineStore';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { classifyPeerReconnectError } from '@/features/examinations/services/peerReconnectErrors';
+import { normalizePasskey } from '@/features/examinations/services/passkeyFormat';
 import { validateOfflineProctorRoom } from '@/features/examinations/services/offlineRoomAssignment';
 import { parsePeerQr, PeerExamServer, resolveNumericScheduleId } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
@@ -21,6 +22,7 @@ import { requireGuidedAccess } from '@/features/examinations/services/guidedAcce
 import {
   formatScheduleOpeningTime,
   getProctorScheduleAvailability,
+  isPersistedOpenedRoomActive,
 } from '@/features/schedules/utils/proctorScheduleWindow';
 import type {
   ExamCodeValidation,
@@ -159,15 +161,23 @@ export async function getPreparedOfflineLobby(
       integrity.error || 'The examination package on this device could not be verified.',
     );
   }
+  const pack = integrity.pack;
 
   const sid = Number(String(sessionId).replace(/^offline-/, ''));
   const roomKey = OfflineStore.roomKey(sid, Number(roomId));
   const openedRooms = await OfflineStore.getOpenedRooms();
   const roomEntry = openedRooms[roomKey];
-  const actorId = Number(integrity.pack.authorization?.actor_id ?? 0);
+  const actorId = Number(pack.authorization?.actor_id ?? 0);
+  const nowMs = Date.now();
+  const roomEntryIsActive = isPersistedOpenedRoomActive(
+    pack.schedules,
+    roomKey,
+    roomEntry?.status,
+    nowMs,
+  );
   const ownedByOther = Boolean(
     roomEntry &&
-    (roomEntry.status === 'lobby_open' || roomEntry.status === 'in_progress') &&
+    roomEntryIsActive &&
     roomEntry.ownerId != null &&
     Number(roomEntry.ownerId) !== actorId,
   );
@@ -176,14 +186,14 @@ export async function getPreparedOfflineLobby(
       'This room is assigned to another proctor. Please select your assigned room or an available unassigned room.',
     );
   }
-  const locallyClaimed = ['lobby_open', 'in_progress'].includes(roomEntry?.status);
+  const locallyClaimed = roomEntryIsActive;
   const hasOtherActiveRoom = Object.entries(openedRooms).some(
     ([key, value]) =>
       key !== roomKey &&
-      (value.status === 'lobby_open' || value.status === 'in_progress') &&
+      isPersistedOpenedRoomActive(pack.schedules, key, value.status, nowMs) &&
       (value.ownerId == null || Number(value.ownerId) === actorId),
   );
-  return selectPreparedOfflineLobby(integrity.pack, sessionId, roomId, {
+  return selectPreparedOfflineLobby(pack, sessionId, roomId, {
     locallyClaimed,
     hasOtherActiveRoom,
     claimConfirmed: options.claimConfirmed,
@@ -909,7 +919,7 @@ export const LobbyRepository = {
     classification: 'valid' | 'wrong_schedule' | 'already_completed' | 'already_in_lobby';
     message?: string;
     student?: StudentRecord;
-    schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
+    schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string; session_type?: 'regular' | 'rescheduled'; reschedule_state?: 'proposed' | 'confirmed' | 'review_required' | null; schedule_revision?: number };
   }> {
     const code = (await getStoredCode()) || '';
     if (!code) throw new Error('Missing examination code. Scan QR again.');
@@ -918,7 +928,7 @@ export const LobbyRepository = {
       const health = await PeerExamClient.probeHealth();
       if (health === 'unreachable') {
         throw new Error(
-          'Cannot reach the proctor, check you are on the same WiFi. The WiFi may block device-to-device connections.',
+          'The proctor examination host is not reachable on this local network. Check that the room is still open and that device-to-device connections are allowed.',
         );
       }
       if (health === 'ended') {
@@ -932,12 +942,12 @@ export const LobbyRepository = {
         classification?: 'valid' | 'wrong_schedule' | 'already_completed' | 'already_in_lobby';
         message?: string;
         student?: StudentRecord;
-        schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
+        schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string; session_type?: 'regular' | 'rescheduled'; reschedule_state?: 'proposed' | 'confirmed' | 'review_required' | null; schedule_revision?: number };
       }>('/passkey', {
         method: 'POST',
         body: {
           code,
-          passkey: passkey.trim().toUpperCase(),
+          passkey: normalizePasskey(passkey),
         },
       });
       if (response.classification === 'wrong_schedule') {
@@ -1016,13 +1026,13 @@ export const LobbyRepository = {
         success: boolean;
         message?: string;
         data?: {
-          student: StudentRecord & { hasGmail?: boolean; gmail?: string | null };
-          schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string };
+          student: StudentRecord & { hasGmail?: boolean; gmail?: string | null; exam_set?: string | null; examSet?: string | null };
+          schedule?: { id?: number; title?: string; exam_date?: string; time_slot?: string; session_type?: 'regular' | 'rescheduled'; reschedule_state?: 'proposed' | 'confirmed' | 'review_required' | null; schedule_revision?: number };
         };
       }>('/exam/passkey/validate', {
         method: 'POST',
         auth: false,
-        body: { code, passkey: passkey.trim().toUpperCase() },
+        body: { code, passkey: normalizePasskey(passkey) },
       });
 
       if (!json.data?.student) {
@@ -1065,6 +1075,7 @@ export const LobbyRepository = {
           registration_id: s.registration_id,
           selectionStatus: 'ready',
           selectable: true,
+          examSet: s.exam_set || s.examSet,
         },
         schedule: json.data.schedule,
       };
@@ -1105,7 +1116,7 @@ export const LobbyRepository = {
         method: 'POST',
         body: {
           code,
-          passkey: passkey.trim().toUpperCase(),
+          passkey: normalizePasskey(passkey),
           gmail: student.email || undefined,
           student_pack_hash: preloadedHash,
           package_hash: preloadedHash,
@@ -1166,7 +1177,7 @@ export const LobbyRepository = {
       auth: false,
       body: {
         code,
-        passkey: passkey.trim().toUpperCase(),
+        passkey: normalizePasskey(passkey),
         gmail: student.email || undefined,
         device_id: deviceId,
       },
@@ -1239,41 +1250,7 @@ export const LobbyRepository = {
       };
     }
 
-    const json = await apiRequest<{
-      success: boolean;
-      message?: string;
-      data?: {
-        registration_id: number;
-        participation_token: string;
-        lobby: LobbySnapshot;
-      };
-    }>('/exam/join', {
-      method: 'POST',
-      auth: false,
-      body: {
-        code,
-        applicant_id: Number(student.id),
-        gmail: student.email || undefined,
-      },
-    });
-
-    if (!json.data) throw new Error(json.message || 'Unable to join examination.');
-
-    await appStorage.setItem(
-      STORAGE_KEYS.participationToken,
-      json.data.participation_token,
-    );
-    await appStorage.setItem(
-      STORAGE_KEYS.studentProgress,
-      JSON.stringify({
-        registrationId: json.data.registration_id,
-        applicantId: student.id,
-        sessionId,
-        participationToken: json.data.participation_token,
-      }),
-    );
-
-    return json.data.lobby;
+    throw new Error('Examination passkey verification is required before joining online.');
   },
 
   async startExamination(sessionId: string, roomId?: string): Promise<LobbySnapshot> {
@@ -1580,9 +1557,14 @@ export const LobbyRepository = {
     authorityStatus?: string;
     startSeq?: number;
     remainingSeconds?: number;
+    emergencySuspended?: boolean;
+    emergencySuspendedAt?: string | null;
+    emergencyReason?: string | null;
     removed?: boolean;
     sessionNotFound?: boolean;
     myStatus?: string;
+    submissionConfirmed?: boolean;
+    submittedAt?: string | null;
     serverTime?: string;
     startedAt?: string;
     endsAt?: string;
@@ -1613,8 +1595,13 @@ export const LobbyRepository = {
           authorityStatus?: string;
           startSeq?: number;
           remainingSeconds?: number;
+          emergencySuspended?: boolean;
+          emergencySuspendedAt?: string | null;
+          emergencyReason?: string | null;
           removed?: boolean;
           myStatus?: string;
+          submissionConfirmed?: boolean;
+          submittedAt?: string | null;
           serverTime?: string;
           startedAt?: string;
           endsAt?: string;
@@ -1638,8 +1625,13 @@ export const LobbyRepository = {
           authorityStatus: pulse?.authorityStatus,
           startSeq: pulse?.startSeq,
           remainingSeconds: pulse?.remainingSeconds,
+          emergencySuspended: pulse?.emergencySuspended,
+          emergencySuspendedAt: pulse?.emergencySuspendedAt,
+          emergencyReason: pulse?.emergencyReason,
           removed: pulse?.removed,
           myStatus: pulse?.myStatus,
+          submissionConfirmed: pulse?.submissionConfirmed,
+          submittedAt: pulse?.submittedAt,
           serverTime: pulse?.serverTime,
           startedAt: pulse?.startedAt,
           endsAt: pulse?.endsAt,
@@ -1823,7 +1815,6 @@ export const LobbyRepository = {
     const base = getCloudApiBaseUrl() || getApiBaseUrl();
     const json = await apiRequest<CloudExamSession>('/sessions/open', {
       method: 'POST',
-      auth: false,
       baseUrl: base,
       body: {
         proctor_id: Number(params.proctorId),
@@ -1857,7 +1848,6 @@ export const LobbyRepository = {
       const base = getCloudApiBaseUrl() || getApiBaseUrl();
       await apiRequest(`/sessions/${id}/start`, {
         method: 'POST',
-        auth: false,
         baseUrl: base,
       });
       return true;
@@ -1877,7 +1867,6 @@ export const LobbyRepository = {
       const base = getCloudApiBaseUrl() || getApiBaseUrl();
       await apiRequest(`/sessions/${id}/close`, {
         method: 'POST',
-        auth: false,
         baseUrl: base,
       });
       await appStorage.deleteItem(STORAGE_KEYS.activeCloudSessionId);

@@ -4,6 +4,8 @@
  * without circular imports between PeerExamServer and proctorWifiLock.
  */
 import * as Network from 'expo-network';
+import { Platform } from 'react-native';
+import { getPreferredAndroidLanIp } from '@/features/examinations/services/ExamSecurityService';
 
 /** RFC1918 private ranges (typical campus / hotspot Wi‑Fi). */
 export function isPrivateLanIp(ip: string | null | undefined): boolean {
@@ -33,6 +35,28 @@ function sanitizeCandidate(ip: string | null | undefined): string | null {
   return trimmed;
 }
 
+export function selectReachableLanIp(input: {
+  detailIp?: string | null;
+  genericIp?: string | null;
+  nativeAndroidIp?: string | null;
+  isWifi: boolean;
+  isAndroid: boolean;
+}): string | null {
+  const detailIp = sanitizeCandidate(input.detailIp);
+  const genericIp = sanitizeCandidate(input.genericIp);
+  const nativeAndroidIp = sanitizeCandidate(input.nativeAndroidIp);
+
+  // An explicit Wi-Fi address is the strongest signal. If Android reports
+  // cellular as the primary route, use only an address from a Wi-Fi/hotspot/
+  // Ethernet interface discovered natively; never substitute a cellular IP.
+  if (input.isWifi && detailIp && isPrivateLanIp(detailIp)) return detailIp;
+  if (input.isAndroid && nativeAndroidIp && isPrivateLanIp(nativeAndroidIp)) {
+    return nativeAndroidIp;
+  }
+  if (input.isWifi && genericIp && isPrivateLanIp(genericIp)) return genericIp;
+  return null;
+}
+
 /**
  * Resolve the Wi‑Fi LAN IP suitable for hosting a peer exam server.
  * Returns null when Wi‑Fi is not active or the only IP looks like cellular/WAN.
@@ -58,20 +82,25 @@ export async function resolveWifiLanIp(): Promise<{
     const genericIp = sanitizeCandidate(
       await Network.getIpAddressAsync().catch(() => null),
     );
-
-    const preferred =
-      (detailIp && isPrivateLanIp(detailIp) ? detailIp : null) ||
-      (genericIp && isPrivateLanIp(genericIp) ? genericIp : null) ||
-      null;
+    const nativeAndroidIp =
+      Platform.OS === 'android' ? await getPreferredAndroidLanIp() : null;
+    const preferred = selectReachableLanIp({
+      detailIp,
+      genericIp,
+      nativeAndroidIp,
+      isWifi,
+      isAndroid: Platform.OS === 'android',
+    });
+    const hasLanInterface = Boolean(preferred);
 
     const cellularLikely =
       isCellular ||
-      (isWifi && !preferred && Boolean(genericIp || detailIp)) ||
+      (!hasLanInterface && isWifi && Boolean(genericIp || detailIp)) ||
       (isWifi && Boolean(genericIp) && !isPrivateLanIp(genericIp));
 
     return {
-      ip: isWifi ? preferred : null,
-      isWifi,
+      ip: preferred,
+      isWifi: isWifi || hasLanInterface,
       type,
       cellularLikely,
       isInternetReachable: net.isInternetReachable ?? null,

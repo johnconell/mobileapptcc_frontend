@@ -28,6 +28,8 @@ type NativeKioskBridge = {
   }>;
   isIgnoringBatteryOptimizations?: () => Promise<boolean>;
   requestBatteryOptimizationExemption?: () => Promise<boolean>;
+  moveTaskToBackground?: () => Promise<boolean>;
+  getPreferredLanIp?: () => Promise<string | null>;
 };
 
 const LOCK_TASK_TIMEOUT_MS = 5000;
@@ -115,6 +117,16 @@ export async function isExamLocked(): Promise<boolean> {
   }
 }
 
+/** Android-only interface scan used when the OS primary route is cellular. */
+export async function getPreferredAndroidLanIp(): Promise<string | null> {
+  if (Platform.OS !== 'android') return null;
+  try {
+    return (await getNativeBridge()?.getPreferredLanIp?.()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * ExamSecurityService — Secure Examination / Kiosk Mode.
  *
@@ -127,6 +139,16 @@ export async function isExamLocked(): Promise<boolean> {
  * System-level kiosk (Recent Apps / status bar) still needs Device Owner.
  */
 export const ExamSecurityService = {
+  /** Preserve the Android task in Recents when Back is pressed at proctor root. */
+  async moveTaskToBackground(): Promise<boolean> {
+    if (Platform.OS !== 'android') return false;
+    try {
+      return (await getNativeBridge()?.moveTaskToBackground?.()) === true;
+    } catch {
+      return false;
+    }
+  },
+
   hasExamHostForegroundService(): boolean {
     return Platform.OS === 'android' && Boolean(getNativeBridge()?.startExamHostService);
   },
@@ -294,11 +316,12 @@ export const ExamSecurityService = {
       }
     }
 
-    // Native Device Owner / Lock Task (production build only)
+    // Apply visual/native protections here. Lock Task has a separate owner
+    // (useExamLock) so transient AppState/network changes cannot start and stop
+    // screen pinning twice.
     try {
       await native?.setImmersiveMode?.(true);
       await native?.blockMultiWindow?.(true);
-      await startExamLock();
     } catch {
       // Expo Go: native kiosk unavailable — AppState monitoring still applies
     }
@@ -310,7 +333,6 @@ export const ExamSecurityService = {
     const native = getNativeBridge();
 
     try {
-      await stopExamLock();
       await native?.setImmersiveMode?.(false);
       await native?.blockMultiWindow?.(false);
     } catch {

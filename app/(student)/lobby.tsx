@@ -13,12 +13,14 @@ import { StudentRepository } from '@/features/applicants/repositories/StudentRep
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
+import { releaseExamSessionRestrictions } from '@/features/examinations/services/examSessionRestrictions';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { colors } from '@/shared/theme';
 import { examProcess } from '@/shared/theme/examProcess';
 import { ExamProcessStepper } from '@/features/examinations/components/ExamProcessStepper';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { ExamPreloader } from '@/features/examinations/services/examPreloader';
+import { userFacingError } from '@/shared/utils/userFacingError';
 import { useGuidedAccessStatus } from '@/features/examinations/hooks/useGuidedAccessStatus';
 import { requireGuidedAccess } from '@/features/examinations/services/guidedAccess';
 import {
@@ -54,6 +56,7 @@ function useLobbyController() {
 
   const [state, setState] = useState<LobbyState>('DASHBOARD');
   const [error, setError] = useState<string | null>(null);
+  const [packDownloadError, setPackDownloadError] = useState<string | null>(null);
   const [lastSeen, setLastSeen] = useState<number>(Date.now());
   const [progress, setProgress] = useState<ExamPackProgress>(INITIAL_PACK_PROGRESS);
   const [authority, setAuthority] = useState<AuthorityStatus>('WAITING');
@@ -88,14 +91,26 @@ function useLobbyController() {
   const ensurePackDownload = useCallback(async () => {
     if (!scannedSessionId || downloading.current) return;
     downloading.current = true;
+    setPackDownloadError(null);
     try {
       const snapshot = await ExamPreloader.getReadinessSnapshot();
       if (snapshot.moduleReady && snapshot.hashVerified && snapshot.percent >= 100) {
         return;
       }
-      await ExamPreloader.preloadQuestions(scannedSessionId);
+      const result = await ExamPreloader.preloadQuestions(scannedSessionId);
+      if (result.count <= 0) {
+        throw new Error('The examination pack did not include any questions. Ask the proctor to refresh the pack and retry.');
+      }
     } catch (preloadErr) {
-      console.warn('[STARTUP] Download failed:', preloadErr);
+      console.warn('[STARTUP] Examination pack download failed:', {
+        errorName: preloadErr instanceof Error ? preloadErr.name : 'UnknownError',
+      });
+      setPackDownloadError(
+        userFacingError(
+          preloadErr,
+          "Unable to receive the examination pack from the proctor. Check the local Wi-Fi connection and retry.",
+        ),
+      );
     } finally {
       downloading.current = false;
     }
@@ -319,13 +334,18 @@ function useLobbyController() {
       void LobbyRepository.acknowledgeStart('entered');
       router.replace('/(student)/exam');
     } catch (err) {
-      console.error('[STUDENT] ENTRY_CRASH:', err);
+      console.error('[STUDENT] Examination entry failed:', {
+        errorName: err instanceof Error ? err.name : 'UnknownError',
+      });
       hasEntered.current = false;
       entering.current = false;
       setState(progress.moduleReady ? 'DASHBOARD' : 'FINISHING_DOWNLOAD');
       Alert.alert(
         'Could not open examination',
-        err instanceof Error ? err.message : 'Stay connected to the examination Wi‑Fi and try again.',
+        userFacingError(
+          err,
+          'Unable to open the examination. Check the local examination Wi-Fi and retry; your saved progress has not been cleared.',
+        ),
       );
     }
   }, [
@@ -381,6 +401,8 @@ function useLobbyController() {
     isStale,
     lobbyQuery,
     progress,
+    packDownloadError,
+    retryPackDownload: ensurePackDownload,
     authority,
     pulseOk,
   };
@@ -409,39 +431,59 @@ export default function StudentLobbyScreen() {
       );
   }
 
-  const { lobbyData, currentStudent, isStale, progress, authority, pulseOk } = controller;
+  const { lobbyData, currentStudent, isStale, progress, packDownloadError, authority, pulseOk } = controller;
   const examReady = Boolean(progress.moduleReady && progress.hashVerified && progress.percent >= 100);
 
   const handleExit = () => {
     const leave = async () => {
-      try {
-        const studentId = currentStudent?.id;
-        if (studentId && authority !== 'ENDED') {
-          await StudentRepository.cancelRegistration(String(studentId)).catch(() => undefined);
-        }
-        await Promise.allSettled([
-          appStorage.deleteItem(STORAGE_KEYS.participationToken),
-          appStorage.deleteItem(STORAGE_KEYS.examinationCode),
-          appStorage.deleteItem(STORAGE_KEYS.studentProgress),
-          appStorage.deleteItem(STORAGE_KEYS.examCheckpoint),
-          appStorage.deleteItem('tcc.student.preload.ready'),
-          ExamLifecycle.clear(),
-          PeerExamClient.clear(),
-        ]);
+      const studentId = currentStudent?.id;
+      if (studentId && authority !== 'ENDED') {
         try {
-          const { clearApplicantExamMaterial } = await import(
-            '@/features/applicants/services/applicantExamCleanup'
+          await StudentRepository.cancelRegistration(String(studentId));
+        } catch (error) {
+          Alert.alert(
+            'Unable to exit examination',
+            error instanceof Error
+              ? error.message
+              : 'The examination session could not be terminated. Keep the app open and try again.',
           );
-          await clearApplicantExamMaterial();
-        } catch {
-          /* ignore */
+          return;
         }
-        useStudentStore.getState().reset();
-        useExamStore.getState().reset();
-        useLobbyStore.getState().reset();
-      } finally {
-        router.replace('/');
       }
+
+      try {
+        await releaseExamSessionRestrictions('lobby_exit');
+      } catch (error) {
+        Alert.alert(
+          'Unable to release examination restrictions',
+          error instanceof Error
+            ? error.message
+            : 'Use your device system controls to exit app pinning, then try again.',
+        );
+        return;
+      }
+
+      await Promise.allSettled([
+        appStorage.deleteItem(STORAGE_KEYS.participationToken),
+        appStorage.deleteItem(STORAGE_KEYS.examinationCode),
+        appStorage.deleteItem(STORAGE_KEYS.studentProgress),
+        appStorage.deleteItem(STORAGE_KEYS.examCheckpoint),
+        appStorage.deleteItem('tcc.student.preload.ready'),
+        ExamLifecycle.clear(),
+        PeerExamClient.clear(),
+      ]);
+      try {
+        const { clearApplicantExamMaterial } = await import(
+          '@/features/applicants/services/applicantExamCleanup'
+        );
+        await clearApplicantExamMaterial();
+      } catch {
+        /* ignore */
+      }
+      useStudentStore.getState().reset();
+      useExamStore.getState().reset();
+      useLobbyStore.getState().reset();
+      router.replace('/');
     };
 
     if (authority === 'ENDED') {
@@ -509,12 +551,18 @@ export default function StudentLobbyScreen() {
         <Card style={styles.waitingCard}>
           <View style={styles.waitingBannerRow}>
             <View style={styles.waitingAnimWrap}>
-              <ActivityIndicator size="small" color={examProcess.accent} />
+              {packDownloadError ? (
+                <AlertTriangle size={18} color={colors.danger} />
+              ) : (
+                <ActivityIndicator size="small" color={examProcess.accent} />
+              )}
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.waitingBannerTitle}>
                 {authority === 'ENDED'
                   ? 'Examination Ended'
+                  : packDownloadError
+                    ? 'Examination pack unavailable'
                   : controller.state === 'STARTING' || authority === 'ACTIVE'
                     ? 'Entry Authorized!'
                     : controller.state === 'FINISHING_DOWNLOAD'
@@ -524,6 +572,8 @@ export default function StudentLobbyScreen() {
               <Text style={styles.waitingBannerSub}>
                 {authority === 'ENDED'
                   ? 'This examination has ended. Tap Return Home to leave.'
+                  : packDownloadError
+                    ? packDownloadError
                   : controller.state === 'STARTING' || authority === 'ACTIVE'
                     ? 'Launching examination browser. Please hold on.'
                     : controller.state === 'FINISHING_DOWNLOAD'
@@ -539,7 +589,7 @@ export default function StudentLobbyScreen() {
             </View>
           ) : null}
 
-          {(controller.state === 'STARTING' || controller.state === 'FINISHING_DOWNLOAD') && (
+          {(controller.state === 'STARTING' || (controller.state === 'FINISHING_DOWNLOAD' && !packDownloadError)) && (
             <View style={styles.startingBox}>
               <ActivityIndicator size="small" color={examProcess.accent} />
               <Text style={styles.startingText}>
@@ -549,6 +599,12 @@ export default function StudentLobbyScreen() {
               </Text>
             </View>
           )}
+          {controller.state === 'FINISHING_DOWNLOAD' && packDownloadError ? (
+            <View style={styles.startingBox}>
+              <Text style={styles.startingText}>{packDownloadError}</Text>
+              <Button title="Retry download" onPress={() => void controller.retryPackDownload()} />
+            </View>
+          ) : null}
         </Card>
 
         {/* SECTION 4: RULES & REGULATIONS (Exactly matches Proctor Dashboard) */}

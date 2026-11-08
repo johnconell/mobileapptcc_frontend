@@ -24,7 +24,14 @@ type StoredStudentProgress = {
 };
 
 export type ResumeExamResult =
-  | { ok: true; route: '/(student)/exam' | '/(student)/lobby' | '/(student)/submitting' }
+  | {
+      ok: true;
+      route:
+        | '/(student)/exam'
+        | '/(student)/lobby'
+        | '/(student)/submitting'
+        | '/(student)/completed';
+    }
   | { ok: false; reason: string };
 
 type LiveRoomStatus = 'in_progress' | 'lobby_open' | 'ended' | 'idle' | 'unreachable';
@@ -71,6 +78,17 @@ async function wipeEndedLocalSession(notice?: string): Promise<void> {
  * persisted token still matches a complete local participation record.
  */
 export async function recoverOrphanedStudentKioskAtStartup(): Promise<void> {
+  const finalizedSubmission = await ExamSubmissionStore.load().catch((error) => {
+    console.warn('[EXAM RECOVERY] Could not inspect the finalized submission before kiosk recovery:', {
+      errorName: error instanceof Error ? error.name : 'StorageError',
+    });
+    return null;
+  });
+  if (finalizedSubmission && finalizedSubmission.status !== 'confirmed') {
+    await stopExamLock().catch(() => undefined);
+    return;
+  }
+
   if (!(await isExamLocked())) return;
 
   const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
@@ -80,6 +98,14 @@ export async function recoverOrphanedStudentKioskAtStartup(): Promise<void> {
     progress = progressRaw ? (JSON.parse(progressRaw) as StoredStudentProgress) : null;
   } catch {
     progress = null;
+  }
+
+  if (
+    finalizedSubmission?.status === 'confirmed' &&
+    progress?.sessionId === finalizedSubmission.sessionId
+  ) {
+    await stopExamLock().catch(() => undefined);
+    return;
   }
 
   await ExamLifecycle.hydrate();
@@ -141,8 +167,14 @@ function studentFromProgress(progress: StoredStudentProgress | null): StudentRec
 export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
   // 1. Resume unconfirmed finalized submissions straight to submitting screen
   const pendingSubmission = await ExamSubmissionStore.load().catch(() => null);
-  if (pendingSubmission && pendingSubmission.status !== 'confirmed') {
-    return { ok: true, route: '/(student)/submitting' };
+  if (pendingSubmission) {
+    return {
+      ok: true,
+      route:
+        pendingSubmission.status === 'confirmed'
+          ? '/(student)/completed'
+          : '/(student)/submitting',
+    };
   }
 
   const token = await appStorage.getItem(STORAGE_KEYS.participationToken);

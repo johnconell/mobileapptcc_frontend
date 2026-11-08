@@ -24,6 +24,7 @@ import { useLobby } from '@/features/lobby/hooks/useLobby';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { QUERY_KEYS } from '@/shared/constants';
 import { PeerExamServer } from '@/features/examinations/services/peerExamServer';
+import { EmergencyReportSync } from '@/features/examinations/services/emergencyReportSync';
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { startProctorHostIpSync } from '@/features/monitoring/services/proctorHostIpSync';
@@ -33,6 +34,8 @@ import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { colors } from '@/shared/theme';
 import type { LobbyStudent } from '@/shared/types';
 import { safeBack } from '@/shared/utils';
+import { userFacingError } from '@/shared/utils/userFacingError';
+import { sortStudentsAlphabetical } from '@/features/synchronization/utils/studentNameOrder';
 import {
   // keep existing imports below — do not break the rest of this file
   Copy,
@@ -121,13 +124,18 @@ function formatRemaining(seconds: number | null | undefined) {
 
 function liveRemainingSeconds(lobby: {
   status?: string;
+  emergencySuspended?: boolean;
   remainingSeconds?: number | null;
   session?: {
     startedAt?: string | null;
     durationMinutes?: number | null;
+    endsAt?: string | null;
     remainingSeconds?: number | null;
   } | null;
 }): number | null {
+  if (lobby.emergencySuspended) {
+    return lobby.session?.remainingSeconds ?? lobby.remainingSeconds ?? null;
+  }
   if (lobby.status !== 'in_progress') {
     return lobby.session?.remainingSeconds ?? lobby.remainingSeconds ?? null;
   }
@@ -277,7 +285,7 @@ function ProctorLobbyContent() {
               await refresh();
               Alert.alert('Examinee Removed', `${student.fullName} has been removed from this room.`);
             } catch (err) {
-              Alert.alert('Removal Failed', err instanceof Error ? err.message : 'Could not remove student.');
+              Alert.alert('Removal Failed', userFacingError(err, 'Could not remove this student. Please try again.'));
             }
           },
         },
@@ -455,7 +463,7 @@ function ProctorLobbyContent() {
       } catch (error) {
         if (cancelled) return;
         setOpenError(
-          error instanceof Error ? error.message : 'Unable to load examination lobby.',
+          userFacingError(error, 'Unable to load the examination lobby. Retry to restore the saved room session.'),
         );
       } finally {
         if (!cancelled) setReady(true);
@@ -608,6 +616,32 @@ function ProctorLobbyContent() {
 
   const lobby = lobbyQuery.data ?? storeLobby;
 
+  useEffect(() => {
+    let active = true;
+    let syncing = false;
+    const syncReports = async () => {
+      if (!active || syncing) return;
+      syncing = true;
+      try {
+        await EmergencyReportSync.syncPending();
+      } catch (error) {
+        console.warn('[Proctor Lobby] Emergency report retry failed:', error);
+      } finally {
+        syncing = false;
+      }
+    };
+    const interval = setInterval(() => void syncReports(), 15000);
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void syncReports();
+    });
+    void syncReports();
+    return () => {
+      active = false;
+      clearInterval(interval);
+      appStateSub.remove();
+    };
+  }, []);
+
   // Detect Wi‑Fi / DHCP changes: refresh local peer QR host IP and push to Laravel.
   useEffect(() => {
     const cloudSessionId =
@@ -723,7 +757,10 @@ function ProctorLobbyContent() {
   // These were originally placed AFTER `if (!ready) return` — that caused
   // "Rendered more hooks than during previous render" crash → blank screen.
   const studentsList = useMemo(
-    () => (Array.isArray(lobby?.students) ? lobby!.students : []),
+    () => {
+      const list = Array.isArray(lobby?.students) ? lobby!.students : [];
+      return sortStudentsAlphabetical(list);
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [lobby?.students],
   );
@@ -928,6 +965,69 @@ function ProctorLobbyContent() {
   const displayCode = cloudCode || lobby?.examinationCode || '----';
   const displayQrValue = lobby?.qrValue || cloudQrValue || displayCode;
 
+  const applyEmergencyAction = async (suspend: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (!suspend) {
+        const snapshot = await PeerExamServer.resumeAfterEmergency();
+        setSnapshot(snapshot);
+        await refresh();
+        return;
+      }
+
+      const reason = 'Emergency interruption reported by the proctor.';
+      const snapshot = await PeerExamServer.suspendForEmergency(reason);
+      setSnapshot(snapshot);
+      await refresh();
+      try {
+        const report = await EmergencyReportSync.recordLocalSuspension({
+          scheduleId: Number(snapshot.schedule?.id ?? scheduleId),
+          roomId: Number(snapshot.roomId ?? roomId),
+          reason,
+        });
+        const message = report.pending > 0
+          ? `The room is suspended and the report is encrypted on this device for retry. ${report.error ? `Last sync error: ${report.error}` : ''}`
+          : 'The room is suspended and the report was sent to the server.';
+        Alert.alert('Emergency suspension', message);
+      } catch (error) {
+        Alert.alert(
+          'Suspended locally',
+          `The room is paused, but its report could not be saved: ${userFacingError(error, 'Check the room details and try reporting again.')}`,
+        );
+      }
+    } catch (error) {
+      Alert.alert(
+        suspend ? 'Unable to suspend examination' : 'Unable to resume examination',
+        userFacingError(error, 'The room state could not be changed. Please try again.'),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmEmergencyAction = () => {
+    if (lobby.emergencySuspended) {
+      Alert.alert(
+        'Resume examination?',
+        'The proctor-local timer will continue from the remaining time. Confirm that it is safe to resume.',
+        [
+          { text: 'Keep suspended', style: 'cancel' },
+          { text: 'Resume', onPress: () => void applyEmergencyAction(false) },
+        ],
+      );
+      return;
+    }
+    Alert.alert(
+      'Emergency suspension',
+      'Pause this room immediately. Student answers will be preserved and the report will sync when the device reconnects.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Suspend and report', style: 'destructive', onPress: () => void applyEmergencyAction(true) },
+      ],
+    );
+  };
+
   const copyCode = async () => {
     try {
       const codeToCopy = displayCode !== '----' ? displayCode : (lobby.examinationCode ?? '');
@@ -1039,7 +1139,9 @@ function ProctorLobbyContent() {
       ? 'LAN live'
       : hosting.listenerState === 'reconnecting'
         ? 'LAN reconnecting'
-        : 'LAN stopped';
+        : hosting.listenerState === 'unavailable'
+          ? 'Network unavailable'
+          : 'LAN stopped';
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
@@ -1170,18 +1272,33 @@ function ProctorLobbyContent() {
                   { width: qrFrameSize, height: qrFrameSize },
                 ]}
               >
-                <QrCodePanel
-                  value={displayQrValue}
-                  size={qrSize}
-                  frame={false}
-                  note={null}
-                />
+                {hosting.listenerState === 'live' && (peerHost || hosting.host) ? (
+                  <QrCodePanel
+                    value={displayQrValue}
+                    size={qrSize}
+                    frame={false}
+                    note={null}
+                  />
+                ) : (
+                  <View style={styles.qrUnavailable}>
+                    <WifiOff size={42} color={LOBBY.maroon} strokeWidth={2} />
+                    <Text style={styles.qrUnavailableText}>
+                      {hosting.listenerState === 'reconnecting'
+                        ? 'Reconnecting to the local network…'
+                        : 'Connect this phone to the examination Wi-Fi or a supported hotspot.'}
+                    </Text>
+                  </View>
+                )}
               </View>
 
               <Text style={styles.qrHint} maxFontSizeMultiplier={1.2}>
-                {lobby.status === 'in_progress'
+                {lobby.emergencySuspended
+                  ? 'Emergency suspension · New scans are blocked'
+                  : lobby.status === 'in_progress'
                   ? 'Exam in progress · New scans are locked'
-                  : peerHost
+                  : hosting.listenerState !== 'live'
+                    ? 'QR access is paused until the local network recovers'
+                    : peerHost || hosting.host
                     ? `Connect to ${lobby.wifiSsid || 'Exam Wi-Fi'} then scan`
                     : 'Hold steady · Students scan the QR with their device to enter'}
               </Text>
@@ -1243,7 +1360,7 @@ function ProctorLobbyContent() {
                     } catch (error) {
                       Alert.alert(
                         'Unable to regenerate',
-                        error instanceof Error ? error.message : 'Please try again.',
+                        userFacingError(error, 'Unable to regenerate the room QR code. Please try again.'),
                       );
                     } finally {
                       setBusy(false);
@@ -1269,7 +1386,11 @@ function ProctorLobbyContent() {
                     )
                   }
                   loading={busy}
-                  disabled={lobby.can_control === false || lobby.status === 'ended'}
+                  disabled={
+                    lobby.can_control === false ||
+                    lobby.status === 'ended' ||
+                    (lobby.emergencySuspended && lobby.status !== 'in_progress')
+                  }
                   onPress={() => {
                     if (lobby.can_control === false) {
                       Alert.alert('Not allowed', 'Only the proctor who opened this lobby can control it.');
@@ -1284,6 +1405,41 @@ function ProctorLobbyContent() {
                   style={[styles.passActionBtn, { backgroundColor: LOBBY.maroon }]}
                 />
               </View>
+              {lobby.emergencySuspended ? (
+                <View
+                  accessibilityRole="alert"
+                  style={{
+                    marginTop: 12,
+                    padding: 12,
+                    borderRadius: 10,
+                    borderWidth: 1,
+                    borderColor: '#B54708',
+                    backgroundColor: '#FFF4E5',
+                    flexDirection: 'row',
+                    alignItems: 'flex-start',
+                    gap: 9,
+                  }}
+                >
+                  <AlertTriangle size={18} color="#B54708" />
+                  <Text style={{ flex: 1, color: '#663C00', fontSize: 13, lineHeight: 18 }}>
+                    Emergency suspension is active. New applicants are blocked and the exam timer is paused.
+                    {lobby.emergencyReason ? ` ${lobby.emergencyReason}` : ''}
+                  </Text>
+                </View>
+              ) : null}
+              <Button
+                title={lobby.emergencySuspended ? 'Resume after emergency' : 'Emergency suspension'}
+                variant={lobby.emergencySuspended ? 'outline' : 'danger'}
+                icon={
+                  lobby.emergencySuspended
+                    ? <Play size={17} color={LOBBY.maroon} strokeWidth={2.2} />
+                    : <AlertTriangle size={17} color={LOBBY.onMaroon} strokeWidth={2.2} />
+                }
+                loading={busy}
+                disabled={lobby.can_control === false || lobby.status === 'ended'}
+                onPress={confirmEmergencyAction}
+                style={{ marginTop: 10 }}
+              />
             </View>
 
             {lobby.status === 'ended' ? (
@@ -1313,15 +1469,18 @@ function ProctorLobbyContent() {
                       setSyncPending(info.pending);
                       setSyncConfigured(info.configured);
                       Alert.alert(
-                        result.failed > 0 ? 'Sync partially complete' : 'Synced',
+                        result.failed > 0 || info.pending > 0
+                          ? 'Sync partially complete'
+                          : 'Synced',
                         result.message,
                       );
                     } catch (error) {
                       Alert.alert(
                         'Sync failed',
-                        error instanceof Error
-                          ? error.message
-                          : 'Connect to the internet and try again.',
+                        userFacingError(
+                          error,
+                          'Results remain saved on this device but could not be synchronized. Retry when the server is available.',
+                        ),
                       );
                     } finally {
                       setBusy(false);
@@ -1507,9 +1666,14 @@ function ProctorLobbyContent() {
                           <Text style={styles.statusRowName} maxFontSizeMultiplier={1.25}>
                             {item.fullName}
                           </Text>
-                          <Text style={styles.statusRowId} maxFontSizeMultiplier={1.25}>
-                            {item.studentId || item.applicantCode || 'No applicant number'}
-                          </Text>
+                          <View style={styles.statusRowIdLine}>
+                            <Text style={styles.statusRowId} maxFontSizeMultiplier={1.25}>
+                              {item.studentId || item.applicantCode || 'No applicant number'}
+                            </Text>
+                            <View style={styles.examSetChip}>
+                              <Text style={styles.examSetChipText}>{item.examSet || 'Set 1'}</Text>
+                            </View>
+                          </View>
                         </View>
                         <View
                           style={[styles.statusRowPill, { backgroundColor: currentTab.tone.bg }]}
@@ -1669,12 +1833,12 @@ function ProctorLobbyContent() {
               await refresh();
               setStartOpen(false);
             } catch (error) {
-              Alert.alert('Unable to start', error instanceof Error ? error.message : 'Please try again.');
+              Alert.alert('Unable to start', userFacingError(error, 'Unable to start the examination. Check the room and local network, then try again.'));
             } finally {
               setBusy(false);
             }
           } catch (err) {
-            Alert.alert('Unable to start', err instanceof Error ? err.message : 'Please try again.');
+            Alert.alert('Unable to start', userFacingError(err, 'Unable to start the examination. Check the room and local network, then try again.'));
           }
         }}
       />
@@ -1742,7 +1906,7 @@ function ProctorLobbyContent() {
           } catch (error) {
             Alert.alert(
               'Unable to close',
-              error instanceof Error ? error.message : 'Please try again.',
+              userFacingError(error, 'Unable to close the room. The saved room session was left unchanged; retry.'),
             );
           } finally {
             setBusy(false);
@@ -1794,6 +1958,8 @@ function ProctorLobbyContent() {
             <View style={[styles.detailSheet, { backgroundColor: themeColors.card }]}>
               <Text style={[styles.detailTitle, { color: themeColors.textPrimary }]}>{selected.fullName}</Text>
               <StatusChip status={selected.status} />
+              <DetailRow label="Examination Set" value={selected.examSet || 'Set 1'} />
+              <DetailRow label="Applicant ID" value={selected.studentId || selected.applicantCode || '—'} />
               <DetailRow label="Gmail" value={selected.email} />
               <DetailRow label="Desired Program" value={selected.programName} />
               <DetailRow
@@ -1898,7 +2064,7 @@ function ProctorLobbyContent() {
                       } catch (error) {
                         Alert.alert(
                           'Reconnect failed',
-                          error instanceof Error ? error.message : 'Unable to issue code.',
+                          userFacingError(error, 'Unable to issue a reconnect code. Please try again.'),
                         );
                       } finally {
                         setBusy(false);
@@ -1913,11 +2079,19 @@ function ProctorLobbyContent() {
                     loading={busy}
                     onPress={async () => {
                       setBusy(true);
-                      await LobbyRepository.resumeStudent(selected.id);
-                      await refresh();
-                      setBusy(false);
-                      setSelected(null);
-                      setReconnectCode(null);
+                      try {
+                        await LobbyRepository.resumeStudent(selected.id);
+                        await refresh();
+                        setSelected(null);
+                        setReconnectCode(null);
+                      } catch (error) {
+                        Alert.alert(
+                          'Unable to resume examination',
+                          userFacingError(error, 'Unable to resume this examination. Please retry or ask the student to reconnect.'),
+                        );
+                      } finally {
+                        setBusy(false);
+                      }
                     }}
                   />
                 ) : null}
@@ -1946,7 +2120,7 @@ function ProctorLobbyContent() {
                                 } catch (error) {
                                   Alert.alert(
                                     'Unable to remove',
-                                    error instanceof Error ? error.message : 'Please try again.',
+                                    userFacingError(error, 'Unable to remove the student from this lobby. Please try again.'),
                                   );
                                 } finally {
                                   setBusy(false);
@@ -2436,6 +2610,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: LOBBY.border,
+  },
+  qrUnavailable: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    paddingHorizontal: 20,
+  },
+  qrUnavailableText: {
+    color: LOBBY.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
   },
   qrHint: {
     fontSize: 13,
@@ -3164,6 +3351,24 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: LOBBY.muted,
   },
+  statusRowIdLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 2,
+  },
+  examSetChip: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: '#8B0000',
+  },
+  examSetChipText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
   statusRowPill: {
     maxWidth: '46%',
     paddingHorizontal: 10,
@@ -3225,4 +3430,3 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
- 

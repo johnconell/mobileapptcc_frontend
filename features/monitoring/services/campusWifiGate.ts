@@ -3,6 +3,7 @@ import { getApiBaseUrl } from '@/shared/services/api';
 import { isLoopbackApiHost, requiresLanApiHost } from '@/shared/services/apiReachability';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { parsePeerQr } from '@/features/examinations/services/peerExamServer';
+import { resolveWifiLanIp } from '@/features/monitoring/services/wifiLanIp';
 
 export type CampusWifiGateResult = {
   ok: boolean;
@@ -73,10 +74,14 @@ export async function assertCampusWifiForJoin(options?: {
   isProctor?: boolean;
 }): Promise<CampusWifiGateResult> {
   const netState = await Network.getNetworkStateAsync();
-  const wifiConnected = netState.isConnected === true && netState.type === Network.NetworkStateType.WIFI;
+  let wifiConnected = netState.isConnected === true && netState.type === Network.NetworkStateType.WIFI;
 
-  const mismatchMessage =
-    'You are connected to a different examination network. Please connect to the same Wi‑Fi network as the proctor and scan again.';
+  // Android hotspot hosting may report cellular/unknown as the primary route.
+  // Accept it for proctors only when a real Wi-Fi/hotspot LAN interface exists.
+  if (!wifiConnected && options?.isProctor) {
+    wifiConnected = Boolean((await resolveWifiLanIp()).ip);
+  }
+
   const officialWifiMessage =
     'You must connect to the official examination Wi-Fi network before joining this examination.';
 
@@ -109,61 +114,20 @@ export async function assertCampusWifiForJoin(options?: {
     (options?.examinationCode ? null : (await PeerExamClient.getTarget()));
 
   if (peerTarget) {
-    // 1. Strict SSID validation: If both SSIDs are known, require exact match
-    const currentSsid = (netState as any).ssid;
-    const cleanExpected = (peerTarget.wifiSsid || '').replace(/^"|"$/g, '').trim();
-    const cleanCurrent = (currentSsid || '').replace(/^"|"$/g, '').trim();
-
-    if (
-      cleanExpected &&
-      cleanCurrent &&
-      cleanCurrent !== '<unknown ssid>' &&
-      cleanCurrent.toLowerCase() !== cleanExpected.toLowerCase()
-    ) {
-      return {
-        ok: false,
-        wifiConnected: true,
-        serverReachable: false,
-        message: `${officialWifiMessage}\n\nConnected to '${cleanCurrent}'. Required official network: '${cleanExpected}'.`,
-      };
-    }
-
-    // 2. Strict Subnet validation: Student and Proctor host must share local LAN prefix
-    const deviceIp = await Network.getIpAddressAsync().catch(() => null);
-    if (
-      deviceIp &&
-      peerTarget.host &&
-      !peerTarget.host.startsWith('127.') &&
-      !peerTarget.host.startsWith('localhost')
-    ) {
-      const devParts = deviceIp.split('.');
-      const hostParts = peerTarget.host.split('.');
-      if (devParts.length === 4 && hostParts.length === 4) {
-        // Standard private IP check: /24 for 192.168.x.x, /16 for others
-        const isClassC = devParts[0] === '192' && devParts[1] === '168';
-        const subnetMatch = isClassC
-          ? devParts[0] === hostParts[0] && devParts[1] === hostParts[1] && devParts[2] === hostParts[2]
-          : devParts[0] === hostParts[0] && devParts[1] === hostParts[1];
-
-        if (!subnetMatch) {
-          return {
-            ok: false,
-            wifiConnected: true,
-            serverReachable: false,
-            message: `${officialWifiMessage}\n\nCross-network connection detected (Your IP: ${deviceIp}, Proctor: ${peerTarget.host}).`,
-          };
-        }
-      }
-    }
-
-    // 3. Direct LAN Reachability Probe (ping proctor phone)
+    // SSIDs are advisory only: Android frequently hides them, and a phone-hosted
+    // hotspot can report a different/unknown SSID to the host and client. Subnet
+    // prefixes are also not reliable on hotspot and enterprise LAN topologies.
+    // The authenticated peer health probe is the source of truth for same-LAN
+    // connectivity.
     const reachable = await PeerExamClient.ping(peerTarget);
     if (!reachable) {
       return {
         ok: false,
         wifiConnected: true,
         serverReachable: false,
-        message: `${officialWifiMessage}\n\nCannot reach the proctor examination session at ${peerTarget.host}.`,
+        message:
+          `The proctor examination host at ${peerTarget.host} is not reachable on this local network. ` +
+          'Check that the room is still open and that device-to-device connections are allowed, then scan the current QR code again.',
       };
     }
 

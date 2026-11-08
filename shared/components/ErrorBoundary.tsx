@@ -4,8 +4,8 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
 } from 'react-native';
+import { colors } from '@/shared/theme';
 
 interface Props {
   children: ReactNode;
@@ -16,34 +16,30 @@ interface Props {
 
 interface State {
   hasError: boolean;
-  error: Error | null;
-  errorInfo: ErrorInfo | null;
 }
 
 /**
- * React Error Boundary ΓÇö wraps any subtree and catches JS errors during render.
- * In DEV builds the full stack trace is printed on-screen so you can see the
- * exact cause without needing a connected debugger.
+ * Catches render-time failures and offers a safe retry without exposing raw
+ * exception text, which can contain request or user data.
  */
 export class ErrorBoundary extends Component<Props, State> {
   public state: State = {
     hasError: false,
-    error: null,
-    errorInfo: null,
   };
 
-  public static getDerivedStateFromError(error: Error): Partial<State> {
-    return { hasError: true, error };
+  public static getDerivedStateFromError(_error: Error): Partial<State> {
+    return { hasError: true };
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('[ErrorBoundary] Caught render error:', error.message);
-    console.error('[ErrorBoundary] Component stack:', errorInfo.componentStack);
-    this.setState({ errorInfo });
+    console.error('[ErrorBoundary] Caught render error:', {
+      errorName: error.name || 'Error',
+      componentStack: errorInfo.componentStack,
+    });
   }
 
   private handleReset = () => {
-    this.setState({ hasError: false, error: null, errorInfo: null });
+    this.setState({ hasError: false });
     this.props.onReset?.();
   };
 
@@ -52,27 +48,15 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <View style={styles.container}>
           <Text style={styles.title}>
-            {this.props.fallbackTitle ?? 'Something went wrong'}
+            {this.props.fallbackTitle ?? 'Unable to display this screen'}
           </Text>
           <Text style={styles.message}>
             {this.props.fallbackMessage ??
-              this.state.error?.message ??
-              'An unexpected error occurred while displaying this screen.'}
+              'The app encountered an unexpected error. Try again or return to the previous screen.'}
           </Text>
 
-          {__DEV__ && this.state.error?.stack ? (
-            <ScrollView style={styles.stackContainer}>
-              <Text style={styles.stackText}>{this.state.error.stack}</Text>
-              {this.state.errorInfo?.componentStack ? (
-                <Text style={[styles.stackText, { color: '#FBBF24', marginTop: 12 }]}>
-                  {this.state.errorInfo.componentStack}
-                </Text>
-              ) : null}
-            </ScrollView>
-          ) : null}
-
           <TouchableOpacity style={styles.button} onPress={this.handleReset}>
-            <Text style={styles.buttonText}>Try Again</Text>
+            <Text style={styles.buttonText}>Try again</Text>
           </TouchableOpacity>
         </View>
       );
@@ -85,7 +69,7 @@ export class ErrorBoundary extends Component<Props, State> {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F172A',
+    backgroundColor: colors.background,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
@@ -93,33 +77,19 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#F8FAFC',
+    color: colors.ink,
     marginBottom: 8,
     textAlign: 'center',
   },
   message: {
     fontSize: 14,
-    color: '#94A3B8',
+    color: colors.inkSecondary,
     marginBottom: 20,
     textAlign: 'center',
     lineHeight: 20,
   },
-  stackContainer: {
-    maxHeight: 220,
-    width: '100%',
-    backgroundColor: '#1E293B',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 20,
-  },
-  stackText: {
-    fontSize: 11,
-    color: '#F87171',
-    fontFamily: 'monospace',
-    lineHeight: 16,
-  },
   button: {
-    backgroundColor: '#7A1F2B',
+    backgroundColor: colors.primary,
     paddingVertical: 12,
     paddingHorizontal: 32,
     borderRadius: 8,

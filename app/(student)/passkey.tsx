@@ -22,13 +22,13 @@ import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { appStorage } from '@/shared/services/storage';
 import { examProcess } from '@/shared/theme/examProcess';
 import { userFacingError } from '@/shared/utils/userFacingError';
+import { formatPasskey, isValidPasskey, normalizePasskey } from '@/features/examinations/services/passkeyFormat';
 
 const schema = z.object({
   passkey: z
     .string()
     .trim()
-    .length(8, 'Examination key must be exactly 8 characters')
-    .regex(/^[A-Za-z0-9]{8}$/, 'Use the 8-letter or number examination key'),
+    .refine(isValidPasskey, 'Use the 8-letter or number examination key'),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -84,7 +84,7 @@ export default function StudentPasskeyScreen() {
   const onContinue = handleSubmit(async (values) => {
     setError(null);
     try {
-      const result = await LobbyRepository.validatePasskey(values.passkey.trim());
+      const result = await LobbyRepository.validatePasskey(normalizePasskey(values.passkey));
       if (result.classification === 'already_completed') {
         setError(
           result.message ||
@@ -114,48 +114,46 @@ export default function StudentPasskeyScreen() {
         }
         return;
       }
-      const upperKey = values.passkey.trim().toUpperCase();
-      setExamPasskey(upperKey);
-      await appStorage.setItem('tcc.student.exam.passkey', upperKey);
+      const upperKey = formatPasskey(values.passkey);
       if (!result.student) {
         throw new Error(result.message || 'Unable to continue with this examination key.');
       }
-      try {
-        const applicantCode = String(result.student?.studentId || result.student?.id || '')
-          .trim()
-          .toUpperCase();
-        const scheduleId = result.schedule?.id ? Number(result.schedule.id) : null;
 
-        if (applicantCode && scheduleId) {
-          const localMarker = await appStorage.getItem(
-            `tcc.student.completed.${scheduleId}.${applicantCode}`,
-          );
-          if (localMarker === '1') {
-            setError(
-              'Examination Already Completed\nYou have already taken this examination on this device. Multiple attempts are not permitted.',
-            );
-            return;
-          }
-        }
+      const applicantCode = String(result.student.studentId || result.student.id || '')
+        .trim()
+        .toUpperCase();
+      const scheduleId = result.schedule?.id ? Number(result.schedule.id) : null;
 
-        const results = await OfflineStore.getResults();
-        const already = results.find((r) => {
-          const matchApplicant =
-            (r.applicant_code || '').trim().toUpperCase() === applicantCode;
-          const matchSchedule = scheduleId
-            ? Number(r.examination_schedule_id) === scheduleId
-            : false;
-          return matchApplicant && matchSchedule;
-        });
-        if (already) {
+      if (applicantCode && scheduleId) {
+        const localMarker = await appStorage.getItem(
+          `tcc.student.completed.${scheduleId}.${applicantCode}`,
+        );
+        if (localMarker === '1') {
           setError(
-            'Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.',
+            'Examination Already Completed\nYou have already taken this examination on this device. Multiple attempts are not permitted.',
           );
           return;
         }
-      } catch {
-        // ignore store errors — allow join and rely on server-side checks if uncertain
       }
+
+      const results = await OfflineStore.getResults();
+      const already = results.find((r) => {
+        const matchApplicant =
+          (r.applicant_code || '').trim().toUpperCase() === applicantCode;
+        const matchSchedule = scheduleId
+          ? Number(r.examination_schedule_id) === scheduleId
+          : false;
+        return matchApplicant && matchSchedule;
+      });
+      if (already) {
+        setError(
+          'Examination Already Completed\nYou have already taken this examination. Multiple attempts are not permitted.',
+        );
+        return;
+      }
+
+      await appStorage.setItem('tcc.student.exam.passkey', upperKey);
+      setExamPasskey(upperKey);
       setSelectedStudent(result.student);
       router.push({
         pathname: '/(student)/confirmation',
@@ -193,17 +191,15 @@ export default function StudentPasskeyScreen() {
           render={({ field: { onChange, onBlur, value } }) => (
             <TextInput
               style={[styles.input, Boolean(errors.passkey || error) && styles.inputInvalid]}
-              placeholder="e.g. K7M2P9QX"
+              placeholder="e.g. K7M2-P9QX"
               placeholderTextColor={examProcess.muted}
               autoCapitalize="characters"
               autoCorrect={false}
               autoComplete="off"
               value={value}
-              onChangeText={(text) =>
-                onChange(text.replace(/[^A-Za-z0-9]/g, '').toUpperCase())
-              }
+              onChangeText={(text) => onChange(formatPasskey(text))}
               onBlur={onBlur}
-              maxLength={8}
+              maxLength={9}
               onSubmitEditing={onContinue}
             />
           )}

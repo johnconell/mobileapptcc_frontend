@@ -38,6 +38,9 @@ export type ExamTerminationReason =
   | 'policy_violation'
   | 'proctor_terminated';
 
+export type ExaminationSessionType = 'regular' | 'rescheduled';
+export type RescheduleState = 'proposed' | 'confirmed' | 'review_required' | null;
+
 export interface Program {
   id: string;
   code: string;
@@ -74,6 +77,9 @@ export interface ExamSchedule {
   downloadedAt?: string;
   status?: string;
   serverNow?: string;
+  sessionType?: ExaminationSessionType;
+  rescheduleState?: RescheduleState;
+  scheduleRevision?: number;
 }
 
 export interface ExamSession {
@@ -100,6 +106,9 @@ export interface ExamSession {
   localServerIp?: string | null;
   wifiSsid?: string | null;
   peerPort?: number | null;
+  sessionType?: ExaminationSessionType;
+  rescheduleState?: RescheduleState;
+  scheduleRevision?: number;
 }
 
 export interface ExamRoom {
@@ -146,6 +155,7 @@ export interface StudentRecord {
   selectable?: boolean;
   lobby_status?: string | null;
   exam_session_id?: number | null;
+  examSet?: string;
 }
 
 export interface LobbyStudent {
@@ -174,6 +184,7 @@ export interface LobbyStudent {
   applicantCode?: string | null;
   submittedAt?: string | null;
   score?: number | null;
+  examSet?: string;
 }
 
 export interface LobbySnapshot {
@@ -215,6 +226,9 @@ export interface LobbySnapshot {
   can_control?: boolean;
   is_owner?: boolean;
   remainingSeconds?: number | null;
+  emergencySuspended?: boolean;
+  emergencySuspendedAt?: string | null;
+  emergencyReason?: string | null;
   endedAt?: string | null;
   allow_late_entry?: boolean;
   my_status?: LobbyStudentStatus;

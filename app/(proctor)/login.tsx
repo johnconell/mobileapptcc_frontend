@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Text,
   View,
@@ -6,13 +6,16 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  TextInput,
   Image,
   Pressable,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
+import * as Google from 'expo-auth-session/providers/google';
 import { ArrowLeft } from 'lucide-react-native';
 import { Button } from '@/shared/components/ui/Button';
 import { Input } from '@/shared/components/ui/Input';
@@ -22,17 +25,13 @@ import {
 } from '@/features/authentication/validation/proctorLoginSchema';
 import { useHardwareBack } from '@/shared/hooks/useHardwareBack';
 import { AuthRepository } from '@/features/authentication/repositories/AuthRepository';
-import {
-  getProctorGoogleRedirectUrl,
-  isProctorGoogleCallback,
-  parseProctorGoogleCallback,
-} from '@/features/authentication/services/proctorGoogleAuth';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { colors } from '@/shared/theme';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { userFacingError } from '@/shared/utils/userFacingError';
 
-let lastConsumedGoogleUrl: string | null = null;
+WebBrowser.maybeCompleteAuthSession();
 
 export default function ProctorLoginScreen() {
   const { colors: themeColors } = useAppTheme();
@@ -40,10 +39,38 @@ export default function ProctorLoginScreen() {
   const router = useRouter();
   const profile = useProctorStore((s) => s.profile);
   const setProfile = useProctorStore((s) => s.setProfile);
+  const emailInput = useRef<TextInput>(null);
+  const passwordInput = useRef<TextInput>(null);
+  const [googleRequest, , promptGoogleSignIn] = Google.useIdTokenAuthRequest({
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+    androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
+    scopes: ['openid', 'profile', 'email'],
+  });
 
   useEffect(() => {
     if (profile) {
-      router.replace('/(proctor)/(tabs)/dashboard');
+      void (async () => {
+        try {
+          const { restoreProctorDestination } = await import(
+            '@/features/examinations/services/restoreProctorDestination'
+          );
+          const destination = await restoreProctorDestination();
+          if (destination.recoveryMessage) {
+            Alert.alert('Room recovery', destination.recoveryMessage);
+          }
+          router.replace(destination.route as any);
+        } catch (error) {
+          console.warn('[PROCTOR LOGIN] Room restoration failed:', {
+            errorName: error instanceof Error ? error.name : 'UnknownError',
+          });
+          Alert.alert(
+            'Room recovery',
+            userFacingError(error, 'Unable to restore the previous room. Your saved room data was not cleared. Open the dashboard and retry.'),
+          );
+          router.replace('/(proctor)/(tabs)/dashboard');
+        }
+      })();
     }
   }, [profile, router]);
   const [formError, setFormError] = useState<string | null>(null);
@@ -74,49 +101,9 @@ export default function ProctorLoginScreen() {
   const completeLogin = useCallback(
     (profile: NonNullable<Awaited<ReturnType<typeof AuthRepository.login>>['profile']>) => {
       setProfile(profile);
-      router.replace('/(proctor)/(tabs)/dashboard');
     },
-    [router, setProfile],
+    [setProfile],
   );
-
-  const consumeGoogleUrl = useCallback(
-    async (url: string | null) => {
-      if (!url || !isProctorGoogleCallback(url) || url === lastConsumedGoogleUrl) return;
-      lastConsumedGoogleUrl = url;
-      const { token, error } = parseProctorGoogleCallback(url);
-      setGoogleLoading(true);
-      setFormError(null);
-      try {
-        if (error) {
-          setFormError(error);
-          return;
-        }
-        if (!token) {
-          setFormError('Google sign-in did not return a session.');
-          return;
-        }
-        const result = await AuthRepository.loginWithToken(token);
-        if (!result.success || !result.profile) {
-          setFormError(result.message ?? 'Google sign-in failed.');
-          return;
-        }
-        completeLogin(result.profile);
-      } finally {
-        setGoogleLoading(false);
-      }
-    },
-    [completeLogin],
-  );
-
-  useEffect(() => {
-    const sub = Linking.addEventListener('url', ({ url }) => {
-      void consumeGoogleUrl(url);
-    });
-    void Linking.getInitialURL().then((url) => {
-      void consumeGoogleUrl(url);
-    });
-    return () => sub.remove();
-  }, [consumeGoogleUrl]);
 
   const onSubmit = handleSubmit(async (values) => {
     setFormError(null);
@@ -128,30 +115,64 @@ export default function ProctorLoginScreen() {
     completeLogin(result.profile);
   });
 
-  const onGoogle = async () => {
+  const onGoogle = useCallback(async () => {
     setFormError(null);
+    if (
+      !process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID &&
+      !process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID &&
+      !process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID
+    ) {
+      setFormError('Google sign-in is not configured for this app. Please contact the administrator.');
+      return;
+    }
+    if (!googleRequest) {
+      setFormError('Google sign-in is not ready. Check your connection and try again.');
+      return;
+    }
+
     setGoogleLoading(true);
     try {
-      const url = await getProctorGoogleRedirectUrl();
-      const opened = await Linking.openURL(url);
-      if (!opened) {
-        setFormError('Could not open Google sign-in. Check your internet connection.');
+      const response = await promptGoogleSignIn();
+      if (response.type === 'cancel' || response.type === 'dismiss') {
+        setFormError('Google sign-in was cancelled.');
+        return;
       }
+      if (response.type === 'error') {
+        setFormError('Google sign-in could not be completed. Please try again.');
+        return;
+      }
+      if (response.type !== 'success') {
+        setFormError('Google sign-in did not complete. Please try again.');
+        return;
+      }
+
+      const idToken = response.params.id_token;
+      if (!idToken) {
+        setFormError('Google did not return a verified sign-in token. Please try again.');
+        return;
+      }
+
+      const result = await AuthRepository.loginWithGoogleIdToken(idToken);
+      if (!result.success || !result.profile) {
+        setFormError(result.message ?? 'Google sign-in failed.');
+        return;
+      }
+      completeLogin(result.profile);
     } catch (error) {
-      setFormError(
-        error instanceof Error
-          ? error.message
-          : 'Google sign-in is unavailable. Connect to the internet and try again.',
-      );
+      console.warn('[PROCTOR LOGIN] Google sign-in failed:', {
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
+      setFormError(userFacingError(error, 'Google sign-in is unavailable. Connect to the internet and try again.'));
     } finally {
       setGoogleLoading(false);
     }
-  };
+  }, [completeLogin, googleRequest, promptGoogleSignIn]);
 
   return (
     <KeyboardAvoidingView
       style={[styles.screen, { backgroundColor: themeColors.card }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
     >
       <ScrollView
         contentContainerStyle={[
@@ -159,6 +180,7 @@ export default function ProctorLoginScreen() {
           { paddingTop: insets.top + 10, paddingBottom: Math.max(insets.bottom, 20) },
         ]}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         showsVerticalScrollIndicator={false}
       >
         <Pressable
@@ -192,8 +214,13 @@ export default function ProctorLoginScreen() {
               <Input
                 label="Email"
                 placeholder="proctor@example.com"
+                ref={emailInput}
                 autoCapitalize="none"
+                autoComplete="email"
                 keyboardType="email-address"
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => passwordInput.current?.focus()}
                 value={value}
                 onChangeText={onChange}
                 onBlur={onBlur}
@@ -210,7 +237,10 @@ export default function ProctorLoginScreen() {
               <Input
                 label="Password"
                 placeholder="••••••••"
+                ref={passwordInput}
                 secureTextEntry
+                autoComplete="current-password"
+                returnKeyType="done"
                 value={value}
                 onChangeText={onChange}
                 onBlur={onBlur}
@@ -229,6 +259,7 @@ export default function ProctorLoginScreen() {
             title="Sign In"
             size="lg"
             fullWidth
+            disabled={googleLoading}
             loading={isSubmitting}
             onPress={onSubmit}
             style={{ marginTop: 18 }}
@@ -245,6 +276,7 @@ export default function ProctorLoginScreen() {
             variant="outline"
             size="lg"
             fullWidth
+            disabled={isSubmitting}
             loading={googleLoading}
             onPress={() => void onGoogle()}
             style={{ marginTop: 14 }}

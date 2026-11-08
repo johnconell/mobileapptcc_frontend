@@ -62,6 +62,54 @@ test('offline room contract rejects a registration from another schedule', () =>
   if (!result.ok) assert.equal(result.code, 'wrong_schedule');
 });
 
+test('emergency-suspended schedules block offline student admission and proctor room opening', () => {
+  const suspendedSchedule = { ...managedSchedule, status: 'suspended' };
+  const studentDecision = decide(101, 101, suspendedSchedule);
+  const proctorDecision = validateOfflineHostRoom({
+    schedule: suspendedSchedule,
+    authority: { scheduleId: 10, roomId: 101 },
+  });
+
+  for (const result of [studentDecision, proctorDecision]) {
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.code, 'schedule_suspended');
+      assert.equal(result.recoveryRequired, false);
+    }
+  }
+});
+
+test('emergency-suspended rooms block offline student admission and proctor room opening', () => {
+  const suspendedRoomSchedule: OfflineRoomSchedule = {
+    ...managedSchedule,
+    rooms: managedSchedule.rooms?.map((room) =>
+      room.id === 101 ? { ...room, emergency_suspended: true } : room,
+    ),
+  };
+  const studentDecision = decide(101, 101, suspendedRoomSchedule);
+  const proctorDecision = validateOfflineHostRoom({
+    schedule: suspendedRoomSchedule,
+    authority: { scheduleId: 10, roomId: 101 },
+  });
+
+  for (const result of [studentDecision, proctorDecision]) {
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.code, 'room_suspended');
+      assert.equal(result.recoveryRequired, false);
+    }
+  }
+});
+
+test('cancelled schedules cannot be opened from an offline pack', () => {
+  const result = validateOfflineHostRoom({
+    schedule: { ...managedSchedule, status: 'cancelled' },
+    authority: { scheduleId: 10, roomId: 101 },
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.code, 'schedule_cancelled');
+});
+
 test('student supplied room IDs cannot override the active peer host room', () => {
   const studentSuppliedRoomId = 102;
   assert.equal(studentSuppliedRoomId, 102); // deliberately not passed to the policy
@@ -254,4 +302,3 @@ test('REGRESSION-ROOM-001: Single schedule with two rooms (Room 201 and Room 202
     assert.equal(reconnectWrongRoom.code, 'wrong_room');
   }
 });
-

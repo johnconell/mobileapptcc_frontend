@@ -1,8 +1,8 @@
-import React, { useMemo, useState } from 'react';
-import { Text, View, StyleSheet, Alert } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Text, View, StyleSheet, Alert, ScrollView } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { DoorOpen, Users, UserRound } from 'lucide-react-native';
+import { DoorOpen, Users, UserRound, BookCheck } from 'lucide-react-native';
 import { Button } from '@/shared/components/ui/Button';
 import { Card } from '@/shared/components/ui/Card';
 import { Header } from '@/shared/components/ui/Header';
@@ -17,7 +17,10 @@ import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { Breadcrumbs } from '@/shared/components/ui/Breadcrumbs';
 import { colors } from '@/shared/theme';
 import { safeBack } from '@/shared/utils';
+import { userFacingError } from '@/shared/utils/userFacingError';
 import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
+import { OfflineStore } from '@/features/synchronization/services/offlineStore';
+import { sortStudentsAlphabetical } from '@/features/synchronization/utils/studentNameOrder';
 
 function statusLabel(status: string) {
   if (status === 'idle') return 'Closed';
@@ -63,6 +66,65 @@ export default function RoomDetailScreen() {
     () => roomsQuery.data?.find((item) => item.id === roomId) ?? null,
     [roomsQuery.data, roomId],
   );
+
+  const [examinees, setExaminees] = useState<
+    Array<{
+      id: number;
+      applicantId: string;
+      name: string;
+      lastName?: string | null;
+      firstName?: string | null;
+      roomName: string;
+      examSet: string;
+      status: string;
+    }>
+  >([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    async function loadExaminees() {
+      try {
+        const pack = await OfflineStore.getPack();
+        if (!pack) return;
+
+        const targetRoomId = Number(room?.id ?? roomId);
+        const targetSchedId = Number(session?.scheduleId ?? scheduleId);
+
+        const roomRegs = (pack.registrations ?? []).filter((r) => {
+          const matchRoom = Number(r.assigned_room_id) === targetRoomId;
+          const matchSched =
+            !targetSchedId || Number(r.examination_schedule_id) === targetSchedId;
+          return matchRoom && matchSched;
+        });
+
+        const applicantMap = new Map((pack.applicants ?? []).map((a) => [Number(a.id), a]));
+        const list = roomRegs.map((reg) => {
+          const app = applicantMap.get(Number(reg.applicant_id));
+          return {
+            id: reg.id,
+            applicantId: app?.applicant_code || String(reg.applicant_id),
+            name: app?.name || 'Applicant',
+            lastName: app?.last_name,
+            firstName: app?.first_name,
+            roomName: room?.roomName || 'Room',
+            examSet: reg.exam_set || 'Set 1',
+            status: reg.attendance_status
+              ? reg.attendance_status.charAt(0).toUpperCase() + reg.attendance_status.slice(1)
+              : 'Assigned',
+          };
+        });
+
+        const sorted = sortStudentsAlphabetical(list);
+        if (isMounted) setExaminees(sorted);
+      } catch (e) {
+        console.warn('Failed to load room examinees', e);
+      }
+    }
+    loadExaminees();
+    return () => {
+      isMounted = false;
+    };
+  }, [room?.id, room?.roomName, roomId, session?.scheduleId, scheduleId]);
   const roomLoadingTimedOut = useSkeletonLoadingTimeout(
     roomsQuery.isLoading && !room,
     10_000,
@@ -259,10 +321,12 @@ export default function RoomDetailScreen() {
       console.log('RoomDetailScreen: navigating to lobby', targetRoute);
       router.push(targetRoute as any);
     } catch (error) {
-      console.log('RoomDetailScreen: ensureLobby failed', error);
+      console.warn('RoomDetailScreen: ensureLobby failed:', {
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
       Alert.alert(
         'Unable to open lobby',
-        error instanceof Error ? error.message : 'Please try again.',
+        userFacingError(error, 'Unable to open this examination room. Check the room data and local Wi-Fi, then try again.'),
       );
     } finally {
       setBusy(false);
@@ -305,7 +369,7 @@ export default function RoomDetailScreen() {
         ]}
       />
 
-      <View style={styles.content}>
+      <ScrollView contentContainerStyle={styles.content}>
         <Card style={{ ...styles.hero, borderColor: accent }}>
           <View style={[styles.accentBar, { backgroundColor: accent }]} />
           <View style={styles.heroBody}>
@@ -378,7 +442,55 @@ export default function RoomDetailScreen() {
             Session closed — view students anytime and sync when you have internet.
           </Text>
         ) : null}
-      </View>
+
+        {/* Assigned Examinees Roster Card */}
+        <Card style={styles.rosterCard}>
+          <View style={styles.rosterHeader}>
+            <View style={styles.rosterTitleRow}>
+              <Users size={18} color={colors.primary} />
+              <Text style={styles.rosterTitle}>Assigned Examinees</Text>
+            </View>
+            <View style={styles.rosterCountBadge}>
+              <Text style={styles.rosterCountText}>
+                {examinees.length} Examinee{examinees.length === 1 ? '' : 's'}
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.rosterSubtitle}>
+            Alphabetical roster (surname-first). Examination sets are pre-assigned and locked.
+          </Text>
+
+          {examinees.length === 0 ? (
+            <Text style={styles.rosterEmptyText}>
+              No examinees currently cached in offline examination pack for this room.
+            </Text>
+          ) : (
+            <View style={styles.rosterList}>
+              {examinees.map((st, index) => (
+                <View key={st.id} style={styles.rosterRow}>
+                  <View style={styles.rosterIndexBox}>
+                    <Text style={styles.rosterIndexText}>{index + 1}</Text>
+                  </View>
+                  <View style={styles.rosterInfo}>
+                    <Text style={styles.rosterName} numberOfLines={1}>
+                      {st.name}
+                    </Text>
+                    <Text style={styles.rosterMeta}>
+                      ID: {st.applicantId} · Room: {st.roomName}
+                    </Text>
+                  </View>
+                  <View style={styles.rosterRight}>
+                    <View style={styles.examSetBadge}>
+                      <Text style={styles.examSetBadgeText}>{st.examSet || 'Set 1'}</Text>
+                    </View>
+                    <Text style={styles.rosterStatus}>{st.status}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+        </Card>
+      </ScrollView>
     </View>
   );
 }
@@ -414,5 +526,111 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  rosterCard: {
+    padding: 16,
+    gap: 12,
+    marginTop: 8,
+    borderRadius: 16,
+  },
+  rosterHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  rosterTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  rosterTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: colors.ink,
+  },
+  rosterCountBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceMuted,
+  },
+  rosterCountText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.inkSecondary,
+  },
+  rosterSubtitle: {
+    fontSize: 12,
+    color: colors.inkMuted,
+    lineHeight: 17,
+  },
+  rosterEmptyText: {
+    fontSize: 13,
+    color: colors.inkMuted,
+    textAlign: 'center',
+    paddingVertical: 16,
+  },
+  rosterList: {
+    gap: 8,
+    marginTop: 4,
+  },
+  rosterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  rosterIndexBox: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceMuted,
+  },
+  rosterIndexText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.inkSecondary,
+  },
+  rosterInfo: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  rosterName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.ink,
+  },
+  rosterMeta: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: colors.inkMuted,
+  },
+  rosterRight: {
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  examSetBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: '#8B0000',
+  },
+  examSetBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.4,
+  },
+  rosterStatus: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: colors.inkSecondary,
   },
 });

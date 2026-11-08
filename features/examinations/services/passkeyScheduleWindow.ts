@@ -16,13 +16,20 @@ type ScheduleBounds = { date: string; startTime: string; endTime: string; start:
 function normalizeTime(value: string | null | undefined, fallback: string): string | null {
   const time = String(value || '').trim();
   if (!time) return fallback;
-  const match = time.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+
+  const match = time.match(/^(\d{1,2})(?::(\d{2}))(?::(\d{2}))?\s*(AM|PM)?$/i);
   if (!match) return null;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  const seconds = Number(match[3] || 0);
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2] ?? 0);
+  const seconds = Number(match[3] ?? 0);
+  const period = match[4]?.toUpperCase();
+
+  if (period === 'PM' && hours < 12) hours += 12;
+  if (period === 'AM' && hours === 12) hours = 0;
   if (hours > 23 || minutes > 59 || seconds > 59) return null;
-  return `${String(hours).padStart(2, '0')}:${match[2]}:${String(seconds).padStart(2, '0')}`;
+
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
 function resolveBounds(schedule: PasskeyScheduleWindow): ScheduleBounds | null {

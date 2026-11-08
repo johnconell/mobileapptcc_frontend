@@ -125,7 +125,7 @@ test('MOB-FLOW-003: Student Admission → Question Delivery Guards & Session Act
   assert.equal(resolveRes.body.valid, true);
 
   // 3. Student list returns 15 assigned examinees for Room 201
-  const studentsRes = await localApiRequest({ path: '/exam/students?code=TCC10126', method: 'GET' });
+  const studentsRes = await localApiRequest({ path: '/exam/students?code=TCC10126', method: 'GET', token });
   assert.equal(studentsRes.status, 200);
   assert.equal(studentsRes.body.data.length, 15);
   assert.equal(studentsRes.body.data[0].studentId, 'APP-2026-0001');
@@ -461,7 +461,7 @@ test('MOB-CONTRACT-001: API Contract Conformance → Rejects Unsupported Endpoin
   assert.equal(wrongMethod.status, 404);
 
   // 3. Rejects invalid answers format in save
-  await localApiRequest({ path: '/exam/join', method: 'POST', body: { code: 'TCC10126', applicant_id: 1 } });
+  await localApiRequest({ path: '/exam/join-passkey', method: 'POST', body: { code: 'TCC10126', passkey: 'P0000001' } });
   const badAnswer = await localApiRequest({
     path: '/exam/save',
     method: 'POST',

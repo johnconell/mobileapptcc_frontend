@@ -131,6 +131,20 @@ test('sensitive local storage: queued offline results are encrypted and hide ans
   assert.equal(results[0].applicant_code, 'APP-2026-WINNER');
   assert.equal(results[0].score, 85);
   assert.equal(results[0].synced, false);
+  assert.equal(results[0].sync_status, 'pending');
+
+  await OfflineStore.updateResultSyncStatus([mockResult.local_id], 'syncing');
+  const syncing = await OfflineStore.getResults();
+  assert.equal(syncing[0].sync_status, 'syncing');
+
+  await OfflineStore.updateResultSyncStatus(
+    [mockResult.local_id],
+    'failed',
+    'Server unavailable; queued for retry.',
+  );
+  const failed = await OfflineStore.getResults();
+  assert.equal(failed[0].sync_status, 'failed');
+  assert.equal((await OfflineStore.pendingResults()).length, 1);
 
   // Mark synced
   await OfflineStore.markSynced(['local-res-1']);
@@ -138,6 +152,8 @@ test('sensitive local storage: queued offline results are encrypted and hide ans
   assert.equal(pending.length, 0);
   const all = await OfflineStore.getResults();
   assert.equal(all[0].synced, true);
+  assert.equal(all[0].sync_status, 'synced');
+  assert.ok(all[0].synced_at);
 });
 
 test('sensitive local storage: tampering detection refuses silent fallback and throws StorageDecryptionError', async () => {

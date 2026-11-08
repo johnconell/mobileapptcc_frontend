@@ -5,8 +5,18 @@ import {
   selectOfflinePasskeyRegistration,
   validateOfflinePasskeyEligibility,
 } from './offlinePasskeyEligibility';
+import { formatPasskey, isValidPasskey, normalizePasskey } from './passkeyFormat';
 
 const NOW = Date.parse('2026-11-03T09:00:00+08:00');
+
+test('passkey entry accepts pasted old/new forms and displays XXXX-XXXX', () => {
+  assert.equal(normalizePasskey('bzlj-fb9b'), 'BZLJFB9B');
+  assert.equal(normalizePasskey(' BZLJ FB9B '), 'BZLJFB9B');
+  assert.equal(formatPasskey('BZLJFB9B'), 'BZLJ-FB9B');
+  assert.equal(isValidPasskey('BZLJ-FB9B'), true);
+  assert.equal(isValidPasskey('BZLJFB9B'), true);
+  assert.equal(isValidPasskey('BZLJ-FB9'), false);
+});
 
 test('offline passkey eligibility accepts an active downloaded passkey', () => {
   assert.deepEqual(

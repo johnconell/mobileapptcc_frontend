@@ -9,7 +9,9 @@ import { appStorage } from '@/shared/services/storage';
  * Removes examination questions/modules from an applicant phone after submit.
  * Does not delete a proctor's own exam pack (proctor token present).
  */
-export async function clearApplicantExamMaterial(): Promise<void> {
+export async function clearApplicantExamMaterial(options?: {
+  preserveOfflinePack?: boolean;
+}): Promise<void> {
   await ExamPreloader.clear();
   await ExamProgressStore.clear();
   await PeerExamClient.clear().catch(() => undefined);
@@ -26,7 +28,7 @@ export async function clearApplicantExamMaterial(): Promise<void> {
   await OfflineStore.setOfflineMode(false);
 
   const proctorToken = await appStorage.getItem(STORAGE_KEYS.proctorToken);
-  if (!proctorToken) {
+  if (!options?.preserveOfflinePack && !proctorToken) {
     await OfflineStore.clearPackFiles();
   }
 }

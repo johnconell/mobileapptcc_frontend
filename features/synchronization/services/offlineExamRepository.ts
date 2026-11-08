@@ -1,4 +1,4 @@
-import { apiRequest, getCloudApiBaseUrl, getApiBaseUrl } from '@/shared/services/api';
+import { ApiError, apiRequest, getCloudApiBaseUrl, getApiBaseUrl } from '@/shared/services/api';
 import {
   assertSecureApiBase,
   describeApiReachabilityProblem,
@@ -31,6 +31,26 @@ import {
   validateOfflinePasskeyEligibility,
 } from '@/features/examinations/services/offlinePasskeyEligibility';
 import { compareStudentNames } from '@/features/synchronization/utils/studentNameOrder';
+import { normalizePasskey } from '@/features/examinations/services/passkeyFormat';
+
+let queuedResultsSyncInProgress = false;
+
+type OfflineResultSyncResponse = {
+  success: boolean;
+  message?: string;
+  data?: {
+    accepted_ids?: number[];
+    accepted_client_ids?: string[];
+    accepted_keys?: string[];
+    created?: number;
+    updated?: number;
+    rejected?: Array<{
+      client_local_id?: string;
+      applicant_code?: string;
+      reason?: string;
+    }>;
+  };
+};
 
 /** Pull typed exam code from plain text or METCC QR JSON. */
 export function extractExaminationCode(raw: string): string {
@@ -50,6 +70,26 @@ export function extractExaminationCode(raw: string): string {
 
 function cloudBase(): string {
   return (getCloudApiBaseUrl() || getApiBaseUrl()).replace(/\/$/, '');
+}
+
+export function resultSyncFailureMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 0) return 'No Internet Connection: Results are saved locally and waiting to synchronize.';
+    if (error.status === 401 || error.status === 403) return 'Authentication Expired: Please sign in again.';
+    if (error.status === 422) return 'Invalid Result Data: The result could not be submitted. Please contact the administrator.';
+    if (error.status === 429 || error.status >= 500) return 'Server Unavailable: Synchronization will automatically retry.';
+  }
+  if (error instanceof Error && /internet|network|connection|timed out|reach server/i.test(error.message)) {
+    return 'No Internet Connection: Results are saved locally and waiting to synchronize.';
+  }
+  return 'The administrator server did not confirm this result. It remains saved locally for retry.';
+}
+
+export function isRetryableResultSyncError(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    return error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500;
+  }
+  return error instanceof Error && /internet|network|connection|timed out|reach server/i.test(error.message);
 }
 
 async function cloudFetch<T>(
@@ -243,24 +283,38 @@ export function selectedQuestions(pack: OfflinePack): Array<{
   return rows;
 }
 
-function shuffled<T>(items: T[]): T[] {
+function seededRandom(seed: number) {
+  let s = seed >>> 0;
+  return function () {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function seededShuffle<T>(items: T[], rng: () => number): T[] {
   const copy = [...items];
   for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(rng() * (i + 1));
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
 }
 
+function hashStringToInt(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  }
+  return hash >>> 0;
+}
+
 /**
  * Mirror the server ordering (ExamSessionService::questionsForSession): questions
- * stay grouped by category, shuffled only within their own category. Category
- * order follows the pack unless shuffle_categories is on.
+ * stay grouped by category.
  */
-function orderQuestionsByCategory<T extends { category?: string }>(
-  rows: T[],
-  options: { shuffleQuestions: boolean; shuffleCategories: boolean },
-): T[] {
+function orderQuestionsByCategory<T extends { category?: string }>(rows: T[]): T[] {
   const groups = new Map<string, T[]>();
   for (const row of rows) {
     const key = row.category || 'general';
@@ -272,29 +326,19 @@ function orderQuestionsByCategory<T extends { category?: string }>(
     }
   }
 
-  const categoryOrder = options.shuffleCategories
-    ? shuffled([...groups.keys()])
-    : [...groups.keys()];
-
   const ordered: T[] = [];
-  for (const category of categoryOrder) {
-    const group = groups.get(category) ?? [];
-    ordered.push(...(options.shuffleQuestions ? shuffled(group) : group));
+  for (const group of groups.values()) {
+    ordered.push(...group);
   }
   return ordered;
 }
 
 /**
- * Build the student-facing question list from a pack. Shared by the offline
- * path and the proctor peer server so both phones see the same shape.
+ * Build canonical question list from a pack. Shared across all nodes as the
+ * single source of truth for the 100 questions.
  */
 export function buildExamQuestions(pack: OfflinePack): Question[] {
-  const settings = pack.examination_settings;
-  const shuffleBoth = settings?.shuffle_both === true;
-  const ordered = orderQuestionsByCategory(selectedQuestions(pack), {
-    shuffleQuestions: shuffleBoth || settings?.shuffle_questions !== false,
-    shuffleCategories: shuffleBoth || settings?.shuffle_categories === true,
-  });
+  const ordered = orderQuestionsByCategory(selectedQuestions(pack));
 
   return ordered.map((q, index) => ({
     id: String(q.id),
@@ -318,7 +362,10 @@ export type StudentExamPaper = {
   choiceMaps: Record<string, ChoiceDisplayMap>;
 };
 
-function shuffleQuestionChoices(question: Question): {
+function shuffleQuestionChoicesDeterministically(
+  question: Question,
+  choiceRng: () => number,
+): {
   question: Question;
   displayToOriginal: ChoiceDisplayMap;
 } {
@@ -330,7 +377,7 @@ function shuffleQuestionChoices(question: Question): {
     original: key,
     text: String(question.choices?.[key] ?? ''),
   }));
-  const mixed = shuffled(originalPairs);
+  const mixed = seededShuffle(originalPairs, choiceRng);
   const choices = { A: '', B: '', C: '', D: '' } as Record<ChoiceKey, string>;
   const displayToOriginal = { A: 'A', B: 'B', C: 'C', D: 'D' } as ChoiceDisplayMap;
   let correctAnswer: ChoiceKey = question.correctAnswer;
@@ -356,18 +403,79 @@ function shuffleQuestionChoices(question: Question): {
 }
 
 /**
- * Per-student exam paper: unique question order (within category rules) and
- * shuffled answer choices. Choice maps convert display letters back to pack letters for grading.
+ * Build the paper for the set assigned by the authorized examination package.
+ * Set labels and their order come from backend examination settings. The
+ * legacy list is only used for packs created before set definitions existed.
  */
-export function buildStudentExamPaper(pack: OfflinePack): StudentExamPaper {
-  const base = buildExamQuestions(pack);
+export function buildStudentExamPaper(
+  pack: OfflinePack,
+  examSet?: string,
+): StudentExamPaper & { examSet: string } {
+  const configuredSets = (pack.examination_settings?.exam_set_definitions ?? [])
+    .map((label) => String(label).trim())
+    .filter(Boolean);
+  const availableSets = configuredSets.length > 0 ? configuredSets : ['Set 1', 'Set 2', 'Set 3', 'Set 4'];
+  const requested = String(examSet ?? availableSets[0]).trim();
+  const requestedIndex = availableSets.findIndex((label) => label.toLowerCase() === requested.toLowerCase());
+  const numericIndex = Number.parseInt(requested.match(/\d+/)?.[0] ?? '', 10) - 1;
+  const setIndex = requestedIndex >= 0
+    ? requestedIndex
+    : Number.isFinite(numericIndex) && numericIndex >= 0 && numericIndex < availableSets.length
+      ? numericIndex
+      : 0;
+  const normalizedSetName = availableSets[setIndex];
+
+  const baseQuestions = buildExamQuestions(pack);
+
+  // Group by category to preserve category ordering
+  const categoryGroups = new Map<string, Question[]>();
+  for (const q of baseQuestions) {
+    const cat = q.category || 'general';
+    const group = categoryGroups.get(cat);
+    if (group) group.push(q);
+    else categoryGroups.set(cat, [q]);
+  }
+
   const choiceMaps: Record<string, ChoiceDisplayMap> = {};
-  const questions = base.map((q, index) => {
-    const { question, displayToOriginal } = shuffleQuestionChoices(q);
-    choiceMaps[question.id] = displayToOriginal;
-    return { ...question, number: index + 1 };
-  });
-  return { questions, choiceMaps };
+  const orderedQuestions: Question[] = [];
+
+  let catIdx = 0;
+  for (const [, catQuestions] of categoryGroups.entries()) {
+    let questionsInCat = [...catQuestions];
+
+    if (setIndex > 0) {
+      const qRng = seededRandom(setIndex * 10007 + catIdx * 37 + 12345);
+      questionsInCat = seededShuffle(questionsInCat, qRng);
+    }
+
+    for (const q of questionsInCat) {
+      if (setIndex === 0) {
+        // Set 1: Canonical choices A, B, C, D
+        const displayToOriginal: ChoiceDisplayMap = { A: 'A', B: 'B', C: 'C', D: 'D' };
+        choiceMaps[q.id] = displayToOriginal;
+        orderedQuestions.push(q);
+      } else {
+        // Set 2, 3, 4: Deterministic choice shuffle
+        const choiceRng = seededRandom(setIndex * 100003 + hashStringToInt(q.id) + 67891);
+        const { question, displayToOriginal } = shuffleQuestionChoicesDeterministically(q, choiceRng);
+        choiceMaps[question.id] = displayToOriginal;
+        orderedQuestions.push(question);
+      }
+    }
+
+    catIdx++;
+  }
+
+  const finalQuestions = orderedQuestions.map((q, index) => ({
+    ...q,
+    number: index + 1,
+  }));
+
+  return {
+    questions: finalQuestions,
+    choiceMaps,
+    examSet: normalizedSetName,
+  };
 }
 
 /** Map a student's display-letter answer back to the pack's original letter. */
@@ -435,6 +543,9 @@ export interface OfflinePasskeyValidationResult {
     title?: string;
     exam_date?: string;
     time_slot?: string;
+    session_type?: 'regular' | 'rescheduled';
+    reschedule_state?: 'proposed' | 'confirmed' | 'review_required' | null;
+    schedule_revision?: number;
   };
 }
 
@@ -484,6 +595,12 @@ export const OfflineExamRepository = {
       timeoutMs: 12000,
     });
     if (!json.data) throw new Error('Cloud returned an empty exam pack.');
+    if (!Array.isArray(json.data.schedules) || !Array.isArray(json.data.registrations)) {
+      throw new Error('Cloud returned an invalid examination pack. Your existing pack was preserved.');
+    }
+    if (json.data.schedules.length === 0) {
+      throw new Error('Cloud returned no examination schedules. Your existing downloaded pack was preserved.');
+    }
 
     report(55, 'Processing students and questions…');
     if (options?.includeAuth && json.data.proctors) {
@@ -546,6 +663,7 @@ export const OfflineExamRepository = {
     examDate?: string;
   }): Promise<{
     updateRequired: boolean;
+    packRevision: number | null;
     rescheduledSince: number;
     rescheduledToday: number;
     questionsChangedSince: number;
@@ -559,6 +677,7 @@ export const OfflineExamRepository = {
     if (!todayCheck.downloadedToday) {
       return {
         updateRequired: true,
+        packRevision: null,
         rescheduledSince: 0,
         rescheduledToday: 0,
         questionsChangedSince: 0,
@@ -573,6 +692,7 @@ export const OfflineExamRepository = {
     if (network?.isInternetReachable !== true) {
       return {
         updateRequired: false,
+        packRevision: null,
         rescheduledSince: 0,
         rescheduledToday: 0,
         questionsChangedSince: 0,
@@ -605,6 +725,7 @@ export const OfflineExamRepository = {
           registration_count?: number;
           reason?: 'reschedule' | 'questions' | 'fingerprint' | null;
           content_fingerprint?: string;
+          pack_revision?: number;
         };
       }>(`/proctor/exam-day-pack-status${q}`, {
         baseUrl: getCloudApiBaseUrl() || getApiBaseUrl(),
@@ -612,6 +733,9 @@ export const OfflineExamRepository = {
       });
 
       const data = json.data ?? {};
+      const packRevision = Number.isFinite(Number(data.pack_revision))
+        ? Number(data.pack_revision)
+        : null;
       const rescheduledSince = Number(data.rescheduled_since ?? 0);
       const rescheduledToday = Number(data.rescheduled_today ?? 0);
       const questionsChangedSince = Number(data.questions_changed_since ?? 0);
@@ -639,8 +763,8 @@ export const OfflineExamRepository = {
           const n = rescheduledSince || rescheduledToday;
           message =
             n > 0
-              ? `${n} applicant(s) were rescheduled since your last download. Tap Update Examination.`
-              : 'Applicants were rescheduled. Tap Update Examination to refresh the roster.';
+              ? `${n} applicant(s) were rescheduled since your last download. Tap Update Exam Pack.`
+              : 'Applicants were rescheduled. Tap Update Exam Pack to refresh the roster.';
         } else if (
           data.reason === 'questions' ||
           questionsChangedSince > 0 ||
@@ -650,16 +774,17 @@ export const OfflineExamRepository = {
           const n = questionsChangedSince || questionsChangedToday;
           message =
             n > 0
-              ? `${n} question(s) were added or updated since your last download. Tap Update Examination.`
-              : 'Questions were added or updated. Tap Update Examination to refresh the module.';
+              ? `${n} question(s) were added or updated since your last download. Tap Update Exam Pack.`
+              : 'Questions were added or updated. Tap Update Exam Pack to refresh the module.';
         } else {
           reason = data.reason === 'fingerprint' ? 'fingerprint' : 'questions';
-          message = 'Exam pack changed on the server. Tap Update Examination to refresh.';
+          message = 'Exam pack changed on the server. Tap Update Exam Pack to refresh.';
         }
       }
 
       return {
         updateRequired,
+        packRevision,
         rescheduledSince,
         rescheduledToday,
         questionsChangedSince,
@@ -672,6 +797,7 @@ export const OfflineExamRepository = {
     } catch {
       return {
         updateRequired: false,
+        packRevision: null,
         rescheduledSince: 0,
         rescheduledToday: 0,
         questionsChangedSince: 0,
@@ -827,7 +953,7 @@ export const OfflineExamRepository = {
       };
     }
 
-    const normalized = passkey.trim().toUpperCase();
+    const normalized = normalizePasskey(passkey);
     const normalizedHash = await Crypto.digestStringAsync(
       Crypto.CryptoDigestAlgorithm.SHA256,
       normalized,
@@ -871,6 +997,9 @@ export const OfflineExamRepository = {
               title: otherSchedule.title,
               exam_date: otherSchedule.exam_date,
               time_slot: otherSchedule.time_slot,
+              session_type: otherSchedule.session_type,
+              reschedule_state: otherSchedule.reschedule_state,
+              schedule_revision: otherSchedule.schedule_revision,
             }
           : undefined,
       };
@@ -904,6 +1033,9 @@ export const OfflineExamRepository = {
           title: schedule.title,
           exam_date: schedule.exam_date,
           time_slot: schedule.time_slot,
+          session_type: schedule.session_type,
+          reschedule_state: schedule.reschedule_state,
+          schedule_revision: schedule.schedule_revision,
         },
       };
     }
@@ -918,6 +1050,9 @@ export const OfflineExamRepository = {
           title: schedule.title,
           exam_date: schedule.exam_date,
           time_slot: schedule.time_slot,
+          session_type: schedule.session_type,
+          reschedule_state: schedule.reschedule_state,
+          schedule_revision: schedule.schedule_revision,
         },
       };
     }
@@ -934,6 +1069,9 @@ export const OfflineExamRepository = {
           title: schedule.title,
           exam_date: schedule.exam_date,
           time_slot: schedule.time_slot,
+          session_type: schedule.session_type,
+          reschedule_state: schedule.reschedule_state,
+          schedule_revision: schedule.schedule_revision,
         },
       };
     }
@@ -958,6 +1096,7 @@ export const OfflineExamRepository = {
         .toUpperCase(),
       registration_id: reg.id,
       selectionStatus: 'ready' as const,
+      examSet: reg.exam_set || 'Set 1',
       selectable: true,
     };
 
@@ -966,6 +1105,9 @@ export const OfflineExamRepository = {
       title: schedule.title,
       exam_date: schedule.exam_date,
       time_slot: schedule.time_slot,
+      session_type: schedule.session_type,
+      reschedule_state: schedule.reschedule_state,
+      schedule_revision: schedule.schedule_revision,
     };
 
     // Check if this applicant has already completed this examination schedule
@@ -1116,6 +1258,9 @@ export const OfflineExamRepository = {
         examinationDate: schedule.exam_date || '',
         examinationDateIso: schedule.exam_date || '',
         batchCount: 1,
+        sessionType: schedule.session_type || 'regular',
+        rescheduleState: schedule.reschedule_state ?? null,
+        scheduleRevision: Number(schedule.schedule_revision ?? 1),
       },
       session: {
         id: `offline-${schedule.id}${room ? `-r${room.id}` : ''}`,
@@ -1127,6 +1272,9 @@ export const OfflineExamRepository = {
         endTime: schedule.end_time || '',
         venue: room?.room_name || schedule.venue || 'Offline',
         batchNumber: schedule.batch_code || '',
+        sessionType: schedule.session_type || 'regular',
+        rescheduleState: schedule.reschedule_state ?? null,
+        scheduleRevision: Number(schedule.schedule_revision ?? 1),
         registeredStudents: pack.registrations.filter(
           (r) => Number(r.examination_schedule_id) === Number(schedule.id),
         ).length,
@@ -1188,121 +1336,207 @@ export const OfflineExamRepository = {
       typeof Crypto.randomUUID === 'function'
         ? Crypto.randomUUID()
         : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    let scheduleId = Number(input.scheduleId);
+    if (!Number.isInteger(scheduleId) || scheduleId <= 0) {
+      const { resolveNumericScheduleId } = await import(
+        '@/features/examinations/services/peerExamServer'
+      );
+      scheduleId = resolveNumericScheduleId(input.scheduleId, pack, input.applicantCode);
+    }
+    if (!Number.isInteger(scheduleId) || scheduleId <= 0) {
+      throw new Error('The examination schedule is invalid. The result was not queued.');
+    }
+    const applicant = pack.applicants.find(
+      (row) => row.applicant_code.trim().toUpperCase() === input.applicantCode.trim().toUpperCase(),
+    );
+    const registration = applicant
+      ? pack.registrations.find(
+          (row) =>
+            Number(row.applicant_id) === Number(applicant.id) &&
+            Number(row.examination_schedule_id) === scheduleId,
+        )
+      : undefined;
+    if (!registration) {
+      throw new Error('This student is not assigned to the selected examination. The result was not queued.');
+    }
     const row: OfflineQueuedResult = {
       local_id: uuid,
       applicant_code: input.applicantCode,
-      examination_schedule_id: Number(input.scheduleId),
+      examination_schedule_id: scheduleId,
       applicant_name: input.applicantName,
       attendance_status: 'present',
+      exam_set: registration.exam_set ?? undefined,
       ...graded,
       submitted_at: new Date().toISOString(),
       synced: false,
+      sync_status: 'pending',
+      sync_error: null,
     };
     await OfflineStore.queueResult(row);
     return row;
   },
 
-    async syncQueuedToCloud(): Promise<{ synced: number; message: string }> {
-    const pending = await OfflineStore.pendingResults();
-    if (!pending.length) {
-      return { synced: 0, message: 'No offline results waiting to sync.' };
+  async syncQueuedToCloud(): Promise<{ synced: number; message: string }> {
+    if (queuedResultsSyncInProgress) {
+      return { synced: 0, message: 'Result synchronization is already in progress.' };
     }
+    queuedResultsSyncInProgress = true;
+    try {
+      const pending = await OfflineStore.pendingResults();
+      if (!pending.length) {
+        return { synced: 0, message: 'No offline results waiting to sync.' };
+      }
 
-    await assertCloudInternetReachable();
+      const pack = await OfflineStore.getPack();
+      const hasInvalidSchedule = pending.some((result) =>
+        !Number.isInteger(Number(result.examination_schedule_id)) ||
+        Number(result.examination_schedule_id) <= 0,
+      );
+      const resolveScheduleId =
+        pack && hasInvalidSchedule
+          ? (await import('@/features/examinations/services/peerExamServer')).resolveNumericScheduleId
+          : null;
+      const validPending = pending
+        .map((result) => {
+          let scheduleId = Number(result.examination_schedule_id);
+          if ((!Number.isInteger(scheduleId) || scheduleId <= 0) && pack && resolveScheduleId) {
+            scheduleId = resolveScheduleId(
+              result.examination_schedule_id,
+              pack,
+              result.applicant_code,
+            );
+          }
+          return { ...result, examination_schedule_id: scheduleId };
+        })
+        .filter(
+          (result) =>
+            Number.isInteger(result.examination_schedule_id) &&
+            result.examination_schedule_id > 0,
+        );
 
-    // FIX 2 & FIX 3: Filter and auto-repair any invalid schedule IDs before payload creation
-    const pack = await OfflineStore.getPack();
-    const validPending = pending.map((r) => {
-      let schedId = Number(r.examination_schedule_id);
-      if (!Number.isInteger(schedId) || schedId <= 0) {
-        if (pack) {
-          const { resolveNumericScheduleId } = require('@/features/examinations/services/peerExamServer');
-          schedId = resolveNumericScheduleId(r.examination_schedule_id, pack);
+      const validIds = new Set(validPending.map((result) => result.local_id));
+      const invalidIds = pending
+        .filter((result) => !validIds.has(result.local_id))
+        .map((result) => result.local_id);
+      await OfflineStore.updateResultSyncStatus(
+        invalidIds,
+        'failed',
+        'Invalid Result Data: The examination schedule could not be identified. The saved result was preserved for recovery.',
+      );
+
+      if (!validPending.length) {
+        throw new Error(
+          'Invalid Result Data: No queued result has a valid examination schedule. The local results were preserved for recovery.',
+        );
+      }
+
+      const syncingIds = validPending.map((result) => result.local_id);
+      await OfflineStore.updateResultSyncStatus(syncingIds, 'syncing');
+
+      console.log(`[SYNC AUDIT START] Sending ${validPending.length} queued result(s) to cloud server...`);
+
+      const payload = {
+        results: validPending.map((result) => ({
+          client_local_id: result.local_id,
+          applicant_code: result.applicant_code,
+          examination_schedule_id: result.examination_schedule_id,
+          exam_set: result.exam_set || null,
+          submitted_at: result.submitted_at,
+          answers: result.answers.map(({ exam_question_id, selected_answer }) => ({
+            exam_question_id,
+            selected_answer,
+          })),
+        })),
+      };
+
+      let json: OfflineResultSyncResponse;
+      try {
+        await assertCloudInternetReachable();
+        json = await apiRequest<OfflineResultSyncResponse>('/proctor/sync/offline-results', {
+          method: 'POST',
+          body: payload,
+          auth: true,
+          baseUrl: cloudBase(),
+        });
+      } catch (error) {
+        console.error('[SYNC AUDIT ERROR] Network request failed:', error);
+        await OfflineStore.updateResultSyncStatus(
+          syncingIds,
+          'failed',
+          resultSyncFailureMessage(error),
+        );
+        throw error;
+      }
+
+      console.log(`[SYNC AUDIT] Server response success=${json.success} accepted_client_ids=${(json.data?.accepted_client_ids ?? []).length}`);
+
+      const acceptedClient = new Set(json.data?.accepted_client_ids ?? []);
+      const syncedIds = validPending
+        .filter((result) => acceptedClient.has(result.local_id))
+        .map((result) => result.local_id);
+
+      if (syncedIds.length === 0 || json.success === false) {
+        const serverMsg = json.message || 'Server rejected all records in batch.';
+        const rejectedList = json.data?.rejected ?? [];
+        const rejectionById: Record<string, string> = {};
+        for (const result of rejectedList) {
+          if (result.client_local_id) {
+            rejectionById[result.client_local_id] =
+              `Invalid Result Data: ${result.reason ?? 'The result was rejected by the server.'}`;
+          }
+        }
+        const rejectionDetails = rejectedList.length > 0
+          ? ` Rejection Reasons: ${rejectedList.map((result) => `${result.applicant_code ?? 'Unknown student'}: ${result.reason ?? 'Invalid result data'}`).join('; ')}`
+          : '';
+
+        console.error(`[SYNC AUDIT FAILURE] 0 records accepted. Server Message: ${serverMsg}.${rejectionDetails}`, json);
+        await OfflineStore.updateResultSyncStatus(
+          syncingIds,
+          'failed',
+          Object.keys(rejectionById).length
+            ? rejectionById
+            : `Invalid Result Data: ${serverMsg}.${rejectionDetails}`,
+        );
+        throw new Error(`Invalid Result Data: No results were accepted. ${serverMsg}${rejectionDetails}`);
+      }
+
+      await OfflineStore.markSynced(syncedIds);
+      const failedIds = syncingIds.filter((id) => !syncedIds.includes(id));
+      const skipped = validPending.length - syncedIds.length;
+      const rejectedList = json.data?.rejected ?? [];
+      const rejectionById: Record<string, string> = {};
+      for (const result of rejectedList) {
+        if (result.client_local_id) {
+          rejectionById[result.client_local_id] =
+            `Invalid Result Data: ${result.reason ?? 'The result was rejected by the server.'}`;
         }
       }
-      return {
-        ...r,
-        examination_schedule_id: schedId,
-      };
-    }).filter((r) => Number.isInteger(r.examination_schedule_id) && r.examination_schedule_id > 0);
-
-    if (!validPending.length) {
-      throw new Error('Sync Failed: Local queued results have invalid schedule IDs. Run "Recover Unsynced Results" to repair them.');
-    }
-
-    console.log(`[SYNC AUDIT START] Sending ${validPending.length} queued result(s) to cloud server...`);
-
-    const payload = {
-      results: validPending.map((r) => ({
-        client_local_id: r.local_id,
-        applicant_code: r.applicant_code,
-        examination_schedule_id: r.examination_schedule_id,
-        answers: r.answers.map(({ exam_question_id, selected_answer }) => ({
-          exam_question_id,
-          selected_answer,
-        })),
-      })),
-    };
-
-    let json: any = null;
-    try {
-      json = await apiRequest<{
-        success: boolean;
-        message?: string;
-        data?: {
-          accepted_ids?: number[];
-          accepted_client_ids?: string[];
-          accepted_keys?: string[];
-          created?: number;
-          updated?: number;
-        };
-      }>('/proctor/sync/offline-results', {
-        method: 'POST',
-        body: payload,
-        auth: true,
-        baseUrl: cloudBase(),
-      });
-    } catch (error) {
-      console.error('[SYNC AUDIT ERROR] Network request failed:', error);
-      throw error;
-    }
-
-    console.log(`[SYNC AUDIT] Server response success=${json?.success} accepted_client_ids=${(json?.data?.accepted_client_ids ?? []).length}`);
-
-    const acceptedClient = new Set(json?.data?.accepted_client_ids ?? []);
-    const acceptedKeys = new Set(json?.data?.accepted_keys ?? []);
-    const syncedIds = validPending
-      .filter((p) => {
-        if (acceptedClient.has(p.local_id)) return true;
-        return acceptedKeys.has(`${p.applicant_code}|${p.examination_schedule_id}`);
-      })
-      .map((p) => p.local_id);
-
-    // Never mark synced unless the server explicitly accepted the client_local_id / key.
-    if (syncedIds.length === 0 || json?.success === false) {
-      const serverMsg = json?.message || 'Server rejected all records in batch.';
-      const rejectedList = (json as any)?.data?.rejected;
-      const rejDetails = Array.isArray(rejectedList) && rejectedList.length > 0
-        ? ` Rejection Reasons: ${rejectedList.map((r: any) => `${r.applicant_code}: ${r.reason}`).join('; ')}`
+      const rejectionDetails = rejectedList.length > 0
+        ? rejectedList.map((result) => `${result.applicant_code ?? 'Unknown student'}: ${result.reason ?? 'Invalid result data'}`).join('; ')
         : '';
+      await OfflineStore.updateResultSyncStatus(
+        failedIds,
+        'failed',
+        skipped > 0
+          ? Object.keys(rejectionById).length
+            ? rejectionById
+            : `Invalid Result Data: ${rejectionDetails || 'The server did not accept this result.'}`
+          : null,
+      );
 
-      console.error(`[SYNC AUDIT FAILURE] 0 records accepted. Server Message: ${serverMsg}.${rejDetails}`, json);
-      throw new Error(`Sync Failed: No results were accepted by the server. (${serverMsg})${rejDetails}`);
+      const auditMsg = skipped > 0
+        ? `Partial Sync: ${syncedIds.length} result(s) confirmed by the server; ${skipped} remain saved locally. ${rejectionDetails}`
+        : `Synchronization Successful: ${syncedIds.length} examination result(s) were confirmed by the server.`;
+
+      console.log(`[SYNC AUDIT COMPLETE] ${auditMsg}`);
+
+      return {
+        synced: syncedIds.length,
+        message: auditMsg,
+      };
+    } finally {
+      queuedResultsSyncInProgress = false;
     }
-
-    await OfflineStore.markSynced(syncedIds);
-
-    const skipped = validPending.length - syncedIds.length;
-    const auditMsg = skipped > 0
-      ? `Partial Sync: ${syncedIds.length} result(s) saved to Admin; ${skipped} record(s) rejected by server.`
-      : `Sync Complete: All ${syncedIds.length} result(s) successfully saved to Admin server.`;
-
-    console.log(`[SYNC AUDIT COMPLETE] ${auditMsg}`);
-
-    return {
-      synced: syncedIds.length,
-      message: auditMsg,
-    };
   },
 
   /**
@@ -1324,7 +1558,7 @@ export const OfflineExamRepository = {
     const fixedRows = all.map((row) => {
       let schedId = Number(row.examination_schedule_id);
       if (!Number.isInteger(schedId) || schedId <= 0) {
-        schedId = resolveNumericScheduleId(row.examination_schedule_id, pack);
+        schedId = resolveNumericScheduleId(row.examination_schedule_id, pack, row.applicant_code);
         if (schedId <= 0 && pack?.registrations && pack.applicants) {
           const app = pack.applicants.find((a) => a.applicant_code === row.applicant_code);
           if (app) {
@@ -1347,6 +1581,9 @@ export const OfflineExamRepository = {
         ...row,
         examination_schedule_id: schedId > 0 ? schedId : row.examination_schedule_id,
         synced: false, // Reset synced flag to force re-evaluation by sync worker
+        sync_status: 'pending' as const,
+        sync_error: null,
+        synced_at: null,
       };
     });
 

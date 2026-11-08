@@ -35,10 +35,14 @@ const WEB_PACK_ENC_KEY = 'tcc.offline.pack.enc';
 const WEB_RESULTS_KEY = 'tcc.offline.results.json';
 const WEB_RESULTS_ENC_KEY = 'tcc.offline.results.enc';
 const WEB_PEER_KEY = 'tcc.peer.session.enc';
+const EMERGENCY_REPORTS_ENC_FILE = `${FileSystem.documentDirectory ?? ''}metcc-emergency-reports.enc`;
+const WEB_EMERGENCY_REPORTS_ENC_KEY = 'tcc.emergency.reports.enc';
 const PACK_KEY_STORAGE = 'tcc.offline.pack.aes.key';
+const PACK_DASHBOARD_SUMMARY_KEY = 'tcc.offline.pack.dashboard-summary';
 
 export type OfflinePack = {
   pack_version: number;
+  pack_revision?: number;
   exported_at?: string;
   downloaded_at?: string;
   authorization?: {
@@ -58,6 +62,10 @@ export type OfflinePack = {
     batch_code?: string;
     course?: string;
     status?: string;
+    session_type?: 'regular' | 'rescheduled';
+    reschedule_state?: 'proposed' | 'confirmed' | 'review_required' | null;
+    reschedule_confirmed_at?: string | null;
+    schedule_revision?: number;
     rooms_managed?: boolean;
     rooms_revision?: number;
     rooms_published_at?: string | null;
@@ -67,6 +75,9 @@ export type OfflinePack = {
       room_name: string;
       capacity: number;
       proctor_id?: number | null;
+      room_id?: number | null;
+      reschedule_capacity?: number;
+      emergency_suspended?: boolean;
     }>;
   }>;
   applicants: Array<{
@@ -86,6 +97,7 @@ export type OfflinePack = {
     examination_schedule_id: number;
     applicant_id: number;
     assigned_room_id?: number | null;
+    exam_set?: string | null;
     exam_passkey?: string | null;
     exam_passkey_hash?: string | null;
     attendance_status?: string | null;
@@ -97,6 +109,10 @@ export type OfflinePack = {
     previous_schedule_id?: number | null;
     reschedule_reason?: string | null;
     rescheduled_at?: string | null;
+    emergency_recovery?: {
+      incident_id: number;
+      status: 'scheduled' | 'resources_assigned' | 'notifications_queued' | 'notified' | 'notification_failed';
+    } | null;
   }>;
   question_banks: Array<{
     id: number;
@@ -119,11 +135,13 @@ export type OfflinePack = {
   }>;
   examination_settings?: {
     duration_minutes?: number;
+    allow_late_entry?: false;
     disconnect_grace_seconds?: number;
     room_student_limit?: number;
     shuffle_questions?: boolean;
     shuffle_categories?: boolean;
     shuffle_both?: boolean;
+    exam_set_definitions?: string[];
   };
   /** Present only when pack downloaded with include_auth=1; stripped before disk save. */
   proctors?: Array<{
@@ -135,6 +153,25 @@ export type OfflinePack = {
   }>;
 };
 
+export type OfflinePackDashboardSnapshot = {
+  actorId: number;
+  downloadedAt: string | null;
+  schedules: Array<{
+    id: number;
+    title: string;
+    exam_date?: string;
+    start_time?: string;
+    end_time?: string;
+    time_slot?: string;
+    venue?: string;
+  }>;
+  registrationsBySchedule: Record<string, number>;
+  students: number;
+  questions: number;
+  durationMinutes: number;
+  passingPercentage: number;
+};
+
 export type OfflineQueuedResult = {
   local_id: string;
   applicant_code: string;
@@ -142,6 +179,7 @@ export type OfflineQueuedResult = {
   applicant_name?: string;
   attendance_status: string;
   result_status: string;
+  exam_set?: string | null;
   score: number;
   items_correct: number;
   items_total: number;
@@ -153,9 +191,25 @@ export type OfflineQueuedResult = {
   }>;
   submitted_at: string;
   synced: boolean;
+  sync_status?: 'pending' | 'syncing' | 'synced' | 'failed';
+  sync_error?: string | null;
+  synced_at?: string | null;
+};
+
+export type OfflineEmergencyReport = {
+  client_report_id: string;
+  emergency_incident_id?: number;
+  examination_schedule_id: number;
+  examination_room_id: number;
+  device_id: string;
+  reason: string;
+  started_at: string;
+  synced: boolean;
+  synced_at?: string | null;
 };
 
 const isEncryptedBlob = isEncryptedEnvelope;
+let packLoadInFlight: Promise<OfflinePack | null> | null = null;
 
 async function writeEncrypted(path: string, webKey: string, data: unknown): Promise<void> {
   const text = await encryptJson(data);
@@ -171,6 +225,7 @@ async function readEncryptedOrLegacy<T>(
   legacyPath: string,
   webEncKey: string,
   webLegacyKey: string,
+  throwOnReadFailure = false,
 ): Promise<{ data: T | null; needsMigrate: boolean }> {
   try {
     if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
@@ -202,7 +257,12 @@ async function readEncryptedOrLegacy<T>(
     }
 
     return { data: null, needsMigrate: false };
-  } catch {
+  } catch (error) {
+    if (throwOnReadFailure) {
+      console.error('[OfflineStore] Saved examination pack could not be read:',
+        error instanceof Error ? error.name : 'StorageError');
+      throw new Error('The saved examination pack could not be read. Its encrypted file was preserved; retry storage access or contact the proctor.');
+    }
     return { data: null, needsMigrate: false };
   }
 }
@@ -306,13 +366,26 @@ export function normalizePackForHashing(pack: OfflinePack | null): string {
     ? `${settings.duration_minutes ?? 60}:${settings.room_student_limit ?? 60}:${Boolean(settings.shuffle_questions)}:${Boolean(settings.shuffle_categories)}:${Boolean(settings.shuffle_both)}`
     : 'default-settings';
 
-  const raw = `${pack.pack_version || 1}-${settingsSig}-${sigs.sort().join('|')}`;
   const scheduleSig = (pack.schedules ?? [])
-    .map((s) => `${s.id}:${s.exam_date || ''}`)
+    .map((s) => {
+      const rooms = (s.rooms ?? [])
+        .map((room) =>
+          `${room.id}:${room.examination_schedule_id ?? ''}:${room.room_name}:${room.proctor_id ?? ''}:${room.room_id ?? ''}:${room.capacity}:${room.reschedule_capacity ?? ''}:${room.emergency_suspended ? 1 : 0}`,
+        )
+        .sort()
+        .join(',');
+      return `${s.id}:${s.exam_date || ''}:${s.start_time || ''}:${s.end_time || ''}:${s.status || ''}:${s.session_type || ''}:${s.schedule_revision ?? 1}:${s.rooms_revision ?? 0}:${rooms}`;
+    })
+    .sort()
+    .join(';');
+  const registrationSig = (pack.registrations ?? [])
+    .map((r) =>
+      `${r.id}:${r.examination_schedule_id}:${r.applicant_id}:${r.assigned_room_id ?? ''}:${r.exam_passkey_hash ?? ''}:${r.passkey_status ?? ''}:${r.passkey_expires_at ?? ''}:${r.emergency_recovery?.incident_id ?? ''}:${r.emergency_recovery?.status ?? ''}`,
+    )
     .sort()
     .join(';');
 
-  return `${pack.pack_version || 1}-${scheduleSig}-${settingsSig}-${sigs.sort().join('|')}`;
+  return `${pack.pack_version || 1}:${pack.pack_revision ?? 1}-${scheduleSig}-${registrationSig}-${settingsSig}-${sigs.sort().join('|')}`;
 }
 
 /** Cryptographic SHA-256 hash of OfflinePack */
@@ -380,6 +453,52 @@ async function packBelongsToCurrentAccount(pack: OfflinePack): Promise<boolean> 
   }
 }
 
+function buildDashboardSnapshot(
+  pack: OfflinePack,
+  downloadedAt: string | null,
+): OfflinePackDashboardSnapshot {
+  let questions = 0;
+  for (const bank of pack.question_banks ?? []) {
+    for (const subject of bank.subjects ?? []) {
+      for (const question of subject.questions ?? []) {
+        if (question.is_selected_for_exam === false) continue;
+        if (question.status && question.status !== 'active') continue;
+        questions++;
+      }
+    }
+  }
+
+  const registrationsBySchedule: Record<string, number> = {};
+  for (const registration of pack.registrations ?? []) {
+    const key = String(registration.examination_schedule_id);
+    registrationsBySchedule[key] = (registrationsBySchedule[key] ?? 0) + 1;
+  }
+
+  const gradingSettings = (pack as OfflinePack & {
+    grading_settings?: Array<{ passing_percentage?: number }>;
+  }).grading_settings;
+  const rawPassingPercentage = Number(gradingSettings?.[0]?.passing_percentage ?? 75);
+
+  return {
+    actorId: Number(pack.authorization?.actor_id ?? 0),
+    downloadedAt,
+    schedules: (pack.schedules ?? []).map((schedule) => ({
+      id: schedule.id,
+      title: schedule.title,
+      exam_date: schedule.exam_date,
+      start_time: schedule.start_time,
+      end_time: schedule.end_time,
+      time_slot: schedule.time_slot,
+      venue: schedule.venue,
+    })),
+    registrationsBySchedule,
+    students: pack.applicants?.length ?? 0,
+    questions,
+    durationMinutes: pack.examination_settings?.duration_minutes ?? 60,
+    passingPercentage: Number.isFinite(rawPassingPercentage) ? rawPassingPercentage : 75,
+  };
+}
+
 export const OfflineStore = {
   // In-memory pack avoids AES decrypt + JSON.parse on every navigation (was 3–6 min).
   _packCache: null as OfflinePack | null,
@@ -403,8 +522,12 @@ export const OfflineStore = {
         status: schedule.status || 'ready',
       })),
     });
-    this._packCache = safe;
     await writeEncrypted(PACK_ENC_FILE, WEB_PACK_ENC_KEY, safe);
+    this._packCache = safe;
+    await appStorage.setItem(
+      PACK_DASHBOARD_SUMMARY_KEY,
+      JSON.stringify(buildDashboardSnapshot(safe, downloadedAt)),
+    );
     // Remove legacy plaintext after successful encrypt.
     await deleteIfExists(PACK_FILE, WEB_PACK_KEY);
     // The pack is authoritative for schedules available offline. Drop any older
@@ -519,6 +642,46 @@ export const OfflineStore = {
     return { valid: true, sha256: currentSha256, pack };
   },
 
+  async getPackDashboardSnapshot(): Promise<OfflinePackDashboardSnapshot | null> {
+    const sessionRaw = await appStorage.getItem(authStorageKeys().session);
+    let actorId: number | null = null;
+    try {
+      actorId = sessionRaw ? Number((JSON.parse(sessionRaw) as { id?: number | string }).id) : null;
+    } catch (error) {
+      console.warn('[OfflineStore] Cached proctor session could not be read for the dashboard summary:', {
+        errorName: error instanceof Error ? error.name : 'StorageError',
+      });
+    }
+
+    const summaryRaw = await appStorage.getItem(PACK_DASHBOARD_SUMMARY_KEY);
+    if (summaryRaw && actorId != null && Number.isInteger(actorId) && actorId > 0) {
+      try {
+        const summary = JSON.parse(summaryRaw) as OfflinePackDashboardSnapshot;
+        if (
+          summary.actorId === actorId &&
+          Array.isArray(summary.schedules) &&
+          Number.isFinite(summary.students) &&
+          Number.isFinite(summary.questions)
+        ) {
+          return summary;
+        }
+      } catch (error) {
+        console.warn('[OfflineStore] Cached dashboard summary is invalid; rebuilding it from the saved pack:', {
+          errorName: error instanceof Error ? error.name : 'StorageError',
+        });
+      }
+    }
+
+    const pack = await this.getPack();
+    if (!pack) return null;
+    const snapshot = buildDashboardSnapshot(
+      pack,
+      pack.downloaded_at ?? (await appStorage.getItem(STORAGE_KEYS.offlinePackAt)),
+    );
+    await appStorage.setItem(PACK_DASHBOARD_SUMMARY_KEY, JSON.stringify(snapshot));
+    return snapshot;
+  },
+
   async getPack(): Promise<OfflinePack | null> {
     if (this._packCache) {
       const cached = sanitizePackToActiveBanks(this._packCache);
@@ -526,28 +689,40 @@ export const OfflineStore = {
       this._packCache = cached;
       return cached;
     }
+    if (packLoadInFlight) return packLoadInFlight;
 
-    const { data, needsMigrate } = await readEncryptedOrLegacy<OfflinePack>(
-      PACK_ENC_FILE,
-      PACK_FILE,
-      WEB_PACK_ENC_KEY,
-      WEB_PACK_KEY,
-    );
-    if (!data) return null;
+    const load = async (): Promise<OfflinePack | null> => {
+      const { data, needsMigrate } = await readEncryptedOrLegacy<OfflinePack>(
+        PACK_ENC_FILE,
+        PACK_FILE,
+        WEB_PACK_ENC_KEY,
+        WEB_PACK_KEY,
+        true,
+      );
+      if (!data) return null;
 
-    const safe = sanitizePackToActiveBanks(data);
-    if (!await packBelongsToCurrentAccount(safe)) return null;
-    const hadInactive =
-      (data.question_banks?.length ?? 0) !== (safe.question_banks?.length ?? 0);
+      const safe = sanitizePackToActiveBanks(data);
+      if (!await packBelongsToCurrentAccount(safe)) return null;
+      const hadInactive =
+        (data.question_banks?.length ?? 0) !== (safe.question_banks?.length ?? 0);
 
-    if (needsMigrate || hadInactive) {
-      // Migrate plaintext → encrypted, and drop inactive banks from older packs.
-      await this.savePack(safe);
+      if (needsMigrate || hadInactive) {
+        // Migrate plaintext → encrypted, and drop inactive banks from older packs.
+        await this.savePack(safe);
+        return safe;
+      }
+
+      this._packCache = safe;
       return safe;
-    }
+    };
 
-    this._packCache = safe;
-    return safe;
+    const pending = load();
+    packLoadInFlight = pending;
+    try {
+      return await pending;
+    } finally {
+      if (packLoadInFlight === pending) packLoadInFlight = null;
+    }
   },
 
   async hasPack(): Promise<boolean> {
@@ -713,11 +888,22 @@ export const OfflineStore = {
     students: number;
     questions: number;
     passkeys: number;
+    packRevision: number | null;
+    lastUpdatedAt: string | null;
   }> {
     const at = await appStorage.getItem(STORAGE_KEYS.offlinePackAt);
     const pack = await this.getPack();
     if (!pack) {
-      return { ready: false, at, schedules: 0, students: 0, questions: 0, passkeys: 0 };
+      return {
+        ready: false,
+        at,
+        schedules: 0,
+        students: 0,
+        questions: 0,
+        passkeys: 0,
+        packRevision: null,
+        lastUpdatedAt: null,
+      };
     }
 
     let questions = 0;
@@ -740,6 +926,8 @@ export const OfflineStore = {
       passkeys: (pack.registrations ?? []).filter(
         (r) => Boolean(r.exam_passkey || r.exam_passkey_hash),
       ).length,
+      packRevision: pack.pack_revision ?? null,
+      lastUpdatedAt: pack.downloaded_at ?? at ?? null,
     };
   },
 
@@ -841,21 +1029,19 @@ export const OfflineStore = {
   },
 
   async saveResults(rows: OfflineQueuedResult[]): Promise<void> {
-    const validRows = rows.filter((r) => {
+    rows.forEach((r) => {
       const validSched = Number.isInteger(Number(r.examination_schedule_id)) && Number(r.examination_schedule_id) > 0;
       const validCode = Boolean(r.applicant_code && typeof r.applicant_code === 'string' && r.applicant_code.trim());
       if (!validSched || !validCode) {
         console.error(
-          '[OfflineStore] Discarding corrupted row from saveResults: local_id=' +
+          '[OfflineStore] Preserving invalid queued result for recovery: local_id=' +
             r?.local_id +
             ', schedule_id=' +
             r?.examination_schedule_id,
         );
-        return false;
       }
-      return true;
     });
-    await writeEncryptedFile(RESULTS_ENC_FILE, WEB_RESULTS_ENC_KEY, validRows, {
+    await writeEncryptedFile(RESULTS_ENC_FILE, WEB_RESULTS_ENC_KEY, rows, {
       meta: { type: 'offline_results' },
     });
   },
@@ -866,6 +1052,60 @@ export const OfflineStore = {
       legacyWebKey: WEB_RESULTS_KEY,
     });
     emitResultsChanged();
+  },
+
+  async getEmergencyReports(): Promise<OfflineEmergencyReport[]> {
+    try {
+      const result = await readEncryptedFile<OfflineEmergencyReport[]>(
+        EMERGENCY_REPORTS_ENC_FILE,
+        WEB_EMERGENCY_REPORTS_ENC_KEY,
+        { type: 'offline_emergency_reports' },
+      );
+      return Array.isArray(result.data) ? result.data : [];
+    } catch (error) {
+      if (error instanceof StorageFileNotFoundError) return [];
+      console.error(
+        '[OfflineStore] Failed to decrypt emergency report queue:',
+        error instanceof Error ? error.name : 'StorageError',
+      );
+      throw error;
+    }
+  },
+
+  async saveEmergencyReports(reports: OfflineEmergencyReport[]): Promise<void> {
+    await writeEncryptedFile(
+      EMERGENCY_REPORTS_ENC_FILE,
+      WEB_EMERGENCY_REPORTS_ENC_KEY,
+      reports,
+      { meta: { type: 'offline_emergency_reports' } },
+    );
+  },
+
+  async queueEmergencyReport(report: OfflineEmergencyReport): Promise<void> {
+    const reports = await this.getEmergencyReports();
+    if (reports.some((item) => item.client_report_id === report.client_report_id)) return;
+    await this.saveEmergencyReports([...reports, report]);
+  },
+
+  async markEmergencyReportSynced(
+    clientReportId: string,
+    syncedAt = new Date().toISOString(),
+  ): Promise<void> {
+    const reports = await this.getEmergencyReports();
+    let found = false;
+    const updated = reports.map((report) => {
+      if (report.client_report_id !== clientReportId) return report;
+      found = true;
+      return { ...report, synced: true, synced_at: syncedAt };
+    });
+    if (!found) {
+      throw new Error(`Emergency report ${clientReportId} was not found in the local queue.`);
+    }
+    await this.saveEmergencyReports(updated);
+  },
+
+  async pendingEmergencyReports(): Promise<OfflineEmergencyReport[]> {
+    return (await this.getEmergencyReports()).filter((report) => !report.synced);
   },
 
   async queueResult(row: OfflineQueuedResult): Promise<void> {
@@ -882,28 +1122,78 @@ export const OfflineStore = {
     }
 
     const rows = await this.getResults();
-    const next = rows.filter(
-      (r) =>
-        !(
-          r.applicant_code === row.applicant_code &&
-          r.examination_schedule_id === row.examination_schedule_id
-        ),
-    );
-    next.push(row);
+    const { matchQueuedResult } = await import('./resultQueueIdentity');
+    const match = matchQueuedResult(rows, {
+      localId: row.local_id,
+      applicantCode: row.applicant_code,
+      scheduleId: row.examination_schedule_id,
+      answers: row.answers,
+    });
+    if (match.kind === 'duplicate') return;
+    if (match.kind === 'conflict') {
+      throw new Error(
+        'A different result is already queued for this student and examination. The saved result was preserved.',
+      );
+    }
+
+    const next = [...rows];
+    next.push({
+      ...row,
+      synced: false,
+      sync_status: 'pending',
+      sync_error: null,
+      synced_at: null,
+    });
     await this.saveResults(next);
     emitResultsChanged();
   },
 
   async pendingResults(): Promise<OfflineQueuedResult[]> {
     const rows = await this.getResults();
-    return rows.filter((r) => !r.synced);
+    return rows.filter((r) => !r.synced && r.sync_status !== 'synced');
+  },
+
+  async updateResultSyncStatus(
+    localIds: string[],
+    status: 'pending' | 'syncing' | 'failed',
+    error: string | Record<string, string> | null = null,
+  ): Promise<void> {
+    const ids = new Set(localIds);
+    if (!ids.size) return;
+    const rows = await this.getResults();
+    await this.saveResults(
+      rows.map((row) =>
+        ids.has(row.local_id)
+          ? {
+              ...row,
+              synced: false,
+              sync_status: status,
+              sync_error: typeof error === 'object' && error !== null
+                ? error[row.local_id] ?? 'The server did not confirm this result.'
+                : error,
+              synced_at: null,
+            }
+          : row,
+      ),
+    );
+    emitResultsChanged();
   },
 
   async markSynced(localIds: string[]): Promise<void> {
     const set = new Set(localIds);
     const rows = await this.getResults();
     await this.saveResults(
-      rows.map((r) => (set.has(r.local_id) ? { ...r, synced: true } : r)),
+      rows.map((r) =>
+        set.has(r.local_id)
+          ? {
+              ...r,
+              synced: true,
+              sync_status: 'synced' as const,
+              sync_error: null,
+              synced_at: new Date().toISOString(),
+            }
+          : r,
+      ),
     );
     emitResultsChanged();
   },
@@ -952,6 +1242,7 @@ export const OfflineStore = {
     this.invalidatePackCache();
     await deleteIfExists(PACK_ENC_FILE, WEB_PACK_ENC_KEY);
     await deleteIfExists(PACK_FILE, WEB_PACK_KEY);
+    await appStorage.deleteItem(PACK_DASHBOARD_SUMMARY_KEY);
     await appStorage.deleteItem(STORAGE_KEYS.offlinePackReady);
     await appStorage.deleteItem(STORAGE_KEYS.offlinePackAt);
     await appStorage.deleteItem('tcc.offline.pack.sha256');

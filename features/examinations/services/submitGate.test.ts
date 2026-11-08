@@ -66,3 +66,25 @@ test('timeout submission does not require a phrase', () => {
   assert.equal(controller.getState(), 'submitting');
   assert.equal(sent, 1);
 });
+
+test('a failed durable submission can be retried after the failure is reported', async () => {
+  let attempts = 0;
+  const failures: unknown[] = [];
+  const controller = createSubmitController({
+    finalizeSubmission: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('local storage unavailable');
+    },
+    onFailure: (error) => failures.push(error),
+  });
+
+  assert.deepEqual(controller.requestSubmit('timeout'), { ok: true });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(controller.getState(), 'idle');
+  assert.equal(failures.length, 1);
+
+  assert.deepEqual(controller.requestSubmit('timeout'), { ok: true });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 2);
+  assert.equal(controller.getState(), 'submitting');
+});

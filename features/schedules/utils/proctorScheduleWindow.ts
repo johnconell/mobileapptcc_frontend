@@ -17,6 +17,14 @@ type ScheduleTimeInput = {
   timeLabel?: string | null;
 };
 
+type OpenedRoomSchedule = {
+  id: number;
+  exam_date?: string;
+  start_time?: string | null;
+  end_time?: string | null;
+  time_slot?: string | null;
+};
+
 function parseTime(value?: string | null): { hours: number; minutes: number } | null {
   const match = String(value || '')
     .trim()
@@ -201,4 +209,33 @@ export function getProctorScheduleAvailability(
   if (nowMs < start - JOIN_EARLY_MINUTES * 60_000) return 'too_early';
   if (nowMs > end) return 'ended';
   return 'available';
+}
+
+/**
+ * A persisted room claim is active only while its examination window is still
+ * open. This prevents a forgotten lobby from an expired schedule from locking
+ * the proctor out of every later room on the device.
+ */
+export function isPersistedOpenedRoomActive(
+  schedules: readonly OpenedRoomSchedule[],
+  roomKey: string,
+  status: string | null | undefined,
+  nowMs: number,
+): boolean {
+  if (status !== 'lobby_open' && status !== 'in_progress') return false;
+
+  const scheduleId = Number(String(roomKey).split(':', 1)[0]);
+  if (!Number.isInteger(scheduleId) || scheduleId <= 0) return false;
+  const schedule = schedules.find((candidate) => Number(candidate.id) === scheduleId);
+  if (!schedule) return false;
+
+  return getProctorScheduleAvailability(
+    {
+      date: schedule.exam_date || '',
+      startTime: schedule.start_time,
+      endTime: schedule.end_time,
+      timeLabel: schedule.time_slot,
+    },
+    nowMs,
+  ) === 'available';
 }

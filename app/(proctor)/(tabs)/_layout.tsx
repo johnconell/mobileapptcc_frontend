@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  DeviceEventEmitter,
   View,
   Text,
   Pressable,
@@ -8,14 +9,20 @@ import {
   Alert,
   ActivityIndicator,
   LayoutChangeEvent,
+  BackHandler,
 } from 'react-native';
-import { Tabs, useSegments } from 'expo-router';
+import { Tabs, useRouter, useSegments } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { Home, ClipboardList, BarChart3, Settings, RefreshCw } from 'lucide-react-native';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
-import { OfflineExamRepository } from '@/features/synchronization/services/offlineExamRepository';
+import {
+  OfflineExamRepository,
+  resultSyncFailureMessage,
+} from '@/features/synchronization/services/offlineExamRepository';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
+import { RESULTS_CHANGED_EVENT } from '@/features/synchronization/services/offlineStore';
 
 const FAB_SIZE = 62;
 const BAR_HEIGHT = 72;
@@ -64,9 +71,11 @@ function CustomCapsuleTabBar({
   descriptors,
   navigation,
   pendingSyncCount,
+  autoSyncing,
   onSyncComplete,
 }: BottomTabBarProps & {
   pendingSyncCount: number;
+  autoSyncing: boolean;
   onSyncComplete?: () => void;
 }) {
   const insets = useSafeAreaInsets();
@@ -74,22 +83,30 @@ function CustomCapsuleTabBar({
   const [barWidth, setBarWidth] = useState(340);
 
   const handleSync = useCallback(async () => {
-    if (syncing) return;
+    if (syncing || autoSyncing) return;
     try {
       setSyncing(true);
       const result = await OfflineExamRepository.syncQueuedToCloud();
       onSyncComplete?.();
-      Alert.alert('Sync Successful', result.message);
+      Alert.alert(
+        result.message === 'Result synchronization is already in progress.'
+          ? 'Synchronization in progress'
+          : result.synced === 0
+          ? 'No results to sync'
+          : result.synced < pendingSyncCount
+            ? 'Partial sync'
+            : 'Sync complete',
+        result.message,
+      );
     } catch (error) {
-      const msg =
-        error instanceof Error
-          ? error.message
-          : 'Connect to the internet and try again.';
-      Alert.alert('Sync Status', msg);
+      Alert.alert(
+        'Sync failed',
+        resultSyncFailureMessage(error),
+      );
     } finally {
       setSyncing(false);
     }
-  }, [syncing, onSyncComplete]);
+  }, [autoSyncing, syncing, onSyncComplete, pendingSyncCount]);
 
   const onBarLayout = (e: LayoutChangeEvent) => {
     const w = Math.round(e.nativeEvent.layout.width);
@@ -199,11 +216,11 @@ function CustomCapsuleTabBar({
               pendingSyncCount > 0 && styles.syncFabPending,
             ]}
             onPress={handleSync}
-            disabled={syncing}
+            disabled={syncing || autoSyncing}
             accessibilityRole="button"
             accessibilityLabel="Sync results to Admin"
           >
-            {syncing ? (
+            {syncing || autoSyncing ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
               <>
@@ -211,7 +228,7 @@ function CustomCapsuleTabBar({
                 <Text style={styles.syncFabLabel}>Sync</Text>
               </>
             )}
-            {pendingSyncCount > 0 && !syncing && (
+            {pendingSyncCount > 0 && !syncing && !autoSyncing && (
               <View style={styles.syncFabBadge}>
                 <Text style={styles.syncFabBadgeText}>
                   {pendingSyncCount > 99 ? '99+' : pendingSyncCount}
@@ -227,14 +244,19 @@ function CustomCapsuleTabBar({
 
 export default function ProctorTabsLayout() {
   const segments = useSegments();
+  const router = useRouter();
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [autoSyncing, setAutoSyncing] = useState(false);
 
   const refreshPending = useCallback(async () => {
     try {
       const pending = await OfflineStore.pendingResults();
       setPendingSyncCount(pending.length);
-    } catch {
-      setPendingSyncCount(0);
+      setAutoSyncing(pending.some((result) => result.sync_status === 'syncing'));
+    } catch (error) {
+      console.error('[RESULT SYNC] Unable to read the persistent result queue:', {
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
     }
   }, []);
 
@@ -243,19 +265,43 @@ export default function ProctorTabsLayout() {
     const checkPending = async () => {
       try {
         const pending = await OfflineStore.pendingResults();
-        if (!cancelled) setPendingSyncCount(pending.length);
-      } catch {
-        if (!cancelled) setPendingSyncCount(0);
+        if (!cancelled) {
+          setPendingSyncCount(pending.length);
+          setAutoSyncing(pending.some((result) => result.sync_status === 'syncing'));
+        }
+      } catch (error) {
+        console.error('[RESULT SYNC] Unable to read the persistent result queue:', {
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        });
       }
     };
 
     void checkPending();
+    const resultsSubscription = DeviceEventEmitter.addListener(
+      RESULTS_CHANGED_EVENT,
+      () => void checkPending(),
+    );
     const interval = setInterval(checkPending, 3000);
     return () => {
       cancelled = true;
+      resultsSubscription.remove();
       clearInterval(interval);
     };
   }, [segments]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      const currentTab = segments[segments.length - 1];
+      if (currentTab && currentTab !== 'dashboard') {
+        router.replace('/(proctor)/(tabs)/dashboard');
+        return true;
+      }
+      void ExamSecurityService.moveTaskToBackground();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [router, segments]);
 
   return (
     <Tabs
@@ -263,6 +309,7 @@ export default function ProctorTabsLayout() {
         <CustomCapsuleTabBar
           {...props}
           pendingSyncCount={pendingSyncCount}
+          autoSyncing={autoSyncing}
           onSyncComplete={refreshPending}
         />
       )}

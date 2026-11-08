@@ -142,11 +142,10 @@ export default function StudentConfirmationScreen() {
           passkey: effectivePasskey,
         });
       } catch (err) {
-        setJoinError(
-          err instanceof Error
-            ? err.message
-            : 'Could not download examination package. Connect to the official examination Wi-Fi and try again.',
-        );
+        setJoinError(userFacingError(
+          err,
+          'Unable to receive the examination pack from the proctor. Check the local Wi-Fi connection and try again.',
+        ));
         return;
       }
 
@@ -222,9 +221,14 @@ export default function StudentConfirmationScreen() {
       setStatusMessage('Registering with examination lobby...');
       const effectivePasskey =
         examPasskey || (await appStorage.getItem('tcc.student.exam.passkey')) || '';
-      const lobby = effectivePasskey
-        ? await LobbyRepository.joinWithPasskey(verifiedStudent, scannedSessionId, effectivePasskey)
-        : await LobbyRepository.joinStudent(verifiedStudent, scannedSessionId);
+      if (!effectivePasskey) {
+        throw new Error('Examination passkey verification is required before joining.');
+      }
+      const lobby = await LobbyRepository.joinWithPasskey(
+        verifiedStudent,
+        scannedSessionId,
+        effectivePasskey,
+      );
       requireGuidedAccess();
       const updatedVerified = { ...verifiedStudent };
       const regId = lobby.registration_id || lobby.students?.find((s) => s.studentId === updatedVerified.studentId)?.id;

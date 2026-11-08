@@ -48,6 +48,7 @@ import {
 import { Button } from '@/shared/components/ui';
 import { Skeleton, SkeletonCard, SkeletonCircle } from '@/shared/components/ui/Skeleton';
 import { useSkeletonLoadingTimeout } from '@/components/skeleton';
+import { userFacingError } from '@/shared/utils/userFacingError';
 import {
   OfflineStore,
   RESULTS_CHANGED_EVENT,
@@ -56,6 +57,7 @@ import {
 } from '@/features/synchronization/services/offlineStore';
 import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { sortStudentsAlphabetical } from '@/features/synchronization/utils/studentNameOrder';
 
 // =============================================================================
 // TYPES
@@ -72,6 +74,9 @@ type LobbyStudentItem = {
   status: 'passed' | 'failed' | 'in_progress' | 'enrolled';
   statusLabel: string;
   synced: boolean;
+  syncStatus: 'pending' | 'syncing' | 'synced' | 'failed';
+  syncError?: string | null;
+  examSet?: string;
 };
 
 type ExamLobby = {
@@ -277,9 +282,11 @@ export default function ProctorResultsScreen() {
       setOpenedRooms(opened);
       resultsLoadedRef.current = true;
     } catch (error) {
-      console.error('Failed to load examination results:', error);
+      console.error('Failed to load examination results:', {
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
       setResultsLoadError(
-        error instanceof Error ? error.message : 'Unable to load examination results.',
+        userFacingError(error, 'Unable to load examination results. Retry when the local data store is available.'),
       );
     } finally {
       setRefreshing(false);
@@ -365,18 +372,26 @@ export default function ProctorResultsScreen() {
           status: isPass ? 'passed' : 'failed',
           statusLabel: isPass ? 'PASSED' : 'FAILED',
           synced: Boolean(res.synced),
+          syncStatus: res.synced
+            ? 'synced'
+            : res.sync_status === 'syncing' || res.sync_status === 'failed'
+              ? res.sync_status
+              : 'pending',
+          syncError: res.sync_error,
+          examSet: res.exam_set || 'Set 1',
         });
       }
 
-      const passed = students.filter((s) => s.status === 'passed').length;
-      const failed = students.filter((s) => s.status === 'failed').length;
-      const completedStudents = students.filter((s) => s.score != null);
+      const sortedStudents = sortStudentsAlphabetical(students);
+      const passed = sortedStudents.filter((s) => s.status === 'passed').length;
+      const failed = sortedStudents.filter((s) => s.status === 'failed').length;
+      const completedStudents = sortedStudents.filter((s) => s.score != null);
       const avgScore =
         completedStudents.length > 0
           ? completedStudents.reduce((acc, s) => acc + (s.score || 0), 0) /
             completedStudents.length
           : null;
-      const hasUnsynced = students.some((s) => s.score != null && !s.synced);
+      const hasUnsynced = sortedStudents.some((s) => s.score != null && !s.synced);
 
       list.push({
         id: key,
@@ -389,12 +404,12 @@ export default function ProctorResultsScreen() {
         timeSlot,
         status: opened.status as 'in_progress' | 'ended',
         statusLabel: opened.status === 'in_progress' ? 'IN PROGRESS' : 'ENDED',
-        studentCount: students.length,
+        studentCount: sortedStudents.length,
         passedCount: passed,
         failedCount: failed,
         averageScore: avgScore,
         hasUnsynced,
-        students,
+        students: sortedStudents,
       });
     }
 
@@ -443,16 +458,24 @@ export default function ProctorResultsScreen() {
           status: isPass ? 'passed' : 'failed',
           statusLabel: isPass ? 'PASSED' : 'FAILED',
           synced: Boolean(res.synced),
+          syncStatus: res.synced
+            ? 'synced'
+            : res.sync_status === 'syncing' || res.sync_status === 'failed'
+              ? res.sync_status
+              : 'pending',
+          syncError: res.sync_error,
+          examSet: res.exam_set || 'Set 1',
         };
       });
 
-      const passed = students.filter((s) => s.status === 'passed').length;
-      const failed = students.filter((s) => s.status === 'failed').length;
+      const sortedStudents = sortStudentsAlphabetical(students);
+      const passed = sortedStudents.filter((s) => s.status === 'passed').length;
+      const failed = sortedStudents.filter((s) => s.status === 'failed').length;
       const avgScore =
-        students.length > 0
-          ? students.reduce((acc, s) => acc + (s.score || 0), 0) / students.length
+        sortedStudents.length > 0
+          ? sortedStudents.reduce((acc, s) => acc + (s.score || 0), 0) / sortedStudents.length
           : null;
-      const hasUnsynced = students.some((s) => !s.synced);
+      const hasUnsynced = sortedStudents.some((s) => !s.synced);
 
       list.push({
         id: key,
@@ -465,12 +488,12 @@ export default function ProctorResultsScreen() {
         timeSlot,
         status: 'ended',
         statusLabel: 'ENDED',
-        studentCount: students.length,
+        studentCount: sortedStudents.length,
         passedCount: passed,
         failedCount: failed,
         averageScore: avgScore,
         hasUnsynced,
-        students,
+        students: sortedStudents,
       });
     }
 
@@ -490,6 +513,12 @@ export default function ProctorResultsScreen() {
   const overallPassRate =
     totalSubmissions > 0 ? (passedSubmissions / totalSubmissions) * 100 : 0;
   const pendingSyncCount = rawResults.filter((r) => !r.synced).length;
+  const lastSuccessfulSyncAt = rawResults.reduce<string | null>((latest, result) => {
+    if (!result.synced || !result.synced_at) return latest;
+    return !latest || Date.parse(result.synced_at) > Date.parse(latest)
+      ? result.synced_at
+      : latest;
+  }, null);
 
   // Selected Lobby for Level 2 drill-down
   const selectedLobby = useMemo(() => {
@@ -816,9 +845,14 @@ export default function ProctorResultsScreen() {
                     <Text style={[styles.txTitle, { color: colors.textPrimary }]} numberOfLines={1}>
                       {student.name}
                     </Text>
-                    <Text style={[styles.txSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>
-                      {student.applicantCode} · {student.course}
-                    </Text>
+                    <View style={styles.txSubRow}>
+                      <Text style={[styles.txSubtitle, { color: colors.textSecondary }]} numberOfLines={1}>
+                        {student.applicantCode} · {student.course}
+                      </Text>
+                      <View style={styles.examSetBadge}>
+                        <Text style={styles.examSetBadgeText}>{student.examSet || 'Set 1'}</Text>
+                      </View>
+                    </View>
                     {student.itemsCorrect != null && student.itemsTotal != null && (
                       <Text style={[styles.txItemsScore, { color: colors.textMuted }]}>
                         {student.itemsCorrect}/{student.itemsTotal} items correct
@@ -846,17 +880,31 @@ export default function ProctorResultsScreen() {
                       {student.synced ? (
                         <View style={styles.txSyncedRow}>
                           <Check size={11} color="#22C55E" />
-                          <Text style={styles.txSyncedText}>Synced</Text>
+                          <Text style={styles.txSyncedText}>Successfully Synced</Text>
                         </View>
                       ) : student.score != null ? (
                         <View style={styles.txUnsyncedRow}>
                           <View style={styles.txUnsyncedDot} />
-                          <Text style={styles.txUnsyncedText}>Pending</Text>
+                          <Text style={styles.txUnsyncedText}>
+                            {student.syncStatus === 'syncing'
+                              ? 'Syncing'
+                              : student.syncStatus === 'failed'
+                                ? 'Sync Failed'
+                                : 'Pending Sync'}
+                          </Text>
                         </View>
                       ) : (
                         <Text style={styles.txTakingText}>Taking Exam</Text>
                       )}
                     </View>
+                    {student.syncStatus === 'failed' && student.syncError ? (
+                      <Text
+                        style={[styles.txUnsyncedText, { maxWidth: 105, fontSize: 9, textAlign: 'right' }]}
+                        numberOfLines={2}
+                      >
+                        {student.syncError}
+                      </Text>
+                    ) : null}
                   </View>
                 </View>
               );
@@ -1052,6 +1100,11 @@ export default function ProctorResultsScreen() {
                 : `No submissions yet · Pass mark ${passingPercentage}%`}
             </Text>
           </View>
+          <Text style={[styles.walletTickerText, { marginTop: 6, opacity: 0.8 }]} numberOfLines={1}>
+            {lastSuccessfulSyncAt
+              ? `Last successful sync: ${new Date(lastSuccessfulSyncAt).toLocaleString()}`
+              : `Pending sync: ${pendingSyncCount} · No cloud sync confirmed yet`}
+          </Text>
         </View>
 
         {/* Room & Submissions Telemetry */}
@@ -1323,12 +1376,12 @@ export default function ProctorResultsScreen() {
                     {!lobby.hasUnsynced ? (
                       <View style={styles.txSyncedRow}>
                         <Check size={11} color="#22C55E" />
-                        <Text style={styles.txSyncedText}>Confirmed</Text>
+                        <Text style={styles.txSyncedText}>Successfully Synced</Text>
                       </View>
                     ) : (
                       <View style={styles.txUnsyncedRow}>
                         <View style={styles.txUnsyncedDot} />
-                        <Text style={styles.txUnsyncedText}>Pending</Text>
+                        <Text style={styles.txUnsyncedText}>Pending Sync</Text>
                       </View>
                     )}
                     <ChevronRight size={14} color={colors.textMuted} style={{ marginLeft: 4 }} />
@@ -1779,6 +1832,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#71717A',
     fontWeight: '500',
+  },
+  txSubRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
+  examSetBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 5,
+    backgroundColor: '#8B0000',
+  },
+  examSetBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
   },
   txItemsScore: {
     fontSize: 11,

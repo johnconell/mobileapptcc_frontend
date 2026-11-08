@@ -1,7 +1,6 @@
 import React from 'react';
 import { Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useKeepAwake } from 'expo-keep-awake';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { ShieldAlert, Mail } from 'lucide-react-native';
 import {
@@ -13,12 +12,13 @@ import { SuccessIllustration } from '@/features/examinations/components/SuccessI
 import { clearApplicantExamMaterial } from '@/features/applicants/services/applicantExamCleanup';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
+import { ExamSubmissionStore } from '@/features/examinations/services/examSubmissionStore';
 import { examProcess } from '@/shared/theme/examProcess';
+import { releaseExamSessionRestrictions } from '@/features/examinations/services/examSessionRestrictions';
 
 const AUTO_HOME_SECONDS = 12;
 
 export default function CompletedScreen() {
-  useKeepAwake();
   const router = useRouter();
   const resetExam = useExamStore((s) => s.reset);
   const terminationReason = useExamStore((s) => s.terminationReason);
@@ -35,10 +35,26 @@ export default function CompletedScreen() {
       : 'inyong Gmail';
 
   const goHome = React.useCallback(() => {
-    void clearApplicantExamMaterial();
-    resetExam();
-    resetStudent();
-    router.replace('/');
+    void (async () => {
+      await releaseExamSessionRestrictions('session_ended').catch(() => undefined);
+      await clearApplicantExamMaterial().catch(() => undefined);
+      const submission = await ExamSubmissionStore.load().catch((error) => {
+        console.warn('[SUBMISSION] Could not inspect the completed receipt before cleanup:', {
+          errorName: error instanceof Error ? error.name : 'StorageError',
+        });
+        return null;
+      });
+      if (submission?.status === 'confirmed') {
+        await ExamSubmissionStore.clear().catch((error) => {
+          console.warn('[SUBMISSION] Confirmed receipt could not be cleared after acknowledgement:', {
+            errorName: error instanceof Error ? error.name : 'StorageError',
+          });
+        });
+      }
+      resetExam();
+      resetStudent();
+      router.replace('/');
+    })();
   }, [resetExam, resetStudent, router]);
 
   const [countdown, setCountdown] = React.useState(AUTO_HOME_SECONDS);

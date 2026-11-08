@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { STORAGE_KEYS } from '@/shared/constants';
 import { appStorage } from '@/shared/services/storage';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
+import { normalizePasskey } from '@/features/examinations/services/passkeyFormat';
 import { encryptJson, decryptJson } from '@/features/synchronization/services/offlineStore';
 import { persistDisconnectGraceSeconds } from '@/shared/utils/gracePeriod';
 import {
@@ -206,7 +207,7 @@ export const ExamPreloader = {
             method: 'POST',
             body: {
               code: input.code || (await appStorage.getItem(STORAGE_KEYS.examinationCode)),
-              passkey: input.passkey.trim().toUpperCase(),
+              passkey: normalizePasskey(input.passkey),
             },
             timeoutMs: 25000,
           });

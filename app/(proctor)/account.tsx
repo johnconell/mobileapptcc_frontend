@@ -30,6 +30,7 @@ import { AuthRepository } from '@/features/authentication/repositories/AuthRepos
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
 import { ProctorAuthCache } from '@/features/authentication/services/proctorAuthCache';
+import { userFacingError } from '@/shared/utils/userFacingError';
 
 const AVATAR_COLORS = [
   { id: '1', bg: '#003366', border: '#0055A4', label: 'Classic Navy' },
@@ -103,8 +104,11 @@ export default function ProctorAccountScreen() {
         'Profile Updated',
         'Your name and Gmail address have been updated successfully (the same as Facebook Personal Details).',
       );
-    } catch {
-      Alert.alert('Error', 'Unable to save profile changes. Please try again.');
+    } catch (error) {
+      Alert.alert(
+        'Profile update failed',
+        userFacingError(error, 'Unable to save profile changes. Please try again.'),
+      );
     }
   };
 
@@ -125,9 +129,18 @@ export default function ProctorAccountScreen() {
 
     setSavingPassword(true);
     try {
-      // In offline cache, update password hash if offline account exists
-      if (gmail) {
-        await ProctorAuthCache.updatePassword(gmail, newPassword);
+      if (!gmail) {
+        Alert.alert('Unable to verify password', 'A proctor email is required to locate the offline account cache.');
+        return;
+      }
+      const currentAccount = await ProctorAuthCache.verify(gmail, currentPassword);
+      if (!currentAccount) {
+        Alert.alert('Current password incorrect', 'Enter the current password saved for offline sign-in, then try again.');
+        return;
+      }
+      const updated = await ProctorAuthCache.updatePassword(gmail, newPassword);
+      if (!updated) {
+        throw new Error('Unable to update the offline password cache.');
       }
 
       setCurrentPassword('');
@@ -135,11 +148,14 @@ export default function ProctorAccountScreen() {
       setConfirmPassword('');
 
       Alert.alert(
-        'Password Changed',
-        'Your password has been securely updated and encrypted across your sessions.',
+        'Offline password updated',
+        'The new password is saved securely on this device for offline sign-in. Change your central account password through the online account service.',
       );
-    } catch {
-      Alert.alert('Error', 'Unable to update password. Please check your connection or cache.');
+    } catch (error) {
+      Alert.alert(
+        'Password update failed',
+        userFacingError(error, 'Unable to update the password in the local account cache. Please try again.'),
+      );
     } finally {
       setSavingPassword(false);
     }

@@ -18,7 +18,7 @@ const sources = [
   'database/migrations/2026_07_24_010000_create_examination_domain_tables.php',
   'database/migrations/2026_07_30_211000_create_examination_settings_table.php',
 ];
-const expected = 'a494073069c13e5f3dad66ed1554ea13c8c894ff62d10d7e6f40953d93ae3327';
+const expected = 'edc96eac4cedbe88c41785ae47ca7132dccadefd94e2492e9f06b6f44d9f6ab6';
 const hash = crypto.createHash('sha256');
 for (const source of sources) {
   const file = path.join(backendRoot, source);
@@ -32,4 +32,3 @@ if (actual !== expected) {
   process.exit(1);
 }
 console.log(`Backend contract fingerprint OK: ${actual}`);
-
