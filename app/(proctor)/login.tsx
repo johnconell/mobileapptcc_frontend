@@ -14,8 +14,6 @@ import {
 import { useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import * as WebBrowser from 'expo-web-browser';
-import * as Google from 'expo-auth-session/providers/google';
 import { ArrowLeft } from 'lucide-react-native';
 import { Button } from '@/shared/components/ui/Button';
 import { Input } from '@/shared/components/ui/Input';
@@ -31,8 +29,6 @@ import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { userFacingError } from '@/shared/utils/userFacingError';
 
-WebBrowser.maybeCompleteAuthSession();
-
 export default function ProctorLoginScreen() {
   const { colors: themeColors } = useAppTheme();
   const insets = useSafeAreaInsets();
@@ -41,12 +37,6 @@ export default function ProctorLoginScreen() {
   const setProfile = useProctorStore((s) => s.setProfile);
   const emailInput = useRef<TextInput>(null);
   const passwordInput = useRef<TextInput>(null);
-  const [googleRequest, , promptGoogleSignIn] = Google.useIdTokenAuthRequest({
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
-    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
-    androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
-    scopes: ['openid', 'profile', 'email'],
-  });
 
   useEffect(() => {
     if (profile) {
@@ -117,56 +107,11 @@ export default function ProctorLoginScreen() {
 
   const onGoogle = useCallback(async () => {
     setFormError(null);
-    if (
-      !process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID &&
-      !process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID &&
-      !process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID
-    ) {
-      setFormError('Google sign-in is not configured for this app. Please contact the administrator.');
-      return;
-    }
-    if (!googleRequest) {
-      setFormError('Google sign-in is not ready. Check your connection and try again.');
-      return;
-    }
-
-    setGoogleLoading(true);
-    try {
-      const response = await promptGoogleSignIn();
-      if (response.type === 'cancel' || response.type === 'dismiss') {
-        setFormError('Google sign-in was cancelled.');
-        return;
-      }
-      if (response.type === 'error') {
-        setFormError('Google sign-in could not be completed. Please try again.');
-        return;
-      }
-      if (response.type !== 'success') {
-        setFormError('Google sign-in did not complete. Please try again.');
-        return;
-      }
-
-      const idToken = response.params.id_token;
-      if (!idToken) {
-        setFormError('Google did not return a verified sign-in token. Please try again.');
-        return;
-      }
-
-      const result = await AuthRepository.loginWithGoogleIdToken(idToken);
-      if (!result.success || !result.profile) {
-        setFormError(result.message ?? 'Google sign-in failed.');
-        return;
-      }
-      completeLogin(result.profile);
-    } catch (error) {
-      console.warn('[PROCTOR LOGIN] Google sign-in failed:', {
-        errorName: error instanceof Error ? error.name : 'UnknownError',
-      });
-      setFormError(userFacingError(error, 'Google sign-in is unavailable. Connect to the internet and try again.'));
-    } finally {
-      setGoogleLoading(false);
-    }
-  }, [completeLogin, googleRequest, promptGoogleSignIn]);
+    setGoogleLoading(false);
+    setFormError(
+      'Google sign-in is temporarily unavailable in this app build. Use your assigned email and password.',
+    );
+  }, []);
 
   return (
     <KeyboardAvoidingView

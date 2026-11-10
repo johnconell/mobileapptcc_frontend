@@ -115,7 +115,7 @@ function toMobileSession(row: BackendSchedule): ExamSession {
     timeLabel,
     startTime: formatTime(row.start_time),
     endTime: formatTime(row.end_time),
-    venue: row.venue || 'TBD',
+    venue: row.venue || 'Room assignment available in the downloaded pack',
     batchNumber: row.batch_code || `Batch ${row.id}`,
     registeredStudents: Number(row.registrations_count ?? row.expected_examinees ?? 0),
     durationMinutes: 60,
@@ -298,9 +298,11 @@ export const ScheduleRepository = {
             session_type: row.session_type,
             reschedule_state: row.reschedule_state,
             schedule_revision: row.schedule_revision,
-            registrations_count: pack.registrations.filter(
-              (r) => Number(r.examination_schedule_id) === Number(row.id),
-            ).length,
+            registrations_count:
+              row.registration_count ??
+              pack.registrations.filter(
+                (r) => Number(r.examination_schedule_id) === Number(row.id),
+              ).length,
           }),
         )
         .sort((a, b) => a.startTime.localeCompare(b.startTime));
@@ -477,11 +479,13 @@ export const ScheduleRepository = {
             id: row.id,
             room_name: row.room_name,
             capacity: row.capacity,
-            student_count: pack.registrations.filter(
-              (registration) =>
-                Number(registration.examination_schedule_id) === sid &&
-                Number(registration.assigned_room_id) === Number(row.id),
-            ).length,
+            student_count:
+              row.student_count ??
+              pack.registrations.filter(
+                (registration) =>
+                  Number(registration.examination_schedule_id) === sid &&
+                  Number(registration.assigned_room_id) === Number(row.id),
+              ).length,
             proctor_id: assignedProctorId,
             proctor_name: assignedProctorName,
             assigned_proctor_id: assignedProctorId,

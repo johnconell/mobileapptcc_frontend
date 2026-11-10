@@ -962,6 +962,28 @@ function ProctorLobbyContent() {
     });
   };
 
+  const resumeExistingRoom = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const restored = await PeerExamServer.restore();
+      setHosting(PeerExamServer.info());
+      if (!restored) throw new Error('The saved examination room is not available on this device.');
+      await refresh();
+      Alert.alert(
+        'Examination resumed',
+        'The existing room is active again. The original timer, roster, and saved answers were preserved.',
+      );
+    } catch (error) {
+      Alert.alert(
+        'Unable to resume examination',
+        userFacingError(error, 'Reconnect to the examination Wi‑Fi and try again.'),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const displayCode = cloudCode || lobby?.examinationCode || '----';
   const displayQrValue = lobby?.qrValue || cloudQrValue || displayCode;
 
@@ -1334,6 +1356,21 @@ function ProctorLobbyContent() {
               <Text style={styles.accessCodeHint} maxFontSizeMultiplier={1.2}>
                 Room access code
               </Text>
+
+              {lobby.status === 'in_progress' && hosting.listenerState !== 'live' ? (
+                <View style={styles.recoveryActionBox}>
+                  <Text style={styles.recoveryActionText}>
+                    This saved examination is waiting for the local LAN listener to reconnect.
+                  </Text>
+                  <Button
+                    title="Resume Examination"
+                    variant="primary"
+                    loading={busy}
+                    onPress={() => void resumeExistingRoom()}
+                    style={{ backgroundColor: LOBBY.maroon }}
+                  />
+                </View>
+              ) : null}
 
               {/* Two equal actions: Regenerate QR (outline) · Start Examination (filled) */}
               <View style={styles.passActionsRow}>
@@ -2646,6 +2683,21 @@ const styles = StyleSheet.create({
   },
   accessCodeHint: {
     fontSize: 13,
+    color: LOBBY.muted,
+    textAlign: 'center',
+  },
+  recoveryActionBox: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: LOBBY.softBorder,
+    backgroundColor: LOBBY.softFill,
+    gap: 8,
+  },
+  recoveryActionText: {
+    fontSize: 12,
+    lineHeight: 17,
     color: LOBBY.muted,
     textAlign: 'center',
   },

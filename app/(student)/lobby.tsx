@@ -50,6 +50,7 @@ function useLobbyController() {
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const storedSnapshot = useLobbyStore((s) => s.snapshot);
+  const setSnapshot = useLobbyStore((s) => s.setSnapshot);
   const setQuestions = useExamStore((s) => s.setQuestions);
   const setSessionId = useExamStore((s) => s.setSessionId);
   const startExam = useExamStore((s) => s.startExam);
@@ -62,12 +63,52 @@ function useLobbyController() {
   const [authority, setAuthority] = useState<AuthorityStatus>('WAITING');
   const [lastPulseAt, setLastPulseAt] = useState<number>(Date.now());
   const [pulseOk, setPulseOk] = useState(true);
+  const [durableParticipation, setDurableParticipation] = useState(false);
+  const [hydratedSessionId, setHydratedSessionId] = useState<string | null>(null);
 
   const hasEntered = useRef(false);
   const downloading = useRef(false);
   const entering = useRef(false);
   const ackedReceived = useRef(false);
   const isRemovedRef = useRef(false);
+
+  // Zustand stores are process memory only. Hydrate the durable participation
+  // marker before route guards run, otherwise a cold restart briefly appears
+  // unregistered and redirects lobby -> confirmation -> passkey -> welcome.
+  useEffect(() => {
+    let cancelled = false;
+    if (!scannedSessionId) {
+      setHydratedSessionId(null);
+      setDurableParticipation(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void (async () => {
+      const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      let progressSessionId: string | null = null;
+      try {
+        const raw = await appStorage.getItem(STORAGE_KEYS.studentProgress);
+        progressSessionId = raw ? String((JSON.parse(raw) as { sessionId?: string }).sessionId ?? '') : null;
+      } catch {
+        progressSessionId = null;
+      }
+      if (cancelled) return;
+
+      const hasDurableSession = Boolean(token && progressSessionId === String(scannedSessionId));
+      setDurableParticipation(hasDurableSession);
+      if (hasDurableSession && !storedSnapshot) {
+        const snapshot = await LobbyRepository.getLobby(scannedSessionId).catch(() => null);
+        if (!cancelled && snapshot) setSnapshot(snapshot);
+      }
+      if (!cancelled) setHydratedSessionId(String(scannedSessionId));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [scannedSessionId, storedSnapshot, setSnapshot]);
 
   // Room details come from the join snapshot. Do not poll GET /lobby — that path
   // fails on expo-http-server and starves the start signal.
@@ -387,10 +428,11 @@ function useLobbyController() {
 
   // Registration is completed on Confirm after agreement and successful pinning.
   useEffect(() => {
-    if (!scannedSessionId || !verifiedStudent || !storedSnapshot) {
+    if (hydratedSessionId !== String(scannedSessionId ?? '')) return;
+    if (!scannedSessionId || !verifiedStudent || (!storedSnapshot && !durableParticipation)) {
       router.replace('/(student)/confirmation' as any);
     }
-  }, [scannedSessionId, verifiedStudent, storedSnapshot, router]);
+  }, [scannedSessionId, verifiedStudent, storedSnapshot, durableParticipation, hydratedSessionId, router]);
 
   return {
     state,
@@ -432,6 +474,7 @@ export default function StudentLobbyScreen() {
   }
 
   const { lobbyData, currentStudent, isStale, progress, packDownloadError, authority, pulseOk } = controller;
+  const proctorReconnecting = controller.lobbyQuery.isError || isStale || !pulseOk;
   const examReady = Boolean(progress.moduleReady && progress.hashVerified && progress.percent >= 100);
 
   const handleExit = () => {
@@ -513,7 +556,7 @@ export default function StudentLobbyScreen() {
       </View>
       <Header
         title={lobbyData?.schedule?.name || "Entrance Examination"}
-        subtitle={isStale ? "Syncing Connection..." : "Secure Student Dashboard"}
+        subtitle={proctorReconnecting ? "Proctor reconnecting..." : "Secure Student Dashboard"}
         onBack={handleExit}
       />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -561,6 +604,8 @@ export default function StudentLobbyScreen() {
               <Text style={styles.waitingBannerTitle}>
                 {authority === 'ENDED'
                   ? 'Examination Ended'
+                  : proctorReconnecting
+                    ? 'Waiting for Proctor Connection'
                   : packDownloadError
                     ? 'Examination pack unavailable'
                   : controller.state === 'STARTING' || authority === 'ACTIVE'
@@ -572,6 +617,8 @@ export default function StudentLobbyScreen() {
               <Text style={styles.waitingBannerSub}>
                 {authority === 'ENDED'
                   ? 'This examination has ended. Tap Return Home to leave.'
+                  : proctorReconnecting
+                    ? 'Your identity, answers, and examination progress remain saved on this phone. Reconnecting automatically over the exam Wi‑Fi.'
                   : packDownloadError
                     ? packDownloadError
                   : controller.state === 'STARTING' || authority === 'ACTIVE'
@@ -676,7 +723,7 @@ export default function StudentLobbyScreen() {
         <View style={styles.networkBox}>
            <View style={[styles.pulse, { backgroundColor: (controller.lobbyQuery.isError || isStale) ? colors.danger : colors.success }]} />
            <Text style={styles.networkText}>
-              {(controller.lobbyQuery.isError || isStale) ? "Signal Interrupted" : `LOCAL LINK ACTIVE · PULSE ${new Date(controller.lastSeen).toLocaleTimeString()}`}
+              {proctorReconnecting ? "PROCTOR RECONNECTING · SAVED PROGRESS PRESERVED" : `LOCAL LINK ACTIVE · PULSE ${new Date(controller.lastSeen).toLocaleTimeString()}`}
            </Text>
            <Pressable onPress={() => void controller.lobbyQuery.refetch()} style={styles.refreshBtn}>
               <RefreshCw size={14} color={examProcess.accent} />

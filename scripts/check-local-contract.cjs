@@ -18,7 +18,7 @@ const sources = [
   'database/migrations/2026_07_24_010000_create_examination_domain_tables.php',
   'database/migrations/2026_07_30_211000_create_examination_settings_table.php',
 ];
-const expected = 'edc96eac4cedbe88c41785ae47ca7132dccadefd94e2492e9f06b6f44d9f6ab6';
+const expected = '21df5488e0160f04dfff88821e473f4b147e56e5a58bf83236b4515500f51d15';
 const hash = crypto.createHash('sha256');
 for (const source of sources) {
   const file = path.join(backendRoot, source);

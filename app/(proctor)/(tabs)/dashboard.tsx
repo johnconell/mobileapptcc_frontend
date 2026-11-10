@@ -96,6 +96,10 @@ export default function ProctorDashboardScreen() {
 
       const primarySchedule = packSummary?.schedules?.[0];
       const examTitle = primarySchedule?.title || 'Entrance Examination';
+      const integrityWarnings = primarySchedule?.integrity_warnings ?? [];
+      if (integrityWarnings.length > 0) {
+        setLoadError(`Room assignment warning: ${integrityWarnings.join(' ')}`);
+      }
 
       // Registered applicants for today's examination
       const todayRegistered =
@@ -123,7 +127,8 @@ export default function ProctorDashboardScreen() {
       if (!schedStart) schedStart = '08:00 AM';
       if (!schedEnd) schedEnd = '10:00 AM';
 
-      const venueText = primarySchedule?.venue || 'Testing Center · Main Campus';
+      const roomNames = primarySchedule?.rooms?.map((room) => room.room_name).filter(Boolean) ?? [];
+      const venueText = primarySchedule?.venue || roomNames.join(', ') || 'Room assignment not configured';
 
       setStats({
         totalApplicants: packSummary?.students ?? 0,

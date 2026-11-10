@@ -50,6 +50,11 @@ export type OfflinePack = {
     scope: 'assigned_rooms' | 'administrator';
     schedule_ids: number[];
   };
+  active_question_bank_id?: number | null;
+  integrity_warnings?: Array<{
+    examination_schedule_id: number;
+    message: string;
+  }>;
   schedules: Array<{
     id: number;
     title: string;
@@ -66,6 +71,13 @@ export type OfflinePack = {
     reschedule_state?: 'proposed' | 'confirmed' | 'review_required' | null;
     reschedule_confirmed_at?: string | null;
     schedule_revision?: number;
+    expected_examinees?: number;
+    registration_count?: number;
+    assigned_registration_count?: number;
+    unassigned_registration_count?: number;
+    accessible_registration_count?: number;
+    room_capacity?: number;
+    integrity_warnings?: string[];
     rooms_managed?: boolean;
     rooms_revision?: number;
     rooms_published_at?: string | null;
@@ -77,6 +89,8 @@ export type OfflinePack = {
       proctor_id?: number | null;
       room_id?: number | null;
       reschedule_capacity?: number;
+      student_count?: number;
+      total_student_count?: number;
       emergency_suspended?: boolean;
     }>;
   }>;
@@ -164,6 +178,17 @@ export type OfflinePackDashboardSnapshot = {
     end_time?: string;
     time_slot?: string;
     venue?: string;
+    registration_count?: number;
+    assigned_registration_count?: number;
+    unassigned_registration_count?: number;
+    accessible_registration_count?: number;
+    integrity_warnings?: string[];
+    rooms?: Array<{
+      id: number;
+      room_name: string;
+      capacity: number;
+      student_count: number;
+    }>;
   }>;
   registrationsBySchedule: Record<string, number>;
   students: number;
@@ -176,6 +201,8 @@ export type OfflineQueuedResult = {
   local_id: string;
   applicant_code: string;
   examination_schedule_id: number;
+  examination_room_id?: number | null;
+  question_bank_id?: number | null;
   applicant_name?: string;
   attendance_status: string;
   result_status: string;
@@ -473,6 +500,12 @@ function buildDashboardSnapshot(
     const key = String(registration.examination_schedule_id);
     registrationsBySchedule[key] = (registrationsBySchedule[key] ?? 0) + 1;
   }
+  for (const schedule of pack.schedules ?? []) {
+    const total = Number(schedule.registration_count);
+    if (Number.isFinite(total) && total >= 0) {
+      registrationsBySchedule[String(schedule.id)] = total;
+    }
+  }
 
   const gradingSettings = (pack as OfflinePack & {
     grading_settings?: Array<{ passing_percentage?: number }>;
@@ -490,9 +523,23 @@ function buildDashboardSnapshot(
       end_time: schedule.end_time,
       time_slot: schedule.time_slot,
       venue: schedule.venue,
+      registration_count: schedule.registration_count,
+      assigned_registration_count: schedule.assigned_registration_count,
+      unassigned_registration_count: schedule.unassigned_registration_count,
+      accessible_registration_count: schedule.accessible_registration_count,
+      integrity_warnings: schedule.integrity_warnings,
+      rooms: (schedule.rooms ?? []).map((room) => ({
+        id: room.id,
+        room_name: room.room_name,
+        capacity: room.capacity,
+        student_count: Number(room.student_count ?? 0),
+      })),
     })),
     registrationsBySchedule,
-    students: pack.applicants?.length ?? 0,
+    students: (pack.schedules ?? []).reduce((sum, schedule) => {
+      const count = Number(schedule.registration_count);
+      return sum + (Number.isFinite(count) && count >= 0 ? count : 0);
+    }, 0) || (pack.applicants?.length ?? 0),
     questions,
     durationMinutes: pack.examination_settings?.duration_minutes ?? 60,
     passingPercentage: Number.isFinite(rawPassingPercentage) ? rawPassingPercentage : 75,

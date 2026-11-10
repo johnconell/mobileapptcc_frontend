@@ -7,6 +7,20 @@ import { ExamPreloader } from '@/features/examinations/services/examPreloader';
 import { appStorage } from '@/shared/services/storage';
 import type { Question } from '@/shared/types';
 
+let answerRevisionQueue: Promise<void> = Promise.resolve();
+
+async function nextAnswerRevision(token: string): Promise<number> {
+  let revision = 0;
+  answerRevisionQueue = answerRevisionQueue.catch(() => undefined).then(async () => {
+    const key = `tcc.student.answer.revision.${token}`;
+    const stored = Number(await appStorage.getItem(key));
+    revision = Math.max(Number.isSafeInteger(stored) ? stored + 1 : 0, Date.now());
+    await appStorage.setItem(key, String(revision));
+  });
+  await answerRevisionQueue;
+  return revision;
+}
+
 /**
  * QuestionRepository — load selected questions + submit answers.
  * Online: GET /api/v1/exam/questions , POST /api/v1/exam/submit
@@ -88,12 +102,19 @@ export const QuestionRepository = {
     if (await PeerExamClient.isActive()) {
       const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
       if (!token) return { saved: false, savedAt: null };
+      const checkpointVersion = await nextAnswerRevision(token);
+      const checkpointSavedAt = new Date().toISOString();
       try {
         await PeerExamClient.request('/answers', {
           method: 'POST',
-          body: { participation_token: token, answers },
+          body: {
+            participation_token: token,
+            answers,
+            checkpoint_version: checkpointVersion,
+            checkpoint_saved_at: checkpointSavedAt,
+          },
         });
-        return { saved: true, savedAt: new Date().toISOString() };
+        return { saved: true, savedAt: checkpointSavedAt };
       } catch {
         return { saved: false, savedAt: null };
       }
@@ -105,6 +126,8 @@ export const QuestionRepository = {
     // ... keep existing below via reading file
     const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
     if (!token) return { saved: false, savedAt: null };
+    const checkpointVersion = await nextAnswerRevision(token);
+    const checkpointSavedAt = new Date().toISOString();
 
     const payload = Object.entries(answers).map(([questionId, selected]) => ({
       exam_question_id: Number(questionId),
@@ -121,12 +144,14 @@ export const QuestionRepository = {
         body: {
           participation_token: token,
           answers: payload,
+          checkpoint_version: checkpointVersion,
+          checkpoint_saved_at: checkpointSavedAt,
         },
       });
 
       return {
         saved: Boolean(json.data?.saved ?? json.success),
-        savedAt: json.data?.saved_at ?? new Date().toISOString(),
+        savedAt: json.data?.saved_at ?? checkpointSavedAt,
       };
     } catch {
       return { saved: false, savedAt: null };

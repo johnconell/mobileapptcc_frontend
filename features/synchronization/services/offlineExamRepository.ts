@@ -76,7 +76,13 @@ export function resultSyncFailureMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 0) return 'No Internet Connection: Results are saved locally and waiting to synchronize.';
     if (error.status === 401 || error.status === 403) return 'Authentication Expired: Please sign in again.';
-    if (error.status === 422) return 'Invalid Result Data: The result could not be submitted. Please contact the administrator.';
+    if (error.status === 422) {
+      const payload = error.payload as OfflineResultSyncResponse | undefined;
+      const reason = payload?.data?.rejected?.[0]?.reason;
+      return reason
+        ? `Result Not Synchronized: ${reason} The saved result is safe and can be retried.`
+        : `${error.message} The saved result is safe and can be retried.`;
+    }
     if (error.status === 429 || error.status >= 500) return 'Server Unavailable: Synchronization will automatically retry.';
   }
   if (error instanceof Error && /internet|network|connection|timed out|reach server/i.test(error.message)) {
@@ -233,7 +239,10 @@ export function selectedQuestions(pack: OfflinePack): Array<{
   if (!pack.question_banks || !pack.question_banks.length) return [];
 
   // Only banks marked active by admin. Never fall back to inactive banks.
-  const activeBanks = pack.question_banks.filter((b) => Boolean(b.is_active));
+  const activeBanks = pack.question_banks.filter((b) =>
+    Boolean(b.is_active) &&
+    (!pack.active_question_bank_id || Number(b.id) === Number(pack.active_question_bank_id)),
+  );
   if (!activeBanks.length) return [];
 
   const rows: Array<{
@@ -1096,7 +1105,10 @@ export const OfflineExamRepository = {
         .toUpperCase(),
       registration_id: reg.id,
       selectionStatus: 'ready' as const,
-      examSet: reg.exam_set || 'Set 1',
+      // Keep the backend assignment as provenance. The paper builder may use
+      // its legacy Set 1 fallback for old packs, but sync must not claim that
+      // fallback was an assigned set when the registration has no assignment.
+      examSet: reg.exam_set || undefined,
       selectable: true,
     };
 
@@ -1363,6 +1375,8 @@ export const OfflineExamRepository = {
       local_id: uuid,
       applicant_code: input.applicantCode,
       examination_schedule_id: scheduleId,
+      examination_room_id: registration.assigned_room_id ?? null,
+      question_bank_id: pack.active_question_bank_id ?? null,
       applicant_name: input.applicantName,
       attendance_status: 'present',
       exam_set: registration.exam_set ?? undefined,
@@ -1440,6 +1454,8 @@ export const OfflineExamRepository = {
           client_local_id: result.local_id,
           applicant_code: result.applicant_code,
           examination_schedule_id: result.examination_schedule_id,
+          examination_room_id: result.examination_room_id ?? null,
+          question_bank_id: result.question_bank_id ?? null,
           exam_set: result.exam_set || null,
           submitted_at: result.submitted_at,
           answers: result.answers.map(({ exam_question_id, selected_answer }) => ({

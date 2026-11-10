@@ -23,6 +23,10 @@ import { clampViolationLimit } from '@/shared/utils/violationLimit';
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
 import { normalizePasskey } from '@/features/examinations/services/passkeyFormat';
 import {
+  normalizeAnswerCheckpoint,
+  shouldApplyAnswerCheckpoint,
+} from '@/features/examinations/services/answerCheckpoint';
+import {
   formatScheduleOpeningTime,
   getProctorScheduleAvailability,
 } from '@/features/schedules/utils/proctorScheduleWindow';
@@ -41,6 +45,11 @@ import type {
 export const PEER_PORT = 9777;
 export const PEER_PATH_PREFIX = '/p2p';
 export const MAX_ROOM_CAPACITY = 60;
+
+/** Canonical form used by QR, typed-code, LAN discovery, and room validation. */
+export function normalizeExaminationCode(raw: unknown): string {
+  return String(raw ?? '').trim().replace(/\s+/g, '').toUpperCase();
+}
 
 function resolveRoomStudentLimit(pack: OfflinePack | null | undefined): number {
   const n = Number(pack?.examination_settings?.room_student_limit);
@@ -93,6 +102,9 @@ type PeerStudentState = {
   violationCount: number;
   terminationReason: ExamTerminationReason | null;
   answers: Record<string, string | null>;
+  /** Monotonic device checkpoint revision; rejects delayed stale LAN writes. */
+  answerRevision?: number;
+  answersUpdatedAt?: string | null;
   /** Question ids in this student's shuffled order, so a reload keeps it. */
   order: string[];
   /** display letter → original pack letter, per question id */
@@ -109,6 +121,8 @@ type PeerStudentState = {
   moduleReady: boolean;
   startPhase: 'waiting' | 'received' | 'entered';
   examSet?: string;
+  /** Exact server assignment; absent only for legacy registrations without a set. */
+  assignedExamSet?: string;
 };
 
 type PeerViolation = {
@@ -356,6 +370,30 @@ function bindPeerListener(mod: HttpServerModule): void {
   mod.setup(PEER_PORT, updatePeerListenerStatus);
   registerRoutes(mod);
   mod.start();
+}
+
+function waitForPeerListenerLive(timeoutMs = 1500): Promise<boolean> {
+  if (running && listenerState === 'live') return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(value);
+    };
+    const unsubscribe = (() => {
+      const listener = () => {
+        if (running && listenerState === 'live') finish(true);
+      };
+      listeners.push(listener);
+      return () => {
+        listeners = listeners.filter((entry) => entry !== listener);
+      };
+    })();
+    const timer = setTimeout(() => finish(running && listenerState === 'live'), timeoutMs);
+  });
 }
 
 async function persist() {
@@ -803,6 +841,31 @@ function registerRoutes(mod: HttpServerModule) {
     handlers.set(`${method.toUpperCase()}:${path}`, handler);
   };
 
+  // This endpoint exposes no exam data. It is only a LAN bootstrap so a
+  // student who typed the room code can discover the same pinned peer identity
+  // that QR scanning would have supplied. All subsequent requests still use
+  // the encrypted channel and the normal room/passkey/assignment gates.
+  mod.route(p('/discover'), 'POST', async (request) => {
+    if (!session) return fail(503, 'No examination is open on the proctor phone.');
+    if (session.status === 'ended') {
+      return fail(409, 'This examination has already ended and is no longer available for applicants.');
+    }
+    const body = parseBody(request.body);
+    const code = normalizeExaminationCode(body.code);
+    if (!code || code !== normalizeExaminationCode(session.examCode)) {
+      return fail(404, 'That examination code is not the one open in this room.');
+    }
+    if (!session.peerIdentityPublicKey) {
+      return fail(503, 'Secure peer identity is not initialized. Reopen the examination room.');
+    }
+    return ok({
+      code: normalizeExaminationCode(session.examCode),
+      schedule_id: session.scheduleId,
+      room_id: session.roomId,
+      peer_identity_public_key: session.peerIdentityPublicKey,
+    });
+  });
+
   mod.route(p('/handshake'), 'POST', async (request) => {
     if (!session?.peerIdentityPrivateKey) {
       return fail(503, 'Secure peer identity is not initialized.');
@@ -944,8 +1007,8 @@ function registerRoutes(mod: HttpServerModule) {
       return fail(409, 'This examination has already ended and is no longer available for applicants.');
     }
     const body = parseBody(request.body);
-    const code = String(body.code ?? '').trim().toUpperCase();
-    if (code && code !== session.examCode) {
+    const code = normalizeExaminationCode(body.code);
+    if (code && code !== normalizeExaminationCode(session.examCode)) {
       return fail(404, 'That examination code is not the one open in this room.');
     }
     const resolved = await OfflineExamRepository.resolveScheduleRoom(
@@ -1284,8 +1347,8 @@ function registerRoutes(mod: HttpServerModule) {
         console.log(`[SESSION] Student ${student.applicantCode} rejoined.`);
       } else {
         const reg = pack.registrations.find((r) => Number(r.id) === registrationId);
-        const studentExamSet = reg?.exam_set || validated.student?.examSet || 'Set 1';
-        const paper = buildStudentExamPaper(pack, studentExamSet);
+        const assignedExamSet = reg?.exam_set?.trim() || validated.student?.examSet?.trim() || undefined;
+        const paper = buildStudentExamPaper(pack, assignedExamSet);
         student = {
           token: makeToken(registrationId),
           deviceId: providedDeviceId || undefined,
@@ -1304,9 +1367,11 @@ function registerRoutes(mod: HttpServerModule) {
           violationCount: 0,
           terminationReason: null,
           answers: {},
+          answerRevision: 0,
+          answersUpdatedAt: null,
           order: paper.questions.map((q) => q.id),
           choiceMaps: paper.choiceMaps,
-          examSet: studentExamSet,
+          examSet: paper.examSet,
           submittedAt: null,
           score: null,
           reconnectCode: null,
@@ -1317,6 +1382,7 @@ function registerRoutes(mod: HttpServerModule) {
           hashVerified,
           moduleReady,
           startPhase: 'waiting',
+          assignedExamSet,
         };
         session.students[registrationId] = student;
         if (!session.tokenMap) session.tokenMap = {};
@@ -1476,13 +1542,30 @@ function registerRoutes(mod: HttpServerModule) {
     }
 
     const answers = body.answers;
-    if (answers && typeof answers === 'object') {
-      for (const [questionId, choice] of Object.entries(
-        answers as Record<string, unknown>,
-      )) {
-        student.answers[questionId] = choice == null ? null : String(choice).toUpperCase();
-      }
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+      return fail(422, 'Invalid answer checkpoint.');
     }
+    const checkpoint = normalizeAnswerCheckpoint({
+      answers: answers as Record<string, string | null>,
+      revision: Number(body.checkpoint_version),
+      savedAt:
+        typeof body.checkpoint_saved_at === 'string'
+          ? body.checkpoint_saved_at
+          : undefined,
+    });
+    const currentRevision = Number(student.answerRevision ?? 0);
+    if (!shouldApplyAnswerCheckpoint(currentRevision, checkpoint.revision)) {
+      return ok({
+        saved: Object.keys(student.answers).length,
+        stale: true,
+        checkpoint_version: currentRevision,
+      });
+    }
+    student.answers = checkpoint.answers;
+    if (Number.isSafeInteger(checkpoint.revision)) {
+      student.answerRevision = checkpoint.revision;
+    }
+    student.answersUpdatedAt = checkpoint.savedAt ?? new Date().toISOString();
     student.lastActivityAt = new Date().toISOString();
     invalidateSnapshot();
     await persist();
@@ -1591,13 +1674,18 @@ function registerRoutes(mod: HttpServerModule) {
     const graded = grade(pack, answersForGrading(student));
     const now = new Date().toISOString();
 
+    const assignedExamSet = student.assignedExamSet || pack.registrations.find(
+      (registration) => Number(registration.id) === Number(student.registrationId),
+    )?.exam_set?.trim() || undefined;
     const queuedRow = {
       local_id: idempotencyKey,
       applicant_code: student.applicantCode.trim(),
       examination_schedule_id: numericScheduleId,
+      examination_room_id: session.roomId,
+      question_bank_id: pack.active_question_bank_id ?? null,
       applicant_name: student.fullName,
       attendance_status: 'present',
-      exam_set: student.examSet || 'Set 1',
+      exam_set: assignedExamSet,
       ...graded,
       submitted_at: now,
       synced: false,
@@ -2037,6 +2125,11 @@ export const PeerExamServer = {
         Object.values(session.students).map((student) => [student.token, student.registrationId]),
       );
       for (const student of Object.values(session.students || {})) {
+        student.answers = student.answers ?? {};
+        student.answerRevision = Number.isSafeInteger(student.answerRevision)
+          ? student.answerRevision
+          : 0;
+        student.answersUpdatedAt = student.answersUpdatedAt ?? null;
         student.downloadPercent = Number(student.downloadPercent ?? (student.isReady ? 100 : 0));
         student.hashVerified = Boolean(student.hashVerified ?? student.isReady);
         student.moduleReady = Boolean(student.moduleReady ?? student.isReady);
@@ -2066,6 +2159,11 @@ export const PeerExamServer = {
         return false;
       }
     }
+
+    // expo-http-server reports STARTED asynchronously. Wait briefly so the
+    // restored lobby can offer a truthful LAN status and students do not race
+    // the listener during the first cold-start render.
+    await waitForPeerListenerLive();
 
     // Pre-warm questions cache into memory
     if (!_packCache) {
@@ -2171,7 +2269,7 @@ export const PeerExamServer = {
       session.scheduleId === scheduleId &&
       session.roomId === roomId &&
       session.status !== 'ended' &&
-      session.examCode === input.examCode.trim().toUpperCase();
+      session.examCode === normalizeExaminationCode(input.examCode);
     const availability = getProctorScheduleAvailability(
       {
         date: schedule?.exam_date || '',
@@ -2246,7 +2344,7 @@ export const PeerExamServer = {
       session = {
         scheduleId,
         roomId,
-        examCode: input.examCode.trim().toUpperCase(),
+        examCode: normalizeExaminationCode(input.examCode),
         status: 'lobby_open',
         openedAt: new Date().toISOString(),
         startedAt: null,
@@ -2419,13 +2517,18 @@ export const PeerExamServer = {
       if (!student.submittedAt && pack && numericScheduleId > 0 && student.applicantCode) {
         const graded = grade(pack, answersForGrading(student));
 
+        const assignedExamSet = student.assignedExamSet || pack.registrations.find(
+          (registration) => Number(registration.id) === Number(student.registrationId),
+        )?.exam_set?.trim() || undefined;
         const queuedRow = {
           local_id: `end-exam-${numericScheduleId}-${student.applicantCode.trim()}`,
           applicant_code: student.applicantCode.trim(),
           examination_schedule_id: numericScheduleId,
+          examination_room_id: session.roomId,
+          question_bank_id: pack.active_question_bank_id ?? null,
           applicant_name: student.fullName,
           attendance_status: 'present',
-          exam_set: student.examSet || 'Set 1',
+          exam_set: assignedExamSet,
           ...graded,
           submitted_at: now,
           synced: false,
@@ -2662,8 +2765,8 @@ export const PeerExamServer = {
    */
   async adoptExamCode(code: string): Promise<void> {
     if (!session) return;
-    const next = code.trim().toUpperCase();
-    if (!next || next === session.examCode) return;
+    const next = normalizeExaminationCode(code);
+    if (!next || next === normalizeExaminationCode(session.examCode)) return;
     session.examCode = next;
     if (session.roomId != null) {
       await OfflineStore.setOpenedRoom(

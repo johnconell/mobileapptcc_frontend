@@ -57,6 +57,27 @@ async function probeLiveRoomStatus(): Promise<LiveRoomStatus> {
   return 'unreachable';
 }
 
+type RecoveryHeartbeat = {
+  ok: boolean;
+  roomStatus?: string;
+  sessionNotFound?: boolean;
+  remainingSeconds?: number;
+  serverTime?: string;
+  startedAt?: string;
+  endsAt?: string;
+  durationMinutes?: number;
+};
+
+async function readRecoveryHeartbeat(): Promise<RecoveryHeartbeat | null> {
+  if (!(await PeerExamClient.isActive())) return null;
+  try {
+    const { LobbyRepository } = await import('@/features/lobby/repositories/LobbyRepository');
+    return await LobbyRepository.sendHeartbeat();
+  } catch {
+    return null;
+  }
+}
+
 async function wipeEndedLocalSession(notice?: string): Promise<void> {
   await stopExamLock().catch(() => undefined);
   if (notice) {
@@ -223,11 +244,35 @@ export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
   useStudentStore.getState().setScannedSession(sessionId, sessionId);
   useStudentStore.getState().setVerifiedStudent(student);
   useStudentStore.getState().setSelectedStudent(student);
+  useStudentStore.getState().setAgreedAt(new Date().toISOString());
+
+  // Rehydrate the volatile lobby snapshot when possible. The participation
+  // token and student progress are the durable source of truth; this snapshot
+  // is only a render cache and must never be required for route access.
+  try {
+    const { LobbyRepository } = await import('@/features/lobby/repositories/LobbyRepository');
+    const liveSnapshot = await LobbyRepository.getLobby(sessionId);
+    if (liveSnapshot) useLobbyStore.getState().setSnapshot(liveSnapshot);
+  } catch {
+    // The lobby screen will keep polling the saved peer target and show its
+    // reconnecting state while the proctor phone is restarting.
+  }
+
+  const heartbeat = await readRecoveryHeartbeat();
+  const heartbeatStatus = heartbeat?.ok ? heartbeat.roomStatus : undefined;
+  const effectiveRoomStatus: LiveRoomStatus =
+    heartbeat?.sessionNotFound
+      ? 'ended'
+      : heartbeatStatus === 'in_progress'
+        ? 'in_progress'
+        : heartbeatStatus === 'lobby_open'
+          ? 'lobby_open'
+          : roomStatus;
 
   // Only restore the exam UI when the proctor still has this room running.
   // Never trust stale local ACTIVE alone — that traps disconnected students
   // after the exam has already ended.
-  if (roomStatus === 'in_progress') {
+  if (effectiveRoomStatus === 'in_progress') {
     await ExamLifecycle.applyFromServer('in_progress', { sessionId });
 
     const questions = await ExamPreloader.getPreloadedQuestions();
@@ -243,7 +288,13 @@ export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
     const exam = useExamStore.getState();
     exam.setSessionId(sessionId);
     exam.setQuestions(questions);
-    exam.startExam(duration);
+    const authoritativeDuration = heartbeat?.durationMinutes || duration;
+    exam.startExam({
+      durationMinutes: authoritativeDuration,
+      startedAt: heartbeat?.startedAt || checkpoint?.startedAt || new Date().toISOString(),
+      attemptId: token,
+      serverTime: new Date().toISOString(),
+    });
 
     if (checkpoint && checkpoint.sessionId === sessionId) {
       const studentKey = String(student.id || student.studentId);
@@ -256,10 +307,22 @@ export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
           answers: checkpoint.answers,
           currentIndex: checkpoint.currentIndex,
           remainingSeconds: checkpoint.remainingSeconds,
-          startedAt: checkpoint.startedAt,
+          totalDurationSeconds: checkpoint.totalDurationSeconds ?? authoritativeDuration * 60,
+          startedAt: heartbeat?.startedAt || checkpoint.startedAt,
+          deadline: heartbeat?.endsAt || checkpoint.deadline,
+          timeSync: checkpoint.timeSync,
         });
         exam.markAutoSaved(checkpoint.savedAt);
       }
+    }
+    if (heartbeat?.ok && typeof heartbeat.remainingSeconds === 'number') {
+      exam.reconcileWithServerTime({
+        serverTime: heartbeat.serverTime || new Date().toISOString(),
+        startedAt: heartbeat.startedAt,
+        endsAt: heartbeat.endsAt,
+        remainingSeconds: heartbeat.remainingSeconds,
+        durationMinutes: authoritativeDuration,
+      });
     }
 
     await ExamLifecycle.apply('ACTIVE', { sessionId });
@@ -267,7 +330,7 @@ export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
   }
 
   // lobby_open or unreachable: send to lobby (has Exit) instead of locking into questions.
-  if (roomStatus === 'lobby_open') {
+  if (effectiveRoomStatus === 'lobby_open') {
     await ExamLifecycle.applyFromServer('lobby_open', { sessionId });
   }
   return { ok: true, route: '/(student)/lobby' };

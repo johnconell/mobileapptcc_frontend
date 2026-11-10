@@ -41,7 +41,6 @@ import { buildCategoryProgress } from '@/features/examinations/components/ExamCa
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore, type ExamNavMode } from '@/features/examinations/stores/examStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
-import type { QuestionNavigatorFilter } from '@/shared/components/ui/QuestionNavigatorSheet';
 import { useExamTimer } from '@/features/examinations/hooks/useExamTimer';
 import { useExamSecurity } from '@/features/examinations/hooks/useExamSecurity';
 import { useExamLock } from '@/features/examinations/hooks/useExamLock';
@@ -139,7 +138,6 @@ function ExamScreenInner() {
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string | null | undefined>(undefined);
-  const [navigatorFilter, setNavigatorFilter] = useState<QuestionNavigatorFilter>('all');
   const openSubmitConfirmation = useCallback(() => {
     setSubmitConfirmOpen(true);
   }, []);
@@ -696,7 +694,6 @@ function ExamScreenInner() {
   );
   const reviewUnansweredAndFlagged = useCallback(() => {
     setSubmitConfirmOpen(false);
-    setNavigatorFilter('review');
     setNavigatorOpen(true);
   }, []);
 
@@ -1001,7 +998,6 @@ function ExamScreenInner() {
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 20 }).current;
 
   const openNavigator = useCallback(() => {
-    setNavigatorFilter('all');
     setNavigatorOpen(true);
   }, []);
 
@@ -1363,7 +1359,6 @@ function ExamScreenInner() {
         answers={answers}
         flags={flags}
         currentIndex={safeIndex}
-        initialFilter={navigatorFilter}
         onJumpToQuestion={handleJumpToQuestion}
       />
 

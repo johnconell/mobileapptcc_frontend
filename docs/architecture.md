@@ -49,11 +49,13 @@ code and pinned by the applicant before any exam request. Handshake failures,
 identity mismatches, and replayed/out-of-order messages fail closed; there is
 no plaintext request fallback.
 
-No certificate installation is required. The current proctor QR is the
-out-of-band identity provisioning step, so an applicant joining offline for the
-first time must scan it. Typed-code discovery may reuse a previously pinned
-target for that same code, but it does not scan the subnet or trust an
-unverified host. If the proctor identity changes, scan the new room QR.
+No certificate installation is required. QR scanning remains the strongest
+identity provisioning path. Typed-code discovery first reuses a previously
+pinned target and otherwise probes the current Wi-Fi subnet for the code-only
+bootstrap endpoint. That endpoint returns only the matching room code and
+public identity key; the applicant then performs the same encrypted handshake
+and passkey/room/assignment validation as QR joins. If the proctor identity
+changes, the current room QR or a fresh typed-code discovery is required.
 Pack persistence: `features/synchronization/services/offlineStore.ts` and
 `offlineExamRepository.ts`.
 

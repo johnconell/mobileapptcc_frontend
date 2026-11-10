@@ -28,6 +28,10 @@ import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 /** Tracks whether the application process was just cold launched from OS */
 let isAppColdBoot = true;
+// A cold launch can render this screen before async storage hydration finishes.
+// Keep all recovery/navigation in one transaction; two concurrent replace()
+// calls were the source of the welcome -> confirm -> lobby loop.
+let startupRecoveryInFlight = false;
 
 export default function HomeScreen() {
   const { colors: themeColors } = useAppTheme();
@@ -78,6 +82,7 @@ export default function HomeScreen() {
   useEffect(() => {
     let active = true;
     void (async () => {
+      if (startupRecoveryInFlight) return;
       try {
         if (!isAppColdBoot || params.stay === '1' || params.from === 'login' || params.from === 'logout') {
           isAppColdBoot = false;
@@ -87,6 +92,7 @@ export default function HomeScreen() {
           return;
         }
 
+        startupRecoveryInFlight = true;
         isAppColdBoot = false;
         const session = await AuthRepository.getCachedSessionFast();
         if (session && active) {
@@ -111,9 +117,21 @@ export default function HomeScreen() {
           return;
         }
         if (active) await showPendingExitNotice();
+
+        // Landing-page cleanup is deliberately limited to student-only material.
+        // Never clear the encrypted proctor pack during a transient auth read.
+        if (active) {
+          const { appStorage } = await import('@/shared/services/storage');
+          const { STORAGE_KEYS } = await import('@/shared/constants');
+          const participation = await appStorage.getItem(STORAGE_KEYS.participationToken);
+          if (!participation) {
+            await clearApplicantExamMaterial({ preserveOfflinePack: true });
+          }
+        }
       } catch (err) {
         console.warn('Fast session check error:', err);
       } finally {
+        startupRecoveryInFlight = false;
         if (active) {
           setCheckingAuth(false);
         }
@@ -123,40 +141,6 @@ export default function HomeScreen() {
       active = false;
     };
   }, [router, params.stay, params.from, showPendingExitNotice]);
-
-  useEffect(() => {
-    // Applicants must not keep leftover exam modules on the landing phone.
-    // Do not wipe a live lobby/exam session if the student briefly returns here.
-    // If a live session exists, offer resume instead of showing a dead home screen.
-    void (async () => {
-      await showPendingExitNotice();
-      const session = await AuthRepository.getCachedSessionFast();
-      if (session) return;
-      const { appStorage } = await import('@/shared/services/storage');
-      const { STORAGE_KEYS } = await import('@/shared/constants');
-      const inSession = await appStorage.getItem(STORAGE_KEYS.participationToken);
-      if (inSession) {
-        try {
-          const { tryResumeStudentExam } = await import(
-            '@/features/examinations/services/resumeExamSession'
-          );
-          const resumed = await tryResumeStudentExam();
-          if (resumed.ok) {
-            router.replace(resumed.route);
-            return;
-          }
-          await showPendingExitNotice();
-        } catch {
-          // keep token; do not clear while an exam may still be recoverable
-        }
-        return;
-      }
-      // Landing-page initialization is not an authorized reason to erase an
-      // encrypted proctor pack. This can run after logout or a transient auth
-      // storage read failure; student-only exam material is still cleared.
-      await clearApplicantExamMaterial({ preserveOfflinePack: true });
-    })();
-  }, [router, showPendingExitNotice]);
 
   // Join screen merges QR scan + room code. Wi‑Fi is validated after a payload is provided.
   const startTakeExam = () => {

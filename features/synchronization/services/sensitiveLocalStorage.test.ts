@@ -18,12 +18,72 @@ import { ExamProgressStore, type ExamCheckpoint } from '@/features/examinations/
 import { ProctorAuthCache } from '@/features/authentication/services/proctorAuthCache';
 import { OfflineStore, type OfflineQueuedResult } from '@/features/synchronization/services/offlineStore';
 import { STORAGE_KEYS } from '@/shared/constants';
+import { authStorageKeys } from '@/features/local-testing/localMode';
 
 test.beforeEach(async () => {
   setTestStorageKeyOverride(null);
   await ExamProgressStore.clear();
   await ProctorAuthCache.clear();
   await OfflineStore.clearResults();
+  await OfflineStore.clearPackFiles();
+  await appStorage.deleteItem(authStorageKeys().session);
+});
+
+test('offline pack restart snapshot keeps schedule totals and pack updates preserve unsynced results', async () => {
+  await appStorage.setItem(authStorageKeys().session, JSON.stringify({ id: 88 }));
+  const pack = {
+    pack_version: 2,
+    pack_revision: 1,
+    authorization: { actor_id: 88, scope: 'assigned_rooms' as const, schedule_ids: [101] },
+    active_question_bank_id: 7,
+    schedules: [{
+      id: 101,
+      title: 'Entrance Examination',
+      exam_date: '2026-11-10',
+      registration_count: 120,
+      assigned_registration_count: 90,
+      unassigned_registration_count: 30,
+      accessible_registration_count: 90,
+      rooms: [
+        { id: 1, room_name: 'Room 1', capacity: 30, student_count: 30 },
+        { id: 2, room_name: 'Room 2', capacity: 30, student_count: 30 },
+        { id: 3, room_name: 'Room 3', capacity: 30, student_count: 30 },
+      ],
+    }],
+    applicants: [],
+    registrations: [],
+    question_banks: [],
+  };
+  const queued: OfflineQueuedResult = {
+    local_id: 'preserved-result-1',
+    applicant_code: 'APP-PRESERVED',
+    examination_schedule_id: 101,
+    examination_room_id: 1,
+    question_bank_id: 7,
+    attendance_status: 'present',
+    result_status: 'passed',
+    score: 100,
+    items_correct: 1,
+    items_total: 1,
+    answers: [{ exam_question_id: 1, selected_answer: 'A', is_correct: true }],
+    submitted_at: '2026-11-10T01:00:00Z',
+    synced: false,
+  };
+
+  await OfflineStore.savePack(pack);
+  await OfflineStore.queueResult(queued);
+  OfflineStore.invalidatePackCache();
+
+  const restored = await OfflineStore.getPack();
+  const summary = await OfflineStore.getPackDashboardSnapshot();
+  assert.equal(restored?.schedules[0].registration_count, 120);
+  assert.equal(summary?.registrationsBySchedule['101'], 120);
+  assert.equal(summary?.schedules[0].rooms?.[0].student_count, 30);
+
+  await OfflineStore.savePack({ ...pack, pack_revision: 2, exported_at: '2026-11-10T02:00:00Z' });
+  const resultsAfterUpdate = await OfflineStore.pendingResults();
+  assert.equal(resultsAfterUpdate.length, 1);
+  assert.equal(resultsAfterUpdate[0].local_id, 'preserved-result-1');
 });
 
 test('sensitive local storage: AES-256-GCM round trip encrypts and decrypts accurately', async () => {

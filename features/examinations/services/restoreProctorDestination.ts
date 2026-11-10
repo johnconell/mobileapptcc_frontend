@@ -17,11 +17,11 @@ export async function restoreProctorDestination(): Promise<ProctorRestoreResult>
   }
 
   const info = PeerExamServer.info();
-  if (!restored || !info.running) {
+  if (!restored) {
     return {
       route: '/(proctor)/(tabs)/dashboard',
       recoveryMessage:
-        'Your previous examination room was found, but its local host could not be restarted. Reconnect to the examination network, then reopen the room to recover it.',
+        'Your previous examination room could not be restored from secure local storage. Reconnect to the examination network, then reopen the room to recover it.',
     };
   }
 
@@ -43,5 +43,10 @@ export async function restoreProctorDestination(): Promise<ProctorRestoreResult>
     params.set('examSessionId', String(snapshot.session.examSessionId));
   }
 
-  return { route: `/(proctor)/lobby?${params.toString()}` };
+  return {
+    route: `/(proctor)/lobby?${params.toString()}`,
+    recoveryMessage: info.running
+      ? undefined
+      : 'The saved examination was restored. Reconnecting the local LAN listener now; the original timer and student progress remain unchanged.',
+  };
 }

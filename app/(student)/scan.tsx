@@ -25,7 +25,7 @@ import {
 } from '@/features/examinations/components/ExamProcessChrome';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { classifyPeerReconnectError } from '@/features/examinations/services/peerReconnectErrors';
-import { parsePeerQr } from '@/features/examinations/services/peerExamServer';
+import { normalizeExaminationCode, parsePeerQr } from '@/features/examinations/services/peerExamServer';
 import { discoverPeerExamHostByCode } from '@/features/monitoring/services/peerLanDiscovery';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import * as Network from 'expo-network';
@@ -109,10 +109,12 @@ export default function JoinExaminationScreen() {
     setError(null);
 
     try {
-      const trimmed = (input || '').trim();
-      if (!trimmed) {
+      const rawInput = (input || '').trim();
+      if (!rawInput) {
         throw new Error(type === 'code' ? 'Please enter an examination code.' : 'Invalid QR code.');
       }
+
+      const trimmed = type === 'code' ? normalizeExaminationCode(rawInput) : rawInput;
 
       // 1. OFFLINE PEER QR RESOLUTION: Direct local connection - ZERO internet calls!
       const peerTarget = parsePeerQr(trimmed);
@@ -211,7 +213,7 @@ export default function JoinExaminationScreen() {
           try {
             const parsed = JSON.parse(trimmed);
             if (parsed.token) token = String(parsed.token).trim();
-            if (parsed.code) code = String(parsed.code).trim().toUpperCase();
+            if (parsed.code) code = normalizeExaminationCode(parsed.code);
           } catch {
             // not JSON
           }
@@ -221,7 +223,7 @@ export default function JoinExaminationScreen() {
           if (isUuid) {
             token = trimmed;
           } else {
-            code = trimmed.toUpperCase();
+            code = normalizeExaminationCode(trimmed);
           }
         }
       }
@@ -322,7 +324,7 @@ export default function JoinExaminationScreen() {
 
       await LobbyRepository.persistExaminationCode(code);
       throw new Error(
-        'Could not locate the Proctor examination session on the local Wi-Fi.\n\nPlease scan the Proctor\'s QR code displayed on screen to join directly.',
+        'No active proctor room with this examination code was found on the current Wi-Fi. Check the code, join the proctor\'s exam network, and try again.',
       );
     } catch (err: any) {
       if (err?.status === 409) {
