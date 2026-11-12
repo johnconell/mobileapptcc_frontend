@@ -35,7 +35,10 @@ interface ExamWifiDisconnectOverlayProps {
   graceSecondsRemaining?: number;
   onSubmitCode: (code: string) => void | Promise<void>;
   onRetry?: () => void | Promise<void>;
-  onExitExam?: () => void | Promise<void>;
+  /** Opens the reconnect scanner without clearing the active attempt. */
+  onScanUpdatedQr?: () => void | Promise<void>;
+  /** Save-first action that opens system Wi-Fi controls without clearing the attempt. */
+  onChangeWifiNetwork?: () => void | Promise<void>;
   onExitEnded?: () => void | Promise<void>;
 }
 
@@ -51,7 +54,8 @@ export function ExamWifiDisconnectOverlay({
   graceSecondsRemaining,
   onSubmitCode,
   onRetry,
-  onExitExam,
+  onScanUpdatedQr,
+  onChangeWifiNetwork,
   onExitEnded,
 }: ExamWifiDisconnectOverlayProps) {
   const [code, setCode] = useState('');
@@ -115,10 +119,15 @@ export function ExamWifiDisconnectOverlay({
             </>
           ) : reconnectFailed ? (
             <>
-              <Text style={[styles.title, { color: theme.text }]}>Reconnection failed</Text>
+              <Text style={[styles.title, { color: theme.text }]}>Connection Lost — Examination Progress Saved</Text>
               <Text style={[styles.message, { color: theme.textSecondary }]}>
-                The proctor phone is not reachable. Try again or leave the exam now. Leaving works
-                offline and will be recorded on this phone for later sync.
+                Connection Lost — Your saved examination progress is protected. The proctor phone is
+                not reachable. Your answers, flags, timer, and current question remain saved on this
+                phone. Reconnect to the examination Wi-Fi, then retry or scan
+                the proctor's updated QR code.
+              </Text>
+              <Text style={[styles.hint, { color: theme.textMuted }]}>
+                Android opens system Wi-Fi settings from the button below. iPhone/iPad does not expose a supported direct Wi-Fi intent; use the system Wi-Fi controls. Your saved attempt remains protected.
               </Text>
               {requiresPin ? (
                 <View style={styles.pinInputGroup}>
@@ -148,7 +157,8 @@ export function ExamWifiDisconnectOverlay({
                     : onRetry?.(),
                 requiresPin && code.trim().length > 0 && code.trim().length !== 6,
               )}
-              {renderAction('Exit exam', onExitExam, false, true, true)}
+              {renderAction('Scan Updated QR / Resume Examination', onScanUpdatedQr, false, false, true)}
+              {onChangeWifiNetwork ? renderAction('Change Wi-Fi Network', onChangeWifiNetwork, false, false, true) : null}
             </>
           ) : wrongNetwork && !requiresPin ? (
             // Student deliberately connected to a different Wi-Fi network.
@@ -167,6 +177,7 @@ export function ExamWifiDisconnectOverlay({
                   {userFacingError(error, 'Unable to verify network. Please try again.')}
                 </Text>
               ) : null}
+              {onChangeWifiNetwork ? renderAction('Change Wi-Fi Network', onChangeWifiNetwork, false, false, true) : null}
               <Text style={[styles.disclaimer, { color: theme.textMuted }]}>Your answers remain saved locally on this phone.</Text>
             </>
           ) : proctorNetworkChanged && !requiresPin ? (
@@ -184,6 +195,7 @@ export function ExamWifiDisconnectOverlay({
                 </Text>
               ) : null}
               {renderAction('Retry now', onRetry)}
+              {onChangeWifiNetwork ? renderAction('Change Wi-Fi Network', onChangeWifiNetwork, false, false, true) : null}
               <Text style={[styles.disclaimer, { color: theme.textMuted }]}>Your answers remain saved locally on this phone.</Text>
             </>
           ) : (
@@ -230,6 +242,7 @@ export function ExamWifiDisconnectOverlay({
                 <Text style={[styles.hint, { color: theme.textSecondary }]}>Please move closer to the exam Wi‑Fi hotspot.</Text>
               )}
 
+              {onChangeWifiNetwork ? renderAction('Change Wi-Fi Network', onChangeWifiNetwork, false, false, true) : null}
               <Text style={[styles.disclaimer, { color: theme.textMuted }]}>Your answers remain saved locally on this phone.</Text>
             </>
           )}

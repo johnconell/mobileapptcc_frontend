@@ -29,6 +29,7 @@ type NativeKioskBridge = {
   isIgnoringBatteryOptimizations?: () => Promise<boolean>;
   requestBatteryOptimizationExemption?: () => Promise<boolean>;
   moveTaskToBackground?: () => Promise<boolean>;
+  openWifiSettings?: () => Promise<boolean>;
   getPreferredLanIp?: () => Promise<string | null>;
 };
 
@@ -90,6 +91,20 @@ export async function stopExamLock(): Promise<void> {
   if (Platform.OS !== 'android') return;
   const bridge = getNativeBridge();
   await runLockTaskWithTimeout(bridge?.stopLockTask?.bind(bridge));
+}
+
+/**
+ * Save-first recovery action for a lost exam connection. Android cannot open
+ * Wi-Fi settings while the activity remains pinned, so the native bridge
+ * releases only this app's Lock Task state before launching system Wi-Fi.
+ */
+export async function openWifiSettings(): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+  try {
+    return (await getNativeBridge()?.openWifiSettings?.()) === true;
+  } catch {
+    return false;
+  }
 }
 
 /**

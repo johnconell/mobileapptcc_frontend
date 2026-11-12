@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -14,7 +13,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { AlertTriangle, CheckSquare, ShieldCheck, Square } from 'lucide-react-native';
+import { CheckSquare, ShieldCheck, Square } from 'lucide-react-native';
 import {
   ExamProcessActions,
   ExamProcessButton,
@@ -34,9 +33,6 @@ import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { examProcess } from '@/shared/theme/examProcess';
 import { userFacingError } from '@/shared/utils/userFacingError';
-import { useGuidedAccessStatus } from '@/features/examinations/hooks/useGuidedAccessStatus';
-import { GuidedAccessBlocked } from '@/features/examinations/components/GuidedAccessBlocked';
-import { readGuidedAccessStatus, requireGuidedAccess } from '@/features/examinations/services/guidedAccess';
 
 const gmailSchema = z.object({
   email: z
@@ -51,6 +47,47 @@ const gmailSchema = z.object({
 });
 
 type ConfirmationValues = z.infer<typeof gmailSchema>;
+
+const STUDENT_SCHEDULE_KEY = 'tcc.student.exam.schedule';
+type StudentScheduleMeta = { scheduleTitle: string; examDate: string; timeSlot: string };
+
+function formatManilaExamDate(value: string): string {
+  const raw = value.trim();
+  if (!raw) return 'Schedule date unavailable';
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  const parsed = dateOnly
+    ? new Date(`${dateOnly[1]}-${dateOnly[2]}-${dateOnly[3]}T12:00:00+08:00`)
+    : new Date(raw);
+  if (!Number.isFinite(parsed.getTime())) return raw;
+  return new Intl.DateTimeFormat('en-PH', {
+    timeZone: 'Asia/Manila',
+    weekday: 'short',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  }).format(parsed);
+}
+
+function formatManilaTime(value: string): string {
+  const raw = value.trim();
+  const match = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(raw);
+  if (!match) return raw;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return raw;
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${String(minute).padStart(2, '0')} ${suffix}`;
+}
+
+function formatManilaTimeRange(value: string): string {
+  const raw = value.trim();
+  if (!raw) return 'Schedule time unavailable';
+  const parts = raw.split(/\s*(?:-|–|—|to)\s*/i);
+  return parts.length === 2
+    ? `${formatManilaTime(parts[0])} - ${formatManilaTime(parts[1])}`
+    : formatManilaTime(raw);
+}
 
 export default function StudentConfirmationScreen() {
   const router = useRouter();
@@ -75,10 +112,32 @@ export default function StudentConfirmationScreen() {
     React.useState<ExamPackProgress>(INITIAL_PACK_PROGRESS);
   const [showAgreement, setShowAgreement] = React.useState(Boolean(verifiedStudent));
   const [agreed, setAgreed] = React.useState(false);
-  const [pinDeclined, setPinDeclined] = React.useState(false);
-  const [guidedAccessRequired, setGuidedAccessRequired] = React.useState(false);
-  const [guidedAccess, refreshGuidedAccess] = useGuidedAccessStatus();
-  const pendingGuidedJoin = React.useRef(false);
+  const [scheduleMeta, setScheduleMeta] = React.useState<StudentScheduleMeta>({
+    scheduleTitle: params.scheduleTitle || 'Entrance Examination',
+    examDate: params.examDate || '',
+    timeSlot: params.timeSlot || '',
+  });
+
+  React.useEffect(() => {
+    void (async () => {
+      const fromRoute: StudentScheduleMeta = {
+        scheduleTitle: params.scheduleTitle || 'Entrance Examination',
+        examDate: params.examDate || '',
+        timeSlot: params.timeSlot || '',
+      };
+      if (fromRoute.examDate || fromRoute.timeSlot) {
+        setScheduleMeta(fromRoute);
+        await appStorage.setItem(STUDENT_SCHEDULE_KEY, JSON.stringify(fromRoute));
+        return;
+      }
+      try {
+        const stored = await appStorage.getItem(STUDENT_SCHEDULE_KEY);
+        if (stored) setScheduleMeta(JSON.parse(stored) as StudentScheduleMeta);
+      } catch {
+        // Keep explicit unavailable labels; never invent a schedule.
+      }
+    })();
+  }, [params.scheduleTitle, params.examDate, params.timeSlot]);
 
   const hasGmail = Boolean(selectedStudent?.email?.trim());
 
@@ -96,13 +155,8 @@ export default function StudentConfirmationScreen() {
   React.useEffect(() => {
     if (verifiedStudent && scannedSessionId) {
       if (agreedAt) {
-        if (Platform.OS !== 'ios' || readGuidedAccessStatus() === 'enabled') {
-          router.replace('/(student)/lobby');
-        } else {
-          setGuidedAccessRequired(true);
-        }
-      }
-      else setShowAgreement(true);
+        router.replace('/(student)/lobby');
+      } else setShowAgreement(true);
       return;
     }
     if (!selectedStudent || !scannedSessionId) {
@@ -141,6 +195,19 @@ export default function StudentConfirmationScreen() {
           sessionId: String(scannedSessionId),
           passkey: effectivePasskey,
         });
+        const cachedSchedule = await ExamPreloader.getCachedScheduleMetadata();
+        if (cachedSchedule) {
+          const nextSchedule: StudentScheduleMeta = {
+            scheduleTitle: cachedSchedule.title || scheduleMeta.scheduleTitle,
+            examDate: cachedSchedule.examDate || scheduleMeta.examDate,
+            timeSlot:
+              cachedSchedule.timeSlot ||
+              [cachedSchedule.startTime, cachedSchedule.endTime].filter(Boolean).join(' - ') ||
+              scheduleMeta.timeSlot,
+          };
+          setScheduleMeta(nextSchedule);
+          await appStorage.setItem(STUDENT_SCHEDULE_KEY, JSON.stringify(nextSchedule));
+        }
       } catch (err) {
         setJoinError(userFacingError(
           err,
@@ -168,55 +235,6 @@ export default function StudentConfirmationScreen() {
     if (!agreed || joining || !scannedSessionId || !verifiedStudent) return;
     setJoining(true);
     setJoinError(null);
-    setPinDeclined(false);
-
-    if (Platform.OS === 'ios') {
-      try {
-        requireGuidedAccess();
-        setGuidedAccessRequired(false);
-      } catch {
-        pendingGuidedJoin.current = true;
-        setGuidedAccessRequired(true);
-        setJoining(false);
-        return;
-      }
-    }
-
-    if (Platform.OS === 'android') {
-      try {
-        const { startExamLock, isExamLocked } = await import(
-          '@/features/examinations/services/ExamSecurityService'
-        );
-        let locked = await isExamLocked();
-        if (!locked) {
-          setStatusMessage('Waiting for App Pinning confirmation...');
-          await startExamLock();
-          const start = Date.now();
-          while (Date.now() - start < 7000) {
-            await new Promise((resolve) => setTimeout(resolve, 350));
-            locked = await isExamLocked();
-            if (locked) break;
-          }
-        }
-        if (!locked) {
-          setJoining(false);
-          setStatusMessage(null);
-          setPinDeclined(true);
-          Alert.alert(
-            'App Pinning Required',
-            'Screen Pinning is required before entering the lobby. Tap "Try Again" and then tap "GOT IT" on the system prompt.',
-          );
-          return;
-        }
-      } catch {
-        setJoining(false);
-        setStatusMessage(null);
-        setPinDeclined(true);
-        setJoinError('App Pinning could not be started. Enable it before entering the lobby.');
-        return;
-      }
-    }
-
     try {
       setStatusMessage('Registering with examination lobby...');
       const effectivePasskey =
@@ -229,7 +247,6 @@ export default function StudentConfirmationScreen() {
         scannedSessionId,
         effectivePasskey,
       );
-      requireGuidedAccess();
       const updatedVerified = { ...verifiedStudent };
       const regId = lobby.registration_id || lobby.students?.find((s) => s.studentId === updatedVerified.studentId)?.id;
       if (regId) updatedVerified.registration_id = Number(regId);
@@ -247,18 +264,6 @@ export default function StudentConfirmationScreen() {
     }
   };
 
-  React.useEffect(() => {
-    if (Platform.OS !== 'ios' || !guidedAccessRequired || guidedAccess !== 'enabled') return;
-    if (agreedAt) {
-      setGuidedAccessRequired(false);
-      router.replace('/(student)/lobby');
-    } else if (pendingGuidedJoin.current) {
-      pendingGuidedJoin.current = false;
-      setGuidedAccessRequired(false);
-      void handleProceed();
-    }
-  }, [guidedAccessRequired, guidedAccess, agreedAt, router]);
-
   const onConfirmWithForm = handleSubmit(async (values) => {
     await confirmIdentity(values.email);
   });
@@ -272,14 +277,6 @@ export default function StudentConfirmationScreen() {
       <ExamProcessChrome step={2} title="Confirm Identity" stepLabel="Step 3 of 6 · Confirm">
         <Text style={styles.hint}>Loading…</Text>
       </ExamProcessChrome>
-    );
-  }
-
-  if (Platform.OS === 'ios' && guidedAccessRequired && guidedAccess !== 'enabled') {
-    return (
-      <View style={styles.flex}>
-        <GuidedAccessBlocked status={guidedAccess} onCheck={refreshGuidedAccess} />
-      </View>
     );
   }
 
@@ -344,13 +341,12 @@ export default function StudentConfirmationScreen() {
             </>
           ) : (
             <AgreementContent
-              scheduleTitle={params.scheduleTitle || 'Entrance Examination'}
-              examDate={params.examDate || '—'}
-              timeSlot={params.timeSlot || '—'}
+              scheduleTitle={scheduleMeta.scheduleTitle}
+              examDate={formatManilaExamDate(scheduleMeta.examDate)}
+              timeSlot={formatManilaTimeRange(scheduleMeta.timeSlot)}
               agreed={agreed}
               proceeding={joining}
               pinStatusText={statusMessage}
-              pinDeclined={pinDeclined}
               onToggle={() => setAgreed((value) => !value)}
               onProceed={() => void handleProceed()}
               joinError={joinError}
@@ -369,7 +365,6 @@ function AgreementContent({
   agreed,
   proceeding,
   pinStatusText,
-  pinDeclined,
   joinError,
   onToggle,
   onProceed,
@@ -380,7 +375,6 @@ function AgreementContent({
   agreed: boolean;
   proceeding: boolean;
   pinStatusText: string | null;
-  pinDeclined: boolean;
   joinError: string | null;
   onToggle: () => void;
   onProceed: () => void;
@@ -404,7 +398,7 @@ function AgreementContent({
         </View>
         <View style={styles.rulesList}>
           <RuleRow bold="Verification: " body="Examinees must join with the proctor QR code or room code on the same Join screen." />
-          <RuleRow bold={Platform.OS === 'android' ? 'Mandatory App Pinning: ' : 'Mandatory Guided Access: '} body={Platform.OS === 'android' ? "Screen Pinning is required before entering the lobby. Tap 'GOT IT' on the system prompt." : 'Guided Access is required on iPhone/iPad before entering the examination.'} />
+          <RuleRow bold={Platform.OS === 'android' ? 'Mandatory App Pinning: ' : 'Mandatory Guided Access: '} body={Platform.OS === 'android' ? "Screen Pinning is required before the examination starts, after the proctor approves your request." : 'Guided Access is required on iPhone/iPad before the examination starts, after proctor approval.'} />
           <RuleRow bold="Unauthorized Electronics: " body="Secondary phones, smartwatches, and external electronic aids are strictly prohibited." />
           <RuleRow bold="Duration & Timer: " body="Session is strictly timed; auto-submits when countdown reaches 00:00." />
           <RuleRow bold="Screen Lockdown: " body="The exam runs in full-screen locked mode. Do not switch apps during the examination." />
@@ -415,12 +409,6 @@ function AgreementContent({
         {agreed ? <CheckSquare size={22} color={examProcess.accent} /> : <Square size={22} color={examProcess.muted} />}
         <Text style={styles.checkboxLabel}>I have read, understand, and agree to the examination rules and security requirements above.</Text>
       </Pressable>
-      {pinDeclined ? (
-        <View style={styles.pinDeclinedBanner}>
-          <AlertTriangle size={18} color="#b45309" />
-          <Text style={styles.pinDeclinedBody}>App Pinning was declined or could not be started. It is required before entering the lobby.</Text>
-        </View>
-      ) : null}
       {pinStatusText ? <Text style={styles.pinStatusHint}>{pinStatusText}</Text> : null}
       {joinError ? <Text style={styles.error}>{joinError}</Text> : null}
       <ExamProcessActions>
@@ -522,6 +510,4 @@ const styles = StyleSheet.create({
   checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 8 },
   checkboxLabel: { flex: 1, fontSize: 14, lineHeight: 22, color: examProcess.ink, fontFamily: examProcess.fontMedium },
   pinStatusHint: { fontSize: 13, fontFamily: examProcess.fontMedium, color: examProcess.accent, textAlign: 'center', marginVertical: 6 },
-  pinDeclinedBanner: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fcd34d', borderRadius: examProcess.radiusCard, padding: 14 },
-  pinDeclinedBody: { flex: 1, fontSize: 13, fontFamily: examProcess.fontRegular, color: '#92400e', lineHeight: 20 },
 });

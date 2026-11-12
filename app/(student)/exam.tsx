@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  ActivityIndicator,
   AppState,
   FlatList,
   Keyboard,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -63,6 +65,7 @@ import { PeerExamClient } from '@/features/examinations/services/peerExamClient'
 import { parseStartPulse } from '@/features/examinations/services/examStartCoordinator';
 import { playExamTimeWarning } from '@/features/examinations/services/examTimeWarning';
 import { releaseExamSessionRestrictions } from '@/features/examinations/services/examSessionRestrictions';
+import { openWifiSettings } from '@/features/examinations/services/ExamSecurityService';
 import { recordStudentDisconnect } from '@/features/monitoring/services/studentDisconnectAudit';
 import type { StudentDisconnectReason } from '@/features/monitoring/services/studentDisconnectAudit';
 import { classifyPeerReconnectError } from '@/features/examinations/services/peerReconnectErrors';
@@ -71,7 +74,7 @@ import {
   createSubmitController,
   type SubmitReason,
 } from '@/features/examinations/services/submitGate';
-import type { ChoiceKey, Question } from '@/shared/types';
+import type { ChoiceKey, ExamAnswer, Question } from '@/shared/types';
 
 function categoryKeyOf(question: Question): string {
   return (question.category || question.subjectId || 'General').trim() || 'General';
@@ -174,6 +177,7 @@ function ExamScreenInner() {
   const setNavMode = useExamStore((s) => s.setNavMode);
   const sessionId = useExamStore((s) => s.sessionId);
   const startedAt = useExamStore((s) => s.startedAt);
+  const checkpointRevision = useExamStore((s) => s.checkpointRevision);
   const selectAnswer = useExamStore((s) => s.selectAnswer);
   const markAutoSaved = useExamStore((s) => s.markAutoSaved);
   const unansweredCount = useExamStore((s) => s.unansweredCount);
@@ -220,6 +224,7 @@ function ExamScreenInner() {
         deadline: state.deadline,
         scheduleClosingTime: state.scheduleClosingTime,
         timeSync: state.timeSync ?? undefined,
+        revision: state.checkpointRevision,
       });
       markAutoSaved();
       setCheckpointSaved(true);
@@ -310,9 +315,10 @@ function ExamScreenInner() {
 
   useEffect(() => {
     console.log('[STUDENT] Exam Screen Opened');
+    if (!questions.length) return;
     void ExamLifecycle.apply('ACTIVE');
     void LobbyRepository.acknowledgeStart('entered');
-  }, []);
+  }, [questions.length]);
 
   // Flush encrypted exam progress before the OS backgrounds or closes the app.
   useEffect(() => {
@@ -349,6 +355,19 @@ function ExamScreenInner() {
     },
     [sessionId],
   );
+
+  const handleChangeWifiNetwork = useCallback(async () => {
+    // Flush the current answer/flag/timer checkpoint before releasing Android
+    // Lock Task so network settings can be opened safely.
+    await persistLocalCheckpoint();
+    if (Platform.OS === 'android') {
+      const opened = await openWifiSettings();
+      if (opened) return;
+    }
+    // iOS does not expose a supported public Wi-Fi settings intent. Open the
+    // app settings as the supported fallback and keep the attempt intact.
+    await Linking.openSettings().catch(() => undefined);
+  }, [persistLocalCheckpoint]);
 
   const [gracePeriodSeconds, setGracePeriodSeconds] = useState(120);
 
@@ -425,17 +444,30 @@ function ExamScreenInner() {
   useEffect(() => {
     if (questions.length === 0 || wifiLocked) return;
     const timer = setTimeout(() => {
+      const state = useExamStore.getState();
+      // Do not create a server revision for the initial blank paper. The first
+      // answer/flag/navigation change creates revision 1 and owns the stream.
+      if (state.checkpointRevision <= 0) return;
       const payload = Object.fromEntries(
-        Object.values(answers).map((a) => [a.questionId, a.selectedAnswer]),
+        Object.values(state.answers).map((a) => [a.questionId, a.selectedAnswer]),
       );
-      void QuestionRepository.saveProgress(payload).catch((error) => {
+      void QuestionRepository.saveProgress(payload, {
+        revision: state.checkpointRevision,
+        flags: state.flags,
+        currentIndex: state.currentIndex,
+        navMode: state.navMode,
+        startedAt: state.startedAt,
+        deadline: state.deadline,
+        scheduleClosingTime: state.scheduleClosingTime,
+        timeSync: state.timeSync ?? undefined,
+      }).catch((error) => {
         console.warn('[EXAM CHECKPOINT] Server autosave unavailable:', {
           errorName: error instanceof Error ? error.name : 'UnknownError',
         });
       });
     }, 1200);
     return () => clearTimeout(timer);
-  }, [answers, questions.length, wifiLocked]);
+  }, [answers, flags, currentIndex, navMode, questions.length, wifiLocked, checkpointRevision]);
 
   // Periodic autosave to local offline store
   useEffect(() => {
@@ -450,8 +482,48 @@ function ExamScreenInner() {
   useEffect(() => {
     if (restoredRef.current || !questions.length || !sessionId || !verifiedStudent?.id) return;
     restoredRef.current = true;
-    void ExamProgressStore.load().then((checkpoint) => {
-      if (checkpoint && checkpoint.sessionId === sessionId && checkpoint.studentId === verifiedStudent.id) {
+    void (async () => {
+      const checkpoint = await ExamProgressStore.load();
+      const localMatches = Boolean(
+        checkpoint && checkpoint.sessionId === sessionId && checkpoint.studentId === verifiedStudent.id,
+      );
+      let remote: Awaited<ReturnType<typeof QuestionRepository.getPeerCheckpoint>> = null;
+      try {
+        remote = await QuestionRepository.getPeerCheckpoint();
+      } catch {
+        // The encrypted local checkpoint remains authoritative while the LAN
+        // is unavailable; the next heartbeat/autosave retries reconciliation.
+      }
+
+      const localRevision = localMatches ? Number(checkpoint?.revision ?? 0) : 0;
+      const remoteRevision = Number(remote?.revision ?? 0);
+      const useRemote = Boolean(remote && remoteRevision > localRevision);
+      if (useRemote && remote) {
+        const remoteAnswers: Record<string, ExamAnswer> = Object.fromEntries(
+          questions.map((question) => [
+            question.id,
+            {
+              questionId: question.id,
+              selectedAnswer: (remote.answers[question.id] ?? null) as ChoiceKey | null,
+              answeredAt: remote.savedAt,
+            },
+          ]),
+        );
+        restoreProgress({
+          answers: remoteAnswers,
+          flags: remote.flags,
+          navMode: remote.navMode,
+          currentIndex: remote.currentIndex,
+          startedAt: remote.startedAt ?? checkpoint?.startedAt ?? null,
+          deadline: remote.endsAt ?? remote.deadline ?? checkpoint?.deadline ?? null,
+          totalDurationSeconds: checkpoint?.totalDurationSeconds,
+          attemptId: checkpoint?.attemptId,
+          revision: remote.revision,
+          timeSync: checkpoint?.timeSync,
+        });
+        if (remote.savedAt) markAutoSaved(remote.savedAt);
+        setCheckpointSaved(true);
+      } else if (localMatches && checkpoint) {
         restoreProgress({
           answers: checkpoint.answers,
           flags: checkpoint.flags,
@@ -464,14 +536,39 @@ function ExamScreenInner() {
           scheduleClosingTime: checkpoint.scheduleClosingTime,
           attemptId: checkpoint.attemptId,
           timeSync: checkpoint.timeSync,
+          revision: checkpoint.revision,
         });
         markAutoSaved(checkpoint.savedAt);
+        setCheckpointSaved(true);
+      } else if (remote && remoteRevision > 0) {
+        // A local file may be absent after a process restart; the proctor
+        // checkpoint still restores the full paper state.
+        const remoteAnswers: Record<string, ExamAnswer> = Object.fromEntries(
+          questions.map((question) => [
+            question.id,
+            {
+              questionId: question.id,
+              selectedAnswer: (remote.answers[question.id] ?? null) as ChoiceKey | null,
+              answeredAt: remote.savedAt,
+            },
+          ]),
+        );
+        restoreProgress({
+          answers: remoteAnswers,
+          flags: remote.flags,
+          navMode: remote.navMode,
+          currentIndex: remote.currentIndex,
+          startedAt: remote.startedAt,
+          deadline: remote.endsAt ?? remote.deadline,
+          revision: remote.revision,
+        });
+        if (remote.savedAt) markAutoSaved(remote.savedAt);
         setCheckpointSaved(true);
       }
       checkpointRecoveryBlocked.current = false;
       setCheckpointError(null);
       setPaused(false);
-    }).catch((error) => {
+    })().catch((error) => {
       console.warn('[EXAM CHECKPOINT] Could not restore local answers:', {
         errorName: error instanceof Error ? error.name : 'StorageError',
       });
@@ -482,7 +579,7 @@ function ExamScreenInner() {
         'Saved exam progress could not be read. Answering is paused to protect your existing data. Retry loading the saved progress.',
       );
     });
-  }, [questions.length, sessionId, verifiedStudent?.id, restoreProgress, markAutoSaved, setPaused, checkpointLoadRetry]);
+  }, [questions, sessionId, verifiedStudent?.id, restoreProgress, markAutoSaved, setPaused, checkpointLoadRetry]);
 
   // Heartbeat & Timer Sync with proctor
   useEffect(() => {
@@ -884,10 +981,6 @@ function ExamScreenInner() {
   }, [remainingSeconds]);
 
   useEffect(() => {
-    if (!questions.length) router.replace('/');
-  }, [questions.length, router]);
-
-  useEffect(() => {
     if (autoSubmittedRef.current) return;
     if (roomEnded) {
       autoSubmittedRef.current = true;
@@ -1001,7 +1094,19 @@ function ExamScreenInner() {
     setNavigatorOpen(true);
   }, []);
 
-  if (!questions.length) return null;
+  if (!questions.length) {
+    return (
+      <View style={[styles.screen, { backgroundColor: theme.bg, alignItems: 'center', justifyContent: 'center', padding: 24 }]}>
+        <ActivityIndicator size="large" color={theme.accent} />
+        <Text style={{ color: theme.text, fontSize: 17, fontWeight: '700', marginTop: 16, textAlign: 'center' }}>
+          Preparing examination…
+        </Text>
+        <Text style={{ color: theme.textSecondary, fontSize: 13, lineHeight: 19, marginTop: 8, textAlign: 'center' }}>
+          Your session is still active. The examination interface is loading from the verified offline pack.
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.screen, { backgroundColor: theme.bg }]}>
@@ -1387,12 +1492,11 @@ function ExamScreenInner() {
         graceSecondsRemaining={graceSecondsRemaining ?? undefined}
         onSubmitCode={handleReconnect}
         onRetry={handleProctorNetworkRetry}
-        onExitExam={() =>
-          void exitToLanding(
-            'proctor_unreachable_exit',
-            'You left the exam because the proctor could not be reached. Your disconnect was saved on this phone for later sync.',
-          )
-        }
+        onScanUpdatedQr={async () => {
+          await persistLocalCheckpoint();
+          router.push({ pathname: '/(student)/scan', params: { mode: 'reconnect' } } as any);
+        }}
+        onChangeWifiNetwork={handleChangeWifiNetwork}
         onExitEnded={leaveEndedExam}
       />
     </View>

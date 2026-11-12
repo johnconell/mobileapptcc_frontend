@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, BackHandler, ScrollView, Modal, Pressable as RNPressable, Text, View, StyleSheet, Alert, Share, useWindowDimensions, Platform, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
+import { AppState, BackHandler, ScrollView, Modal, Pressable as RNPressable, Text, TextInput, View, StyleSheet, Alert, Share, useWindowDimensions, Platform, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { usePreventRemove } from '@react-navigation/native';
 import type { NavigationAction } from '@react-navigation/routers';
@@ -40,11 +40,9 @@ import {
   // keep existing imports below — do not break the rest of this file
   Copy,
   Users,
-  UserCheck,
   UserX,
   Play,
   CheckCircle2,
-  ShieldAlert,
   AlertTriangle,
   ArrowDownUp,
   ArrowLeft,
@@ -232,6 +230,8 @@ function ProctorLobbyContent() {
   const [openError, setOpenError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [selected, setSelected] = useState<LobbyStudent | null>(null);
+  const [examSetModalVisible, setExamSetModalVisible] = useState(false);
+  const [examSetSearch, setExamSetSearch] = useState('');
   const [syncPending, setSyncPending] = useState<number | null>(null);
   const [syncConfigured, setSyncConfigured] = useState(false);
   const knownStudentIds = useRef<Set<string>>(new Set());
@@ -256,18 +256,26 @@ function ProctorLobbyContent() {
   const [cloudCode, setCloudCode] = useState<string | null>(null);
   const [cloudQrValue, setCloudQrValue] = useState<string | null>(null);
   const [cloudSessionId, setCloudSessionId] = useState<number | null>(null);
-  const [attendedIds, setAttendedIds] = useState<Set<string>>(new Set());
-
-  const toggleAttendance = (studentId: string) => {
-    setAttendedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(studentId)) {
-        next.delete(studentId);
-      } else {
-        next.add(studentId);
+  const [admissionRequest, setAdmissionRequest] = useState<LobbyStudent | null>(null);
+  const updateApproval = async (
+    student: LobbyStudent,
+    approvalStatus: 'approved' | 'declined',
+  ) => {
+    try {
+      const snapshot = await LobbyRepository.setStudentApproval(student.id, approvalStatus);
+      const updated = snapshot?.students.find((entry) => entry.id === student.id);
+      if (updated) setSelected(updated);
+      if (snapshot) {
+        setSnapshot(snapshot);
+        if (admissionRequest?.id === student.id) setAdmissionRequest(updated ?? null);
       }
-      return next;
-    });
+      await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.lobby(sessionId, roomId) });
+    } catch (error) {
+      Alert.alert(
+        'Unable to update admission',
+        userFacingError(error, 'Keep the examination LAN active and try again.'),
+      );
+    }
   };
 
   const handleRemoveStudent = (student: LobbyStudent) => {
@@ -435,16 +443,16 @@ function ProctorLobbyContent() {
                 roomsList.push({
                   id: r.id,
                   name: r.room_name || `Room ${r.id}`,
-                  capacity: r.capacity ?? 60,
+                  capacity: Math.min(30, Number(r.capacity ?? 30)),
                 });
               }
             });
           });
           if (roomsList.length === 0) {
             roomsList.push(
-              { id: 101, name: 'Room 101 · Testing Lab A', capacity: 60 },
-              { id: 102, name: 'Room 102 · Testing Lab B', capacity: 50 },
-              { id: 103, name: 'Room 103 · Multimedia Hall', capacity: 80 },
+              { id: 101, name: 'Room 101 · Testing Lab A', capacity: 30 },
+              { id: 102, name: 'Room 102 · Testing Lab B', capacity: 30 },
+              { id: 103, name: 'Room 103 · Multimedia Hall', capacity: 30 },
             );
           }
           setAvailableRooms(roomsList);
@@ -554,11 +562,15 @@ function ProctorLobbyContent() {
                     : student.status === 'finished'
                       ? 'Done'
                       : student.status.replace(/_/g, ' ');
-          pushNotification(
-            'connect',
-            'Student Connected',
-            `${student.fullName} connected to the examination system at ${timeLabel}. Status: ${statusLabel}.`,
-          );
+          if (student.approvalStatus === 'pending' && student.isConnected !== false && student.status !== 'not_arrived') {
+            setAdmissionRequest(student);
+          } else {
+            pushNotification(
+              'connect',
+              'Student Connected',
+              `${student.fullName} connected to the examination system at ${timeLabel}. Status: ${statusLabel}.`,
+            );
+          }
         });
 
         const leftIds = [...knownStudentIds.current].filter((id) => !currentIds.has(id));
@@ -612,7 +624,7 @@ function ProctorLobbyContent() {
         });
       }
     }
-  }, [lobbyQuery.data, setSnapshot, selected]);
+  }, [admissionRequest?.id, lobbyQuery.data, setSnapshot, selected]);
 
   const lobby = lobbyQuery.data ?? storeLobby;
 
@@ -780,6 +792,19 @@ function ProctorLobbyContent() {
     () => studentsList.filter((s) => s.status === 'disconnected'),
     [studentsList],
   );
+  const pendingApprovalCount = useMemo(
+    () => studentsList.filter((student) => student.approvalStatus === 'pending').length,
+    [studentsList],
+  );
+  const searchableExamSetStudents = useMemo(() => {
+    const query = examSetSearch.trim().toLowerCase();
+    if (!query) return studentsList;
+    return studentsList.filter((student) =>
+      [student.fullName, student.studentId, student.applicantCode, student.examSet]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query)),
+    );
+  }, [examSetSearch, studentsList]);
   const loadingTimedOut = useSkeletonLoadingTimeout(!ready && !openError, 10_000, loadAttempt);
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -1578,6 +1603,30 @@ function ProctorLobbyContent() {
                 </Text>
               </View>
 
+              <PressableBox
+                accessibilityRole="button"
+                accessibilityLabel="View students and examination sets"
+                onPress={() => setExamSetModalVisible(true)}
+                style={[styles.examSetDirectoryButton, { borderColor: themeColors.cardBorder, backgroundColor: themeColors.card }]}
+              >
+                <View style={styles.examSetDirectoryText}>
+                  <Text style={[styles.examSetDirectoryTitle, { color: themeColors.textPrimary }]}>
+                    View Students &amp; Examination Sets
+                  </Text>
+                  <Text style={[styles.examSetDirectorySubtitle, { color: themeColors.textSecondary }]}>
+                    Search the live roster by student, applicant ID, or set.
+                  </Text>
+                </View>
+                {pendingApprovalCount > 0 ? (
+                  <View style={[styles.pendingApprovalBadge, { backgroundColor: themeColors.warningMuted }]}>
+                    <Text style={[styles.pendingApprovalBadgeText, { color: themeColors.warning }]}>
+                      {pendingApprovalCount} pending
+                    </Text>
+                  </View>
+                ) : null}
+                <ChevronRight size={20} color={themeColors.textMuted} />
+              </PressableBox>
+
               <View style={styles.statusCardsGrid}>
                 {monitoringTabs.map((tab) => {
                   const isActive = activeStatusFilter === tab.key;
@@ -1624,7 +1673,9 @@ function ProctorLobbyContent() {
                 })}
               </View>
 
-              <View style={styles.incidentCard}>
+              {/* Security evidence continues to be recorded and synced, but is
+                  intentionally not displayed in the proctor lobby. */}
+              {/* <View style={styles.incidentCard}>
                 <View style={styles.incidentHeader}>
                   <ShieldAlert size={18} color={LOBBY.danger} />
                   <Text style={styles.incidentTitle} maxFontSizeMultiplier={1.2}>
@@ -1656,7 +1707,7 @@ function ProctorLobbyContent() {
                     No incidents have been reported for this session.
                   </Text>
                 ) : null}
-              </View>
+              </View> */}
 
               {activeStatusFilter && currentTab ? (
                 <View style={styles.statusListBlock}>
@@ -1973,6 +2024,54 @@ function ProctorLobbyContent() {
       />
 
       <Modal
+        visible={Boolean(admissionRequest)}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setAdmissionRequest(null)}
+      >
+        <View style={styles.detailOverlay}>
+          <PressableBox style={StyleSheet.absoluteFill} onPress={() => setAdmissionRequest(null)} />
+          {admissionRequest ? (
+            <View style={[styles.detailSheet, { backgroundColor: themeColors.card }]}>
+              <View style={styles.detailHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.detailTitle, { color: themeColors.textPrimary }]}>Student Joining Request</Text>
+                  <Text style={[styles.detailSubtitle, { color: themeColors.textSecondary }]}>Review this applicant before admitting them to the room.</Text>
+                </View>
+                <PressableBox onPress={() => setAdmissionRequest(null)} accessibilityLabel="Close joining request">
+                  <X size={22} color={themeColors.textSecondary} />
+                </PressableBox>
+              </View>
+              <DetailRow label="Name" value={admissionRequest.fullName} />
+              <DetailRow label="Applicant" value={admissionRequest.studentId || admissionRequest.applicantCode || '—'} />
+              <DetailRow label="Room" value={lobby?.roomName || 'Assigned room'} />
+              <DetailRow label="Examination Set" value={admissionRequest.examSet || 'Set 1'} />
+              <DetailRow label="Status" value="Pending approval" />
+              <View style={styles.detailActions}>
+                <Button
+                  title="Approve & Mark Present"
+                  onPress={async () => {
+                    const request = admissionRequest;
+                    await updateApproval(request, 'approved');
+                    setAdmissionRequest(null);
+                  }}
+                />
+                <Button
+                  title="Decline Entry"
+                  variant="outline"
+                  onPress={async () => {
+                    const request = admissionRequest;
+                    await updateApproval(request, 'declined');
+                    setAdmissionRequest(null);
+                  }}
+                />
+              </View>
+            </View>
+          ) : null}
+        </View>
+      </Modal>
+
+      <Modal
         visible={Boolean(selected)}
         animationType="slide"
         transparent
@@ -2048,7 +2147,7 @@ function ProctorLobbyContent() {
 
               <View style={styles.detailActions}>
                 {/* Attendance marker — kept reachable now that roster rows are compact */}
-                <PressableBox
+                {/* <PressableBox
                   accessibilityRole="button"
                   accessibilityState={{ selected: attendedIds.has(selected.id) }}
                   accessibilityLabel="Toggle verified in room"
@@ -2085,7 +2184,21 @@ function ProctorLobbyContent() {
                       {attendedIds.has(selected.id) ? 'Verified in room' : 'Mark as verified in room'}
                     </Text>
                   </View>
-                </PressableBox>
+                </PressableBox> */}
+                <DetailRow
+                  label="Admission"
+                  value={selected.approvalStatus === 'approved'
+                    ? 'Approved · Present'
+                    : selected.approvalStatus === 'declined'
+                      ? 'Declined · Blocked'
+                      : 'Pending approval'}
+                />
+                {selected.approvalStatus !== 'approved' ? (
+                  <Button title="Approve & Mark Present" onPress={() => void updateApproval(selected, 'approved')} />
+                ) : null}
+                {selected.approvalStatus !== 'declined' ? (
+                  <Button title="Decline Entry" variant="outline" onPress={() => void updateApproval(selected, 'declined')} />
+                ) : null}
                 {selected.status === 'disconnected' ? (
                   <Button
                     title="Issue new reconnect PIN"
@@ -2200,6 +2313,110 @@ function ProctorLobbyContent() {
               </View>
             </View>
           ) : null}
+        </View>
+      </Modal>
+
+      <Modal
+        visible={examSetModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setExamSetModalVisible(false)}
+      >
+        <View style={styles.directoryOverlay}>
+          <PressableBox
+            style={StyleSheet.absoluteFill}
+            onPress={() => setExamSetModalVisible(false)}
+          />
+          <View style={[styles.directorySheet, { backgroundColor: themeColors.card }]}>
+            <View style={styles.directoryHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.directoryTitle, { color: themeColors.textPrimary }]}>
+                  Students &amp; Examination Sets
+                </Text>
+                <Text style={[styles.directorySubtitle, { color: themeColors.textSecondary }]}>
+                  Room roster · {lobby?.assignedCount ?? lobby?.registeredCount ?? studentsList.length} assigned · {lobby?.presentCount ?? 0} present · {lobby?.connectedCount ?? 0} connected
+                </Text>
+              </View>
+              <PressableBox
+                accessibilityRole="button"
+                accessibilityLabel="Close student examination set list"
+                onPress={() => setExamSetModalVisible(false)}
+                hitSlop={10}
+              >
+                <X size={22} color={themeColors.textMuted} />
+              </PressableBox>
+            </View>
+
+            <View style={[styles.directorySearch, { borderColor: themeColors.cardBorder, backgroundColor: themeColors.cardMuted }]}>
+              <Search size={18} color={themeColors.textMuted} />
+              <TextInput
+                value={examSetSearch}
+                onChangeText={setExamSetSearch}
+                placeholder="Search student, applicant ID, or set"
+                placeholderTextColor={themeColors.textMuted}
+                style={[styles.directorySearchInput, { color: themeColors.textPrimary }]}
+                autoCapitalize="none"
+                returnKeyType="search"
+              />
+            </View>
+
+            <ScrollView style={styles.directoryList} contentContainerStyle={styles.directoryListContent}>
+              {searchableExamSetStudents.length ? searchableExamSetStudents.map((student) => {
+                const admission = student.approvalStatus === 'approved'
+                  ? (student.attendanceStatus === 'present' ? 'Present' : 'Approved')
+                  : student.approvalStatus === 'declined'
+                    ? 'Declined'
+                    : 'Pending approval';
+                const status = student.status === 'taking_exam'
+                  ? 'Answering'
+                  : student.status === 'finished'
+                    ? 'Submitted'
+                    : student.status === 'disconnected'
+                      ? 'Disconnected'
+                      : student.attendanceStatus === 'absent'
+                        ? 'Absent'
+                        : student.status === 'not_arrived'
+                          ? 'Not Arrived'
+                          : 'Waiting';
+                return (
+                  <PressableBox
+                    key={student.id}
+                    style={[styles.directoryRow, { borderColor: themeColors.cardBorder }]}
+                    onPress={() => {
+                      setExamSetModalVisible(false);
+                      setSelected(student);
+                    }}
+                  >
+                    <View style={styles.directoryRowMain}>
+                      <Text style={[styles.directoryRowName, { color: themeColors.textPrimary }]} numberOfLines={1}>
+                        {student.fullName}
+                      </Text>
+                      <Text style={[styles.directoryRowId, { color: themeColors.textSecondary }]} numberOfLines={1}>
+                        {student.studentId || student.applicantCode || 'No applicant ID'}
+                      </Text>
+                    </View>
+                    <View style={styles.directoryRowMeta}>
+                      <View style={[styles.examSetChip, { backgroundColor: themeColors.accentMuted }]}>
+                        <Text style={[styles.examSetChipText, { color: themeColors.accent }]}>
+                          {student.examSet || 'Set 1'}
+                        </Text>
+                      </View>
+                      <Text style={[styles.directoryAdmission, { color: student.approvalStatus === 'approved' ? themeColors.success : student.approvalStatus === 'declined' ? themeColors.danger : themeColors.warning }]}>
+                        {admission}
+                      </Text>
+                      <Text style={[styles.directoryStatus, { color: themeColors.textMuted }]}>
+                        {status}
+                      </Text>
+                    </View>
+                  </PressableBox>
+                );
+              }) : (
+                <Text style={[styles.directoryEmpty, { color: themeColors.textSecondary }]}>
+                  No students match this search.
+                </Text>
+              )}
+            </ScrollView>
+          </View>
         </View>
       </Modal>
 
@@ -3165,7 +3382,9 @@ const styles = StyleSheet.create({
     gap: 10,
     maxHeight: '85%',
   },
+  detailHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 4 },
   detailTitle: { fontSize: 20, fontWeight: '800', color: colors.ink },
+  detailSubtitle: { fontSize: 13, lineHeight: 19, marginTop: 4 },
   detailRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -3431,6 +3650,72 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+
+  examSetDirectoryButton: {
+    minHeight: 64,
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  examSetDirectoryText: { flex: 1, gap: 2 },
+  examSetDirectoryTitle: { fontSize: 14, fontWeight: '800' },
+  examSetDirectorySubtitle: { fontSize: 11, fontWeight: '500' },
+  pendingApprovalBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  pendingApprovalBadgeText: { fontSize: 10, fontWeight: '800' },
+  directoryOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  directorySheet: {
+    maxHeight: '82%',
+    minHeight: '48%',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 18,
+    gap: 12,
+  },
+  directoryHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  directoryTitle: { fontSize: 18, fontWeight: '800' },
+  directorySubtitle: { fontSize: 12, marginTop: 2 },
+  directorySearch: {
+    minHeight: 46,
+    borderRadius: 13,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  directorySearchInput: { flex: 1, fontSize: 13, paddingVertical: 0 },
+  directoryList: { flex: 1 },
+  directoryListContent: { gap: 8, paddingBottom: 24 },
+  directoryRow: {
+    minHeight: 68,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  directoryRowMain: { flex: 1, minWidth: 0, gap: 3 },
+  directoryRowName: { fontSize: 13, fontWeight: '800' },
+  directoryRowId: { fontSize: 11, fontWeight: '500' },
+  directoryRowMeta: { alignItems: 'flex-end', gap: 3 },
+  directoryAdmission: { fontSize: 10, fontWeight: '800' },
+  directoryStatus: { fontSize: 10, fontWeight: '600' },
+  directoryEmpty: { textAlign: 'center', paddingVertical: 28, fontSize: 13 },
 
   closeFooter: {
     paddingTop: 12,

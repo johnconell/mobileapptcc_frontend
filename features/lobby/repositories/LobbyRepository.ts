@@ -18,7 +18,6 @@ import { validateOfflineProctorRoom } from '@/features/examinations/services/off
 import { parsePeerQr, PeerExamServer, resolveNumericScheduleId } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
 import { DeviceService } from '@/shared/services/DeviceService';
-import { requireGuidedAccess } from '@/features/examinations/services/guidedAccess';
 import {
   formatScheduleOpeningTime,
   getProctorScheduleAvailability,
@@ -1100,7 +1099,6 @@ export const LobbyRepository = {
     sessionId: string,
     passkey: string,
   ): Promise<LobbySnapshot> {
-    requireGuidedAccess();
     const code = (await getStoredCode()) || '';
     if (!code) throw new Error('Missing examination code. Scan QR again.');
     const deviceId = await DeviceService.getDeviceId();
@@ -1206,7 +1204,6 @@ export const LobbyRepository = {
   },
 
   async joinStudent(student: StudentRecord, sessionId: string): Promise<LobbySnapshot> {
-    requireGuidedAccess();
     const code = (await getStoredCode()) || '';
     if (!code) throw new Error('Missing examination code. Scan QR again.');
 
@@ -1235,8 +1232,9 @@ export const LobbyRepository = {
         s.studentId === student.studentId || s.id === String(student.registration_id)
           ? {
               ...s,
-              status: 'taking_exam' as const,
-              startedAt: now,
+              status: 'waiting' as const,
+              approvalStatus: 'pending' as const,
+              attendanceStatus: 'pending' as const,
               lastActivityAt: now,
             }
           : s,
@@ -1442,6 +1440,21 @@ export const LobbyRepository = {
     return null;
   },
 
+  async setStudentApproval(
+    studentId: string,
+    approvalStatus: 'approved' | 'declined',
+  ): Promise<LobbySnapshot | null> {
+    const peer = await PeerExamServer.snapshot();
+    if (peer) {
+      return PeerExamServer.setStudentApproval(studentId, approvalStatus);
+    }
+    const response = await apiRequest<{ data?: LobbySnapshot }>(`/proctor/registrations/${studentId}/approval`, {
+      method: 'POST',
+      body: { approval_status: approvalStatus },
+    });
+    return response.data ?? null;
+  },
+
   async syncPendingCount(examSessionId?: string | number): Promise<{
     pending: number;
     configured: boolean;
@@ -1569,6 +1582,7 @@ export const LobbyRepository = {
     startedAt?: string;
     endsAt?: string;
     durationMinutes?: number;
+    approvalStatus?: 'pending' | 'approved' | 'declined';
   }> {
     // Peer LAN is the exam network. Never skip it because cloud is offline.
     if (await PeerExamClient.isActive()) {
@@ -1606,6 +1620,7 @@ export const LobbyRepository = {
           startedAt?: string;
           endsAt?: string;
           durationMinutes?: number;
+          approvalStatus?: 'pending' | 'approved' | 'declined';
         }>('/heartbeat', {
           method: 'POST',
           body: {
@@ -1636,6 +1651,7 @@ export const LobbyRepository = {
           startedAt: pulse?.startedAt,
           endsAt: pulse?.endsAt,
           durationMinutes: pulse?.durationMinutes,
+          approvalStatus: pulse?.approvalStatus,
         };
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Lost the proctor phone.';
@@ -1665,12 +1681,27 @@ export const LobbyRepository = {
     if (!token) return { ok: false, message: 'Missing participation token.' };
 
     try {
-      await apiRequest('/exam/heartbeat', {
+      const pulse = await apiRequest<{
+        success?: boolean;
+        data?: {
+          lobby_status?: string | null;
+          approval_status?: 'pending' | 'approved' | 'declined';
+          status?: string;
+          last_heartbeat_at?: string | null;
+        };
+      }>('/exam/heartbeat', {
         method: 'POST',
         auth: false,
         body: { participation_token: token },
       });
-      return { ok: true };
+      const status = pulse.data?.status;
+      return {
+        ok: true,
+        status,
+        roomStatus: status,
+        approvalStatus: pulse.data?.approval_status,
+        myStatus: pulse.data?.lobby_status ?? undefined,
+      };
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Heartbeat failed.';
       const isRemoved =
@@ -1706,12 +1737,12 @@ export const LobbyRepository = {
   },
 
   async reconnectWithCode(code: string): Promise<{ ok: boolean; message?: string }> {
-    if (await OfflineStore.isOfflineMode()) {
-      return { ok: false, message: 'Reconnect requires the campus exam server.' };
-    }
     const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
     if (!token) return { ok: false, message: 'Missing participation token.' };
 
+    // A proctor phone is the authoritative offline exam server. It must win
+    // over the generic offline-pack branch so a LAN reconnect PIN works with
+    // no internet connection.
     if (await PeerExamClient.isActive()) {
         try {
             await PeerExamClient.request('/reconnect', {
@@ -1725,6 +1756,10 @@ export const LobbyRepository = {
               message: classifyPeerReconnectError(e instanceof Error ? e.message : 'Reconnect failed.'),
             };
         }
+    }
+
+    if (await OfflineStore.isOfflineMode()) {
+      return { ok: false, message: 'Reconnect requires the campus exam server.' };
     }
 
     try {

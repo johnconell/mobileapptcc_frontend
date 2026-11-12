@@ -305,11 +305,15 @@ export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
       ) {
         exam.restoreProgress({
           answers: checkpoint.answers,
+          flags: checkpoint.flags,
+          navMode: checkpoint.navMode,
           currentIndex: checkpoint.currentIndex,
           remainingSeconds: checkpoint.remainingSeconds,
           totalDurationSeconds: checkpoint.totalDurationSeconds ?? authoritativeDuration * 60,
           startedAt: heartbeat?.startedAt || checkpoint.startedAt,
           deadline: heartbeat?.endsAt || checkpoint.deadline,
+          scheduleClosingTime: checkpoint.scheduleClosingTime,
+          attemptId: checkpoint.attemptId || token,
           timeSync: checkpoint.timeSync,
         });
         exam.markAutoSaved(checkpoint.savedAt);

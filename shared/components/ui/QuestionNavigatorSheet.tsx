@@ -58,8 +58,10 @@ function QuestionNavigatorSheetComponent({
     [onJumpToQuestion, onClose],
   );
 
+  // Size each cell from the actual sheet content width. Explicit column/row
+  // gaps avoid flex-wrap distributing a fifth cell onto a visually uneven row.
   const horizontalPadding = 32;
-  const gap = 8;
+  const gap = 6;
   const numColumns = 5;
   const itemWidth = Math.floor(
     (windowWidth - horizontalPadding - gap * (numColumns - 1)) / numColumns,
@@ -112,6 +114,12 @@ function QuestionNavigatorSheetComponent({
               label="Unanswered"
               textColor={theme.text}
             />
+            <Legend
+              color={theme.surface}
+              borderColor={theme.ring}
+              label="Current"
+              textColor={theme.text}
+            />
           </View>
 
           <ScrollView
@@ -123,11 +131,11 @@ function QuestionNavigatorSheetComponent({
               <View key={category.name} style={styles.categoryBlock}>
                 <Text style={[styles.categoryTitle, { color: theme.text }]}>{category.name}</Text>
                 <View style={styles.gridContainer}>
-                  {category.items.map(({ question, index }, categoryIndex) => {
+                  {category.items.map(({ question, index }) => {
                     const answered = isQuestionAnswered(answers[question.id]);
                     const flagged = Boolean(flags[question.id]);
                     const current = index === currentIndex;
-                    const number = categoryIndex + 1;
+                    const number = Number.isFinite(question.number) ? question.number : index + 1;
 
                     let backgroundColor = theme.surface;
                     let borderColor = theme.border;
@@ -236,7 +244,14 @@ const styles = StyleSheet.create({
   gridContent: { paddingBottom: 8 },
   categoryBlock: { marginBottom: 16 },
   categoryTitle: { fontSize: 15, fontWeight: '600', marginBottom: 9 },
-  gridContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  gridContainer: {
+    width: '100%',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: 6,
+    rowGap: 8,
+    alignItems: 'flex-start',
+  },
   gridButton: {
     height: 42,
     borderRadius: 10,

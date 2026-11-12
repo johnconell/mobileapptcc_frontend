@@ -35,6 +35,7 @@ export type RestoreProgressPayload = {
   scheduleClosingTime?: string | null;
   attemptId?: string;
   timeSync?: TimeSyncMetadata;
+  revision?: number;
 };
 
 interface ExamState {
@@ -53,6 +54,8 @@ interface ExamState {
   timerStatus: TimerStateStatus;
   reconciliationReason: string | null;
   timeSync: TimeSyncMetadata | null;
+  /** Monotonic revision used to reconcile local and proctor checkpoints. */
+  checkpointRevision: number;
   autoSavedAt: string | null;
   submittedAt: string | null;
   isSubmitting: boolean;
@@ -104,6 +107,7 @@ const initialState = {
   timerStatus: 'not_started' as TimerStateStatus,
   reconciliationReason: null as string | null,
   timeSync: null as TimeSyncMetadata | null,
+  checkpointRevision: 0,
   autoSavedAt: null as string | null,
   submittedAt: null as string | null,
   isSubmitting: false,
@@ -125,11 +129,15 @@ export const useExamStore = create<ExamState>((set, get) => ({
       answers[q.id] = { questionId: q.id, selectedAnswer: null, answeredAt: null };
       flags[q.id] = false;
     });
-    set({ questions, answers, flags, currentIndex: 0 });
+    set({ questions, answers, flags, currentIndex: 0, checkpointRevision: 0 });
   },
 
   setCurrentIndex: (currentIndex) =>
-    set((state) => (state.currentIndex === currentIndex ? state : { currentIndex })),
+    set((state) =>
+      state.currentIndex === currentIndex
+        ? state
+        : { currentIndex, checkpointRevision: state.checkpointRevision + 1 },
+    ),
 
   selectAnswer: (questionId, answer) => {
     const state = get();
@@ -149,6 +157,7 @@ export const useExamStore = create<ExamState>((set, get) => ({
         ...s.answers,
         [questionId]: { questionId, selectedAnswer: answer, answeredAt: now },
       },
+      checkpointRevision: s.checkpointRevision + 1,
     }));
   },
 
@@ -166,10 +175,16 @@ export const useExamStore = create<ExamState>((set, get) => ({
         ...s.flags,
         [questionId]: !s.flags[questionId],
       },
+      checkpointRevision: s.checkpointRevision + 1,
     }));
   },
 
-  setNavMode: (navMode) => set({ navMode }),
+  setNavMode: (navMode) =>
+    set((state) =>
+      state.navMode === navMode
+        ? state
+        : { navMode, checkpointRevision: state.checkpointRevision + 1 },
+    ),
 
   setRemainingSeconds: (remainingSeconds: number) =>
     set({
@@ -222,6 +237,9 @@ export const useExamStore = create<ExamState>((set, get) => ({
       timerStatus: recalculated.status,
       reconciliationReason: recalculated.statusReason ?? null,
       timeSync: recalculated.updatedTimeSync,
+      checkpointRevision: Number.isSafeInteger(payload.revision)
+        ? Number(payload.revision)
+        : state.checkpointRevision,
       submittedAt: null,
       isSubmitting: false,
       isPaused: false,
@@ -297,6 +315,7 @@ export const useExamStore = create<ExamState>((set, get) => ({
     let scheduleClosingTime: string | null = null;
     let attemptId: string | null = null;
     let serverTime: string | undefined;
+    let deadlineOverride: string | undefined;
 
     if (typeof options === 'number') {
       durationMinutes = options;
@@ -306,9 +325,11 @@ export const useExamStore = create<ExamState>((set, get) => ({
       if (options.scheduleClosingTime !== undefined) scheduleClosingTime = options.scheduleClosingTime;
       if (options.attemptId) attemptId = options.attemptId;
       if (options.serverTime) serverTime = options.serverTime;
+      if (options.deadline) deadlineOverride = options.deadline;
     }
 
-    const { deadlineIso } = computeEffectiveDeadline(startedAt, durationMinutes, scheduleClosingTime);
+    const { deadlineIso: computedDeadline } = computeEffectiveDeadline(startedAt, durationMinutes, scheduleClosingTime);
+    const deadlineIso = deadlineOverride ?? computedDeadline;
     const initialSync = createInitialTimeSync({ serverTimeIso: serverTime });
 
     set({

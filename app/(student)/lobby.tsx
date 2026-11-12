@@ -9,7 +9,6 @@ import { Button } from '@/shared/components/ui/Button';
 import { useLobby } from '@/features/lobby/hooks/useLobby';
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
-import { StudentRepository } from '@/features/applicants/repositories/StudentRepository';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
@@ -64,6 +63,7 @@ function useLobbyController() {
   const [lastPulseAt, setLastPulseAt] = useState<number>(Date.now());
   const [pulseOk, setPulseOk] = useState(true);
   const [durableParticipation, setDurableParticipation] = useState(false);
+  const [approvalStatus, setApprovalStatus] = useState<'pending' | 'approved' | 'declined'>('pending');
   const [hydratedSessionId, setHydratedSessionId] = useState<string | null>(null);
 
   const hasEntered = useRef(false);
@@ -192,6 +192,7 @@ function useLobbyController() {
       inFlight = true;
       try {
         let beat = await LobbyRepository.sendHeartbeat();
+        if (beat.approvalStatus) setApprovalStatus(beat.approvalStatus);
 
         // REAL-TIME REMOVAL EVENT: proctor kicked or terminated examinee
         if (
@@ -273,6 +274,7 @@ function useLobbyController() {
           setLastPulseAt(Date.now());
           setLastSeen(Date.now());
           console.log('[STUDENT] Pulse', pulse.roomStatus, pulse.authorityStatus ?? '');
+          if (beat.approvalStatus && beat.approvalStatus !== 'approved') return;
           const next = await applyLiveStatus(pulse.roomStatus, pulse.startSeq);
           if (next === 'ACTIVE') {
             console.log('[STUDENT] ACTIVE Received');
@@ -364,15 +366,23 @@ function useLobbyController() {
 
       requireGuidedAccess();
       console.log('[STUDENT] Navigation Triggered');
+      // The exam screen reads questions from Zustand on its first render. The
+      // pack was already verified above, but the previous flow navigated
+      // before copying it into the store, so exam.tsx saw an empty list and
+      // redirected to the landing page while kiosk mode stayed enabled.
+      setQuestions(questions);
       setSessionId(scannedSessionId);
       const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+      const authoritativeStartedAt = lobbyData?.session?.startedAt || new Date().toISOString();
+      const authoritativeDeadline = lobbyData?.session?.endsAt || undefined;
       startExam({
         durationMinutes: duration,
         attemptId: token ?? undefined,
-        startedAt: new Date().toISOString(),
+        startedAt: authoritativeStartedAt,
+        deadline: authoritativeDeadline,
+        serverTime: new Date().toISOString(),
       });
       await ExamLifecycle.apply('ACTIVE', { sessionId: scannedSessionId });
-      void LobbyRepository.acknowledgeStart('entered');
       router.replace('/(student)/exam');
     } catch (err) {
       console.error('[STUDENT] Examination entry failed:', {
@@ -447,6 +457,7 @@ function useLobbyController() {
     retryPackDownload: ensurePackDownload,
     authority,
     pulseOk,
+    approvalStatus,
   };
 }
 
@@ -473,27 +484,12 @@ export default function StudentLobbyScreen() {
       );
   }
 
-  const { lobbyData, currentStudent, isStale, progress, packDownloadError, authority, pulseOk } = controller;
+  const { lobbyData, currentStudent, isStale, progress, packDownloadError, authority, pulseOk, approvalStatus } = controller;
   const proctorReconnecting = controller.lobbyQuery.isError || isStale || !pulseOk;
   const examReady = Boolean(progress.moduleReady && progress.hashVerified && progress.percent >= 100);
 
   const handleExit = () => {
     const leave = async () => {
-      const studentId = currentStudent?.id;
-      if (studentId && authority !== 'ENDED') {
-        try {
-          await StudentRepository.cancelRegistration(String(studentId));
-        } catch (error) {
-          Alert.alert(
-            'Unable to exit examination',
-            error instanceof Error
-              ? error.message
-              : 'The examination session could not be terminated. Keep the app open and try again.',
-          );
-          return;
-        }
-      }
-
       try {
         await releaseExamSessionRestrictions('lobby_exit');
       } catch (error) {
@@ -506,26 +502,28 @@ export default function StudentLobbyScreen() {
         return;
       }
 
-      await Promise.allSettled([
-        appStorage.deleteItem(STORAGE_KEYS.participationToken),
-        appStorage.deleteItem(STORAGE_KEYS.examinationCode),
-        appStorage.deleteItem(STORAGE_KEYS.studentProgress),
-        appStorage.deleteItem(STORAGE_KEYS.examCheckpoint),
-        appStorage.deleteItem('tcc.student.preload.ready'),
-        ExamLifecycle.clear(),
-        PeerExamClient.clear(),
-      ]);
-      try {
-        const { clearApplicantExamMaterial } = await import(
-          '@/features/applicants/services/applicantExamCleanup'
-        );
-        await clearApplicantExamMaterial();
-      } catch {
-        /* ignore */
+      if (authority === 'ENDED') {
+        await Promise.allSettled([
+          appStorage.deleteItem(STORAGE_KEYS.participationToken),
+          appStorage.deleteItem(STORAGE_KEYS.examinationCode),
+          appStorage.deleteItem(STORAGE_KEYS.studentProgress),
+          appStorage.deleteItem(STORAGE_KEYS.examCheckpoint),
+          appStorage.deleteItem('tcc.student.preload.ready'),
+          ExamLifecycle.clear(),
+          PeerExamClient.clear(),
+        ]);
+        try {
+          const { clearApplicantExamMaterial } = await import(
+            '@/features/applicants/services/applicantExamCleanup'
+          );
+          await clearApplicantExamMaterial();
+        } catch {
+          /* ignore */
+        }
+        useStudentStore.getState().reset();
+        useExamStore.getState().reset();
+        useLobbyStore.getState().reset();
       }
-      useStudentStore.getState().reset();
-      useExamStore.getState().reset();
-      useLobbyStore.getState().reset();
       router.replace('/');
     };
 
@@ -536,7 +534,7 @@ export default function StudentLobbyScreen() {
 
     Alert.alert(
       'Exit Examination',
-      'Are you sure you want to leave the examination lobby and return to the main landing page?',
+      'Your approved participation, answers, flags, and timer checkpoint will remain saved so you can reconnect. Return to the main landing page?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -546,6 +544,17 @@ export default function StudentLobbyScreen() {
         },
       ],
     );
+  };
+
+  const handleDeclinedAdmission = async () => {
+    await Promise.allSettled([
+      appStorage.deleteItem(STORAGE_KEYS.participationToken),
+      appStorage.deleteItem(STORAGE_KEYS.examinationCode),
+      PeerExamClient.clear(),
+    ]);
+    useStudentStore.getState().reset();
+    useLobbyStore.getState().reset();
+    router.replace('/');
   };
 
   return (
@@ -608,7 +617,11 @@ export default function StudentLobbyScreen() {
                     ? 'Waiting for Proctor Connection'
                   : packDownloadError
                     ? 'Examination pack unavailable'
-                  : controller.state === 'STARTING' || authority === 'ACTIVE'
+                   : approvalStatus === 'declined'
+                     ? 'Admission Declined'
+                   : approvalStatus !== 'approved'
+                     ? 'Waiting for Proctor Approval'
+                   : controller.state === 'STARTING' || authority === 'ACTIVE'
                     ? 'Entry Authorized!'
                     : controller.state === 'FINISHING_DOWNLOAD'
                       ? 'Finishing Download...'
@@ -621,7 +634,11 @@ export default function StudentLobbyScreen() {
                     ? 'Your identity, answers, and examination progress remain saved on this phone. Reconnecting automatically over the exam Wi‑Fi.'
                   : packDownloadError
                     ? packDownloadError
-                  : controller.state === 'STARTING' || authority === 'ACTIVE'
+                   : approvalStatus === 'declined'
+                     ? 'The proctor declined this admission request. You cannot enter this examination room.'
+                   : approvalStatus !== 'approved'
+                     ? 'Your request was sent. You will be admitted automatically after the proctor approves it.'
+                   : controller.state === 'STARTING' || authority === 'ACTIVE'
                     ? 'Launching examination browser. Please hold on.'
                     : controller.state === 'FINISHING_DOWNLOAD'
                       ? `The proctor has started the exam. Completing download at ${Math.round(progress.percent)}%.`
@@ -633,6 +650,12 @@ export default function StudentLobbyScreen() {
           {authority === 'ENDED' ? (
             <View style={styles.startingBox}>
               <Button title="Return Home" onPress={handleExit} />
+            </View>
+          ) : null}
+
+          {approvalStatus === 'declined' ? (
+            <View style={styles.startingBox}>
+              <Button title="Return to Join Screen" onPress={() => void handleDeclinedAdmission()} />
             </View>
           ) : null}
 

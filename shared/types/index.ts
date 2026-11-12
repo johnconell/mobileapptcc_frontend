@@ -11,9 +11,12 @@ export type LobbyStudentStatus =
   | 'waiting'
   | 'taking_exam'
   | 'disconnected'
+  | 'not_arrived'
   | 'finished'
   | 'warning'
   | 'terminated';
+
+export type StudentApprovalStatus = 'pending' | 'approved' | 'declined';
 
 export type ChoiceKey = 'A' | 'B' | 'C' | 'D';
 
@@ -185,6 +188,14 @@ export interface LobbyStudent {
   submittedAt?: string | null;
   score?: number | null;
   examSet?: string;
+  approvalStatus?: StudentApprovalStatus;
+  approvalRequestedAt?: string | null;
+  approvedAt?: string | null;
+  declinedAt?: string | null;
+  /** Offline room roster state. This is separate from LAN connection status. */
+  isAssigned?: boolean;
+  isConnected?: boolean;
+  attendanceStatus?: 'pending' | 'present' | 'not_arrived' | 'absent' | 'blocked';
 }
 
 export interface LobbySnapshot {
@@ -199,6 +210,11 @@ export interface LobbySnapshot {
   roomName?: string | null;
   roomId?: number | null;
   registeredCount: number;
+  /** Number of students assigned to this room, including students not yet connected. */
+  assignedCount?: number;
+  presentCount?: number;
+  absentCount?: number;
+  notArrivedCount?: number;
   connectedCount: number;
   notYetConnectedCount: number;
   waitingCount: number;

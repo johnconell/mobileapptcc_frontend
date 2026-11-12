@@ -5,7 +5,7 @@ import { STORAGE_KEYS } from '@/shared/constants';
 import { appStorage } from '@/shared/services/storage';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { normalizePasskey } from '@/features/examinations/services/passkeyFormat';
-import { encryptJson, decryptJson } from '@/features/synchronization/services/offlineStore';
+import { OfflineStore, encryptJson, decryptJson } from '@/features/synchronization/services/offlineStore';
 import { persistDisconnectGraceSeconds } from '@/shared/utils/gracePeriod';
 import {
   countMediaAssets,
@@ -27,6 +27,14 @@ export type PreloadPackageResult = {
   count: number;
   hash: string;
   error?: string;
+};
+
+export type ExamScheduleMetadata = {
+  title: string;
+  examDate: string;
+  timeSlot: string;
+  startTime?: string;
+  endTime?: string;
 };
 
 type ExaminationSettings = {
@@ -51,6 +59,7 @@ type PreloadEncryptedPayload = {
   assetsDownloaded?: number;
   assetsExpected?: number;
   configurationComplete?: boolean;
+  schedule?: ExamScheduleMetadata | null;
 };
 
 type ProgressListener = (progress: ExamPackProgress) => void;
@@ -134,6 +143,29 @@ function progressFromPayload(
   };
 }
 
+function scheduleMetadataFromPack(
+  pack: Awaited<ReturnType<typeof OfflineStore.getPack>>,
+  sessionId: string,
+): ExamScheduleMetadata | null {
+  if (!pack?.schedules?.length) return null;
+  const numericId = Number(sessionId);
+  let schedule = Number.isInteger(numericId)
+    ? pack.schedules.find((candidate) => Number(candidate.id) === numericId)
+    : undefined;
+  if (!schedule && sessionId.startsWith('date-')) {
+    const date = sessionId.slice(5, 15);
+    schedule = pack.schedules.find((candidate) => candidate.exam_date === date);
+  }
+  if (!schedule) return null;
+  return {
+    title: schedule.title || 'Entrance Examination',
+    examDate: schedule.exam_date || '',
+    timeSlot: schedule.time_slot || '',
+    startTime: schedule.start_time,
+    endTime: schedule.end_time,
+  };
+}
+
 export const ExamPreloader = {
   getProgress(): ExamPackProgress {
     return currentProgress;
@@ -170,6 +202,7 @@ export const ExamPreloader = {
     let durationMinutes = 60;
     let examinationSettings: ExaminationSettings | null = null;
     let packageVersion = 1;
+    let schedule: ExamScheduleMetadata | null = null;
 
     emitProgress({
       phase: 'downloading',
@@ -185,6 +218,13 @@ export const ExamPreloader = {
         violationLimit?: number;
         examinationSettings?: ExaminationSettings;
         packageVersion?: number;
+        schedule?: {
+          title?: string;
+          exam_date?: string;
+          time_slot?: string;
+          start_time?: string;
+          end_time?: string;
+        };
       } | null = null;
       let lastErr: unknown = null;
 
@@ -203,6 +243,13 @@ export const ExamPreloader = {
             violationLimit?: number;
             examinationSettings?: ExaminationSettings;
             packageVersion?: number;
+            schedule?: {
+              title?: string;
+              exam_date?: string;
+              time_slot?: string;
+              start_time?: string;
+              end_time?: string;
+            };
           }>('/package', {
             method: 'POST',
             body: {
@@ -227,6 +274,15 @@ export const ExamPreloader = {
           await persistDisconnectGraceSeconds(examinationSettings.disconnect_grace_seconds);
         }
         packageVersion = packageRes.packageVersion || 1;
+        schedule = packageRes.schedule
+          ? {
+              title: packageRes.schedule.title || 'Entrance Examination',
+              examDate: packageRes.schedule.exam_date || '',
+              timeSlot: packageRes.schedule.time_slot || '',
+              startTime: packageRes.schedule.start_time,
+              endTime: packageRes.schedule.end_time,
+            }
+          : null;
         emitProgress({
           phase: 'downloading',
           percent: 50,
@@ -282,6 +338,8 @@ export const ExamPreloader = {
       examinationSettings = { duration_minutes: durationMinutes };
     }
 
+    schedule = schedule ?? scheduleMetadataFromPack(await OfflineStore.getPack(), input.sessionId);
+
     if (!questions || !questions.length) {
       const errorMsg = 'Examination package contains no questions. Contact your proctor.';
       emitProgress({ phase: 'error', error: errorMsg, moduleReady: false });
@@ -331,6 +389,7 @@ export const ExamPreloader = {
       assetsDownloaded: assets,
       assetsExpected: assets,
       configurationComplete: Boolean(durationMinutes && examinationSettings),
+      schedule,
     };
 
     const encryptedBlob = await encryptJson(payload);
@@ -492,6 +551,11 @@ export const ExamPreloader = {
   async getCachedSettings(): Promise<ExaminationSettings | null> {
     const payload = await this.getPreloadedPayload();
     return payload?.examinationSettings ?? null;
+  },
+
+  async getCachedScheduleMetadata(): Promise<ExamScheduleMetadata | null> {
+    const payload = await this.getPreloadedPayload();
+    return payload?.schedule ?? null;
   },
 
   async clear(): Promise<void> {

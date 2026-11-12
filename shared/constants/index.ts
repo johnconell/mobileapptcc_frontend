@@ -4,7 +4,7 @@ export const SCHOOL_SHORT = 'TCC';
 
 export const EXAM_DURATION_MINUTES = 60;
 export const JOIN_EARLY_MINUTES = 30;
-export const TOTAL_QUESTIONS = 80;
+export const TOTAL_QUESTIONS = 100;
 export const MAX_EXAM_VIOLATIONS = 0;
 export const DEFAULT_DISCONNECT_GRACE_SECONDS = 120;
 export const DEFAULT_TAB_SWITCH_GRACE_SECONDS = 0;
@@ -65,6 +65,7 @@ export const STATUS_LABELS = {
   waiting: 'Waiting to start',
   taking_exam: 'Taking',
   disconnected: 'Disconnected',
+  not_arrived: 'Not Arrived',
   finished: 'Done',
   warning: 'Warning',
   terminated: 'Terminated',

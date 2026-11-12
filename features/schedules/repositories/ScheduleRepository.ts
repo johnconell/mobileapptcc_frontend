@@ -136,7 +136,9 @@ function toMobileRoom(row: BackendRoom, scheduleId: string): ExamRoom {
     scheduleId,
     roomName: row.room_name,
     capacity: Number(row.capacity ?? 0),
-    studentCount: Number(row.student_count ?? row.capacity ?? 0),
+    // Capacity is a room limit, not an assignment count. Falling back to it
+    // made every room appear full when the API omitted student_count.
+    studentCount: Number(row.student_count ?? 0),
     examSessionId: row.exam_session_id ?? null,
     examinationCode: row.examination_code ?? null,
     status: row.status || 'idle',

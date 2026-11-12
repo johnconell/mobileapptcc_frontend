@@ -44,7 +44,11 @@ import type {
 
 export const PEER_PORT = 9777;
 export const PEER_PATH_PREFIX = '/p2p';
-export const MAX_ROOM_CAPACITY = 60;
+export const MAX_ROOM_CAPACITY = 30;
+/** A missed heartbeat is reflected in the proctor roster quickly, without
+ * changing the persisted attempt or deleting the student's seat. */
+export const PEER_HEARTBEAT_TIMEOUT_MS = 20_000;
+export const LATE_ADMISSION_MESSAGE = 'Examination Already Started — Late admission is not allowed.';
 
 /** Canonical form used by QR, typed-code, LAN discovery, and room validation. */
 export function normalizeExaminationCode(raw: unknown): string {
@@ -53,7 +57,7 @@ export function normalizeExaminationCode(raw: unknown): string {
 
 function resolveRoomStudentLimit(pack: OfflinePack | null | undefined): number {
   const n = Number(pack?.examination_settings?.room_student_limit);
-  if (Number.isInteger(n) && n >= 1 && n <= 500) return n;
+  if (Number.isInteger(n) && n >= 1 && n <= MAX_ROOM_CAPACITY) return n;
   return MAX_ROOM_CAPACITY;
 }
 
@@ -102,6 +106,10 @@ type PeerStudentState = {
   violationCount: number;
   terminationReason: ExamTerminationReason | null;
   answers: Record<string, string | null>;
+  flags?: Record<string, boolean>;
+  currentIndex?: number;
+  navMode?: 'scroll' | 'one_at_a_time';
+  deadline?: string | null;
   /** Monotonic device checkpoint revision; rejects delayed stale LAN writes. */
   answerRevision?: number;
   answersUpdatedAt?: string | null;
@@ -123,6 +131,10 @@ type PeerStudentState = {
   examSet?: string;
   /** Exact server assignment; absent only for legacy registrations without a set. */
   assignedExamSet?: string;
+  approvalStatus?: 'pending' | 'approved' | 'declined';
+  approvalRequestedAt?: string | null;
+  approvedAt?: string | null;
+  declinedAt?: string | null;
 };
 
 type PeerViolation = {
@@ -419,16 +431,19 @@ function studentByToken(token: string): PeerStudentState | null {
 function toLobbyStudent(state: PeerStudentState): LobbyStudent {
   let status = state.status;
 
-  // Keep a 90-second grace for brief phone sleep, host pause, or Wi-Fi recovery.
+  // Keep a short monitoring grace for a missed heartbeat. The attempt itself
+  // remains persisted and recoverable; this only changes the proctor roster.
   if (status !== 'finished' && status !== 'terminated') {
     const lastSeen = new Date(state.lastActivityAt).getTime();
     const idleSeconds = (Date.now() - lastSeen) / 1000;
-    if (idleSeconds > 90) {
+    if (Date.now() - lastSeen > PEER_HEARTBEAT_TIMEOUT_MS) {
       status = 'disconnected';
     }
   }
 
-    return {
+  const approvalStatus = state.approvalStatus ??
+    (state.startedAt || Object.keys(state.answers ?? {}).length > 0 ? 'approved' : 'pending');
+  return {
     id: String(state.registrationId),
     studentId: state.applicantCode,
     fullName: state.fullName,
@@ -453,6 +468,105 @@ function toLobbyStudent(state: PeerStudentState): LobbyStudent {
     moduleReady: Boolean(state.moduleReady ?? state.isReady),
     startPhase: state.startPhase ?? (state.status === 'taking_exam' ? 'entered' : 'waiting'),
     examSet: state.examSet ?? 'Set 1',
+    approvalStatus,
+    approvalRequestedAt: state.approvalRequestedAt ?? state.joinedAt,
+    approvedAt: state.approvedAt ?? null,
+    declinedAt: state.declinedAt ?? null,
+    attendanceStatus: approvalStatus === 'approved' ? 'present' : approvalStatus === 'declined' ? 'blocked' : 'pending',
+    isAssigned: true,
+    isConnected: status !== 'disconnected',
+  };
+}
+
+type AssignedRosterEntry = {
+  registrationId: number;
+  applicantId: number;
+  applicantCode: string;
+  fullName: string;
+  email: string;
+  programCode: string;
+  programName: string;
+  avatarInitials: string;
+  examSet: string;
+  attendanceStatus?: string | null;
+};
+
+/**
+ * The proctor roster is authoritative from the downloaded pack, not from the
+ * set of phones that have already connected. This lets the lobby show every
+ * assigned seat and keeps attendance independent from LAN presence.
+ */
+async function assignedRosterForSession(state: PeerSessionState): Promise<AssignedRosterEntry[]> {
+  const pack = await OfflineStore.getPack();
+  if (!pack) return [];
+  const schedule = pack.schedules.find((candidate) => Number(candidate.id) === Number(state.scheduleId));
+  if (!schedule) return [];
+
+  const managed = schedule.rooms_managed !== false;
+  return pack.registrations
+    .filter((registration) =>
+      Number(registration.examination_schedule_id) === Number(state.scheduleId) &&
+      (!managed || Number(registration.assigned_room_id) === Number(state.roomId)),
+    )
+    .map((registration) => {
+      const applicant = pack.applicants.find((candidate) => Number(candidate.id) === Number(registration.applicant_id));
+      const fullName = String(applicant?.name || [applicant?.first_name, applicant?.middle_name, applicant?.last_name]
+        .filter(Boolean)
+        .join(' ') || 'Student').trim();
+      const parts = fullName.split(/\s+/).filter(Boolean);
+      return {
+        registrationId: Number(registration.id),
+        applicantId: Number(registration.applicant_id),
+        applicantCode: String(applicant?.applicant_code || registration.applicant_id || registration.id),
+        fullName,
+        email: String(applicant?.gmail || applicant?.email || ''),
+        programCode: String(applicant?.course_applied || ''),
+        programName: String(applicant?.course_applied || ''),
+        avatarInitials: parts.slice(0, 2).map((part) => part[0] || '').join('').toUpperCase() || 'ST',
+        examSet: String(registration.exam_set || 'Set 1'),
+        attendanceStatus: registration.attendance_status,
+      };
+    });
+}
+
+function toNotArrivedRosterStudent(
+  entry: AssignedRosterEntry,
+  sessionStatus: PeerSessionState['status'],
+): LobbyStudent {
+  const attendanceStatus = sessionStatus === 'in_progress' || sessionStatus === 'ended'
+    ? 'absent'
+    : 'not_arrived';
+  return {
+    id: String(entry.registrationId),
+    studentId: entry.applicantCode,
+    fullName: entry.fullName,
+    email: entry.email,
+    programCode: entry.programCode,
+    programName: entry.programName,
+    avatarInitials: entry.avatarInitials,
+    status: 'not_arrived',
+    joinedAt: '',
+    startedAt: null,
+    lastActivityAt: '',
+    violationCount: 0,
+    terminationReason: null,
+    reconnectAllowed: false,
+    reconnectCode: null,
+    reconnectCodeExpiresAt: null,
+    isReady: false,
+    downloadPercent: 0,
+    hashVerified: false,
+    moduleReady: false,
+    startPhase: 'waiting',
+    applicantCode: entry.applicantCode,
+    examSet: entry.examSet,
+    approvalStatus: 'pending',
+    approvalRequestedAt: null,
+    approvedAt: null,
+    declinedAt: null,
+    attendanceStatus,
+    isAssigned: true,
+    isConnected: false,
   };
 }
 
@@ -642,6 +756,7 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
     _resolvedAt = now;
   }
   const resolved = _resolvedCache;
+  const assignedRoster = await assignedRosterForSession(state);
 
   const students: LobbyStudent[] = [];
   let waiting = 0;
@@ -674,13 +789,26 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
     else if (student.status === 'disconnected') disconnected++;
   }
 
-  const registeredCount =
+  // Keep assigned seats visible even when the corresponding phone has not
+  // joined. These derived rows do not create live attempts or affect capacity.
+  for (const entry of assignedRoster) {
+    if (state.students[entry.registrationId]) continue;
+    students.push(toNotArrivedRosterStudent(entry, state.status));
+  }
+
+  const registeredCount = assignedRoster.length ||
     Number(resolved?.session?.registeredStudents ?? 0) || students.length;
+  const presentCount = students.filter((student) => student.attendanceStatus === 'present').length;
+  const absentCount = students.filter((student) => student.attendanceStatus === 'absent').length;
+  const notArrivedCount = students.filter((student) => student.attendanceStatus === 'not_arrived').length;
+  const connectedCount = Object.values(state.students)
+    .filter((student) => toLobbyStudent(student).status !== 'disconnected').length;
 
   _cachedSnapshot = {
     schedule: resolved?.schedule as LobbySnapshot['schedule'],
     session: {
       ...(resolved?.session as LobbySnapshot['session']),
+      registeredStudents: registeredCount,
       remainingSeconds: remainingSeconds(state),
       durationMinutes: state.durationMinutes,
       startedAt: state.startedAt,
@@ -701,8 +829,12 @@ async function buildSnapshot(state: PeerSessionState): Promise<LobbySnapshot> {
     roomName: resolved?.session?.roomName ?? null,
     roomId: state.roomId,
     registeredCount,
-    connectedCount: students.length,
-    notYetConnectedCount: Math.max(0, registeredCount - students.length),
+    assignedCount: registeredCount,
+    presentCount,
+    absentCount,
+    notArrivedCount,
+    connectedCount,
+    notYetConnectedCount: Math.max(0, registeredCount - connectedCount),
     waitingCount: waiting,
     readyCount,
     notReadyCount,
@@ -1075,6 +1207,12 @@ function registerRoutes(mod: HttpServerModule) {
     // Authoritative check on Proctor Server:
     const registrationId = Number(validated.student?.registration_id ?? 0);
     const existing = session.students[registrationId];
+    if (existing?.approvalStatus === 'declined') {
+      return fail(403, 'Your admission request was declined by the proctor. Please contact the proctor before trying again.');
+    }
+    if (session.status === 'in_progress' && existing?.approvalStatus !== 'approved') {
+      return fail(409, LATE_ADMISSION_MESSAGE);
+    }
     if (existing?.submittedAt || existing?.status === 'finished') {
       return ok({
         classification: 'already_completed',
@@ -1159,6 +1297,14 @@ function registerRoutes(mod: HttpServerModule) {
     }
     const packageAdmissionFailure = passkeyAdmissionFailure(validated);
     if (packageAdmissionFailure) return packageAdmissionFailure;
+    const packageRegistrationId = Number(validated?.student?.registration_id ?? 0);
+    const packageExisting = session.students[packageRegistrationId];
+    if (packageExisting?.approvalStatus === 'declined') {
+      return fail(403, 'Your admission request was declined by the proctor. Please contact the proctor before trying again.');
+    }
+    if (session.status === 'in_progress' && packageExisting?.approvalStatus !== 'approved') {
+      return fail(409, LATE_ADMISSION_MESSAGE);
+    }
     if (validated?.student) {
       const appCode = (validated.student.studentId || '').trim().toUpperCase();
       const queued = await OfflineStore.getResults();
@@ -1211,6 +1357,18 @@ function registerRoutes(mod: HttpServerModule) {
     return ok({
       questions: sanitizedQuestions,
       durationMinutes: session.durationMinutes,
+      schedule: (() => {
+        const schedule = pack.schedules?.find((candidate) => Number(candidate.id) === Number(session!.scheduleId));
+        return schedule
+          ? {
+              title: schedule.title,
+              exam_date: schedule.exam_date,
+              time_slot: schedule.time_slot,
+              start_time: schedule.start_time,
+              end_time: schedule.end_time,
+            }
+          : undefined;
+      })(),
       violationLimit: 0,
       packageHash,
       packageVersion: pack.pack_version || 1,
@@ -1270,6 +1428,24 @@ function registerRoutes(mod: HttpServerModule) {
     const existing = session.students[registrationId];
     const providedToken = String(body.participation_token ?? '').trim();
     const providedDeviceId = String(body.device_id ?? '').trim();
+
+    if (existing?.approvalStatus === 'declined') {
+      return fail(403, 'Your admission request was declined by the proctor. Please contact the proctor before trying again.');
+    }
+    if (session.status === 'in_progress' && existing?.approvalStatus !== 'approved') {
+      return fail(409, LATE_ADMISSION_MESSAGE);
+    }
+    if (
+      existing &&
+      existing.approvalStatus === 'approved' &&
+      existing.status === 'disconnected' &&
+      existing.deviceId &&
+      providedDeviceId &&
+      existing.deviceId !== providedDeviceId &&
+      existing.token !== providedToken
+    ) {
+      return fail(403, 'This approved examination attempt belongs to another device. Use the saved reconnect flow and PIN to continue.');
+    }
 
     if (existing?.submittedAt || existing?.status === 'finished') {
       return fail(
@@ -1360,13 +1536,20 @@ function registerRoutes(mod: HttpServerModule) {
           programCode: validated.student.programCode,
           programName: validated.student.programName,
           avatarInitials: validated.student.avatarInitials,
-          status: session.status === 'in_progress' ? 'taking_exam' : 'waiting',
+          // Starting the room only authorizes entry. The proctor must not show
+          // “Taking Examination” until the student has loaded the questions,
+          // mounted the exam screen, and sent the `entered` ACK.
+          status: 'waiting',
           joinedAt: now,
-          startedAt: session.status === 'in_progress' ? now : null,
+          startedAt: null,
           lastActivityAt: now,
           violationCount: 0,
           terminationReason: null,
           answers: {},
+          flags: {},
+          currentIndex: 0,
+          navMode: 'scroll',
+          deadline: null,
           answerRevision: 0,
           answersUpdatedAt: null,
           order: paper.questions.map((q) => q.id),
@@ -1383,6 +1566,10 @@ function registerRoutes(mod: HttpServerModule) {
           moduleReady,
           startPhase: 'waiting',
           assignedExamSet,
+          approvalStatus: 'pending',
+          approvalRequestedAt: now,
+          approvedAt: null,
+          declinedAt: null,
         };
         session.students[registrationId] = student;
         if (!session.tokenMap) session.tokenMap = {};
@@ -1445,14 +1632,19 @@ function registerRoutes(mod: HttpServerModule) {
     const token = String(body.participation_token ?? '');
     const student = studentByToken(token);
     if (student) {
-      console.log(`[SESSION] Student ${student.applicantCode} left the lobby.`);
-      delete session.students[student.registrationId];
-      if (session.tokenMap) delete session.tokenMap[token];
+      // Leaving a screen is not surrendering an examination attempt. Preserve
+      // the token, answers, flags, timer metadata, and reconnect identity so a
+      // rejoin cannot silently create a blank second attempt.
+      console.log(`[SESSION] Student ${student.applicantCode} disconnected; checkpoint preserved.`);
+      student.status = student.submittedAt || student.status === 'finished'
+        ? student.status
+        : 'disconnected';
+      student.lastActivityAt = new Date().toISOString();
       invalidateSnapshot();
       await persist();
       notify();
     }
-    return ok({ left: true });
+    return ok({ left: true, preserved: Boolean(student) });
   });
 
   secureRoute(p('/questions'), 'GET', async (request) => {
@@ -1492,6 +1684,14 @@ function registerRoutes(mod: HttpServerModule) {
       durationMinutes: session.durationMinutes,
       violationLimit: 0,
       answers: student.answers,
+      flags: student.flags ?? {},
+      currentIndex: student.currentIndex ?? 0,
+      navMode: student.navMode ?? 'scroll',
+      deadline: student.deadline ?? null,
+      startedAt: student.startedAt,
+      endsAt: session.endsAt ?? null,
+      checkpoint_version: Number(student.answerRevision ?? 0),
+      checkpoint_saved_at: student.answersUpdatedAt ?? null,
       examSet: student.examSet || 'Set 1',
     });
   });
@@ -1526,6 +1726,14 @@ function registerRoutes(mod: HttpServerModule) {
       durationMinutes: session.durationMinutes,
       violationLimit: 0,
       answers: student.answers,
+      flags: student.flags ?? {},
+      currentIndex: student.currentIndex ?? 0,
+      navMode: student.navMode ?? 'scroll',
+      deadline: student.deadline ?? null,
+      startedAt: student.startedAt,
+      endsAt: session.endsAt ?? null,
+      checkpoint_version: Number(student.answerRevision ?? 0),
+      checkpoint_saved_at: student.answersUpdatedAt ?? null,
       examSet: student.examSet || 'Set 1',
     });
   });
@@ -1562,6 +1770,23 @@ function registerRoutes(mod: HttpServerModule) {
       });
     }
     student.answers = checkpoint.answers;
+    if (body.flags && typeof body.flags === 'object' && !Array.isArray(body.flags)) {
+      student.flags = Object.fromEntries(
+        Object.entries(body.flags as Record<string, unknown>).map(([questionId, flagged]) => [
+          questionId,
+          flagged === true,
+        ]),
+      );
+    }
+    if (Number.isInteger(Number(body.current_index))) {
+      student.currentIndex = Math.max(0, Number(body.current_index));
+    }
+    if (body.nav_mode === 'scroll' || body.nav_mode === 'one_at_a_time') {
+      student.navMode = body.nav_mode;
+    }
+    if (body.deadline === null || typeof body.deadline === 'string') {
+      student.deadline = body.deadline ?? null;
+    }
     if (Number.isSafeInteger(checkpoint.revision)) {
       student.answerRevision = checkpoint.revision;
     }
@@ -1844,7 +2069,19 @@ function registerRoutes(mod: HttpServerModule) {
     if (student.status === 'terminated' && !student.submissionConfirmed) {
       return fail(403, 'You have been removed from this examination session.');
     }
-    student.lastActivityAt = new Date().toISOString();
+    const heartbeatNow = new Date().toISOString();
+    // A valid heartbeat from the original device is enough to resume the
+    // persisted attempt after a LAN flap. A reconnect PIN is still required
+    // for a new/unknown device or an explicitly gated reconnect flow.
+    const canAutoResume =
+      session.status === 'in_progress' &&
+      student.status === 'disconnected' &&
+      (student.approvalStatus ?? 'approved') === 'approved' &&
+      (!providedDeviceId || !student.deviceId || providedDeviceId === student.deviceId);
+    if (canAutoResume) {
+      student.status = 'taking_exam';
+    }
+    student.lastActivityAt = heartbeatNow;
 
     const nextPercent = body.download_percent != null
       ? Math.max(0, Math.min(100, Number(body.download_percent) || 0))
@@ -1855,7 +2092,7 @@ function registerRoutes(mod: HttpServerModule) {
       : Boolean(student.moduleReady);
     const nextReady = nextModule && nextHash && nextPercent >= 100;
 
-    let changed =
+    let changed = canAutoResume ||
       student.downloadPercent !== nextPercent ||
       student.hashVerified !== nextHash ||
       student.moduleReady !== nextModule ||
@@ -1871,8 +2108,10 @@ function registerRoutes(mod: HttpServerModule) {
 
     const ack = String(body.start_ack ?? body.phase ?? '').toLowerCase();
     if (ack === 'received' || ack === 'entered') {
-      applyStartAck(student, ack as 'received' | 'entered');
-      changed = true;
+      if ((student.approvalStatus ?? 'approved') === 'approved') {
+        applyStartAck(student, ack as 'received' | 'entered');
+        changed = true;
+      }
     }
 
     if (changed) {
@@ -1899,6 +2138,8 @@ function registerRoutes(mod: HttpServerModule) {
       authorityStatus: authorityOf(session.status),
       startPhase: student.startPhase,
       startSeq: session.startSeq ?? 0,
+      myStatus: student.status,
+      approvalStatus: student.approvalStatus ?? 'approved',
       serverTime: serverNow,
       startedAt: session.startedAt,
       endsAt: effectiveEndsAt,
@@ -1911,6 +2152,9 @@ function registerRoutes(mod: HttpServerModule) {
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
     if (!student) return fail(404, 'You are no longer joined to this examination.');
+    if ((student.approvalStatus ?? 'approved') !== 'approved') {
+      return fail(403, 'Your admission request has not been approved by the proctor.');
+    }
     const roomFailure = await enforceStudentRoom(session, student);
     if (roomFailure) return roomFailure;
     const phase = String(body.phase ?? 'received') === 'entered' ? 'entered' : 'received';
@@ -1965,6 +2209,9 @@ function registerRoutes(mod: HttpServerModule) {
     if (!student) return fail(404, 'Session not found. Please scan the QR again.');
     const roomFailure = await enforceStudentRoom(session, student);
     if (roomFailure) return roomFailure;
+    if ((student.approvalStatus ?? 'approved') !== 'approved') {
+      return fail(403, 'Your admission request has not been approved by the proctor.');
+    }
 
     if (!student.reconnectCode || student.reconnectCode !== pin) {
       return fail(403, 'Invalid reconnect PIN. Please ask the Proctor for a new PIN.');
@@ -2126,6 +2373,10 @@ export const PeerExamServer = {
       );
       for (const student of Object.values(session.students || {})) {
         student.answers = student.answers ?? {};
+        student.flags = student.flags ?? {};
+        student.currentIndex = Number.isInteger(student.currentIndex) ? student.currentIndex : 0;
+        student.navMode = student.navMode === 'one_at_a_time' ? 'one_at_a_time' : 'scroll';
+        student.deadline = student.deadline ?? null;
         student.answerRevision = Number.isSafeInteger(student.answerRevision)
           ? student.answerRevision
           : 0;
@@ -2419,6 +2670,15 @@ export const PeerExamServer = {
     console.log('[PROCTOR] Examination Started');
     const now = new Date();
     const nowIso = now.toISOString();
+    // Requests still waiting for a proctor decision cannot become late
+    // admissions once the examination starts. Keep the record for audit and
+    // let the student receive a clear declined/blocked result.
+    for (const student of Object.values(session.students)) {
+      if ((student.approvalStatus ?? 'pending') === 'pending') {
+        student.approvalStatus = 'declined';
+        student.declinedAt = nowIso;
+      }
+    }
     session.status = 'in_progress';
     session.startedAt = session.startedAt ?? nowIso;
     if (!session.endsAt && session.durationMinutes) {
@@ -2585,6 +2845,27 @@ export const PeerExamServer = {
 
   async terminateStudent(registrationId: string | number, reason: string = 'Terminated by proctor'): Promise<LobbySnapshot | null> {
     return this.removeStudent(registrationId, reason);
+  },
+
+  async setStudentApproval(
+    registrationId: string | number,
+    approvalStatus: 'approved' | 'declined',
+  ): Promise<LobbySnapshot | null> {
+    if (!session) return null;
+    const student = session.students[Number(registrationId)];
+    if (!student) return null;
+    if (session.status === 'in_progress' && approvalStatus === 'approved' && student.approvalStatus !== 'approved') {
+      throw new Error(LATE_ADMISSION_MESSAGE);
+    }
+    const now = new Date().toISOString();
+    student.approvalStatus = approvalStatus;
+    student.approvedAt = approvalStatus === 'approved' ? now : null;
+    student.declinedAt = approvalStatus === 'declined' ? now : null;
+    student.lastActivityAt = now;
+    invalidateSnapshot();
+    await persist();
+    notify();
+    return buildSnapshot(session);
   },
 
   async allowReconnect(registrationId: string | number): Promise<{ reconnectCode: string; expiresAt: string; studentName?: string } | null> {

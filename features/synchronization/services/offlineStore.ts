@@ -390,7 +390,7 @@ export function normalizePackForHashing(pack: OfflinePack | null): string {
 
   const settings = pack.examination_settings;
   const settingsSig = settings
-    ? `${settings.duration_minutes ?? 60}:${settings.room_student_limit ?? 60}:${Boolean(settings.shuffle_questions)}:${Boolean(settings.shuffle_categories)}:${Boolean(settings.shuffle_both)}`
+    ? `${settings.duration_minutes ?? 60}:${Math.min(30, settings.room_student_limit ?? 30)}:${Boolean(settings.shuffle_questions)}:${Boolean(settings.shuffle_categories)}:${Boolean(settings.shuffle_both)}`
     : 'default-settings';
 
   const scheduleSig = (pack.schedules ?? [])

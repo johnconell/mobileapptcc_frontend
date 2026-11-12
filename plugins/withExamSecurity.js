@@ -193,6 +193,30 @@ class ExamKioskModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun openWifiSettings(promise: Promise) {
+        val activity = reactContext.currentActivity
+        if (activity == null) {
+            promise.resolve(false)
+            return
+        }
+        activity.runOnUiThread {
+            try {
+                val am = activity.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+                    as android.app.ActivityManager
+                if (am.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE) {
+                    activity.stopLockTask()
+                }
+                isKioskActive = false
+                applyOverlayProtections(activity, false)
+                activity.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
+                promise.resolve(true)
+            } catch (e: Exception) {
+                promise.reject("WIFI_SETTINGS_OPEN_FAILED", e)
+            }
+        }
+    }
+
+    @ReactMethod
     fun moveTaskToBackground(promise: Promise) {
         val activity = reactContext.currentActivity
         if (activity == null) {

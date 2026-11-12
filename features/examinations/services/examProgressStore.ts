@@ -23,6 +23,8 @@ export type ExamCheckpoint = {
   deadline?: string | null;
   scheduleClosingTime?: string | null;
   timeSync?: TimeSyncMetadata;
+  /** Monotonic checkpoint revision shared with the proctor LAN session. */
+  revision?: number;
   savedAt: string;
 };
 

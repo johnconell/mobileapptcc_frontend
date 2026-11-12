@@ -1,7 +1,7 @@
 /**
  * Proctor Wi‑Fi lock — bind an exam room to the Wi‑Fi used when it was opened.
- * Switching networks does NOT migrate the session IP; the proctor must reconnect
- * to the locked SSID. Same-SSID DHCP IP changes may refresh the stored host IP.
+ * Switching networks preserves the active session; the peer host address is
+ * refreshed after the proctor reconnects to a usable Wi-Fi network.
  */
 import * as Network from 'expo-network';
 import { PeerExamServer } from '@/features/examinations/services/peerExamServer';
@@ -210,8 +210,8 @@ export async function evaluateProctorWifiLock(): Promise<WifiLockState> {
           identity.isWifi &&
           Boolean(identity.localIp)));
 
-    if (!onLockedNetwork) {
-      const name = lockedSsid || 'the original exam Wi‑Fi';
+    if (!identity.isWifi) {
+      const name = lockedSsid || 'the examination Wi‑Fi';
       const state: WifiLockState = {
         locked: true,
         violated: true,
@@ -219,13 +219,13 @@ export async function evaluateProctorWifiLock(): Promise<WifiLockState> {
         lockedBssid,
         currentSsid: identity.ssid,
         currentIp: identity.localIp,
-        message: `You must stay connected to "${name}" while this room is active. Reconnect to continue.`,
+        message: `Connect to Wi‑Fi to keep the examination room reachable. The active session remains saved while the network recovers.`,
       };
       emit(state);
       return state;
     }
 
-    // Same locked network: keep peer host IP fresh for DHCP renewals only.
+    // Preserve the active session and refresh the peer host for DHCP/network changes.
     if (identity.localIp) {
       const info = PeerExamServer.info();
       if (info.running && info.host !== identity.localIp) {

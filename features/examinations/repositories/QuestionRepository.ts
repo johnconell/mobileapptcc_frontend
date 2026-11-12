@@ -6,8 +6,21 @@ import { PeerExamClient } from '@/features/examinations/services/peerExamClient'
 import { ExamPreloader } from '@/features/examinations/services/examPreloader';
 import { appStorage } from '@/shared/services/storage';
 import type { Question } from '@/shared/types';
+import type { ExamNavMode, TimeSyncMetadata } from '@/features/examinations/stores/examStore';
 
 let answerRevisionQueue: Promise<void> = Promise.resolve();
+
+export type PeerRemoteCheckpoint = {
+  answers: Record<string, string | null>;
+  flags: Record<string, boolean>;
+  currentIndex: number;
+  navMode: ExamNavMode;
+  revision: number;
+  savedAt: string | null;
+  startedAt: string | null;
+  deadline: string | null;
+  endsAt: string | null;
+};
 
 async function nextAnswerRevision(token: string): Promise<number> {
   let revision = 0;
@@ -98,11 +111,59 @@ export const QuestionRepository = {
     return json.data || [];
   },
 
-  async saveProgress(answers: Record<string, string | null>): Promise<{ saved: boolean; savedAt: string | null }> {
+  /** Read the proctor's durable checkpoint without replacing the local paper. */
+  async getPeerCheckpoint(): Promise<PeerRemoteCheckpoint | null> {
+    if (!(await PeerExamClient.isActive())) return null;
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    if (!token) return null;
+
+    const json = await PeerExamClient.request<{
+      answers?: Record<string, string | null>;
+      flags?: Record<string, boolean>;
+      currentIndex?: number;
+      navMode?: ExamNavMode;
+      checkpoint_version?: number;
+      checkpoint_saved_at?: string | null;
+      startedAt?: string | null;
+      endsAt?: string | null;
+      deadline?: string | null;
+    }>('/questions', {
+      query: { participation_token: token },
+      timeoutMs: 8000,
+    });
+
+    return {
+      answers: json.answers ?? {},
+      flags: json.flags ?? {},
+      currentIndex: Number.isInteger(json.currentIndex) ? Number(json.currentIndex) : 0,
+      navMode: json.navMode === 'one_at_a_time' ? 'one_at_a_time' : 'scroll',
+      revision: Number.isSafeInteger(json.checkpoint_version) ? Number(json.checkpoint_version) : 0,
+      savedAt: json.checkpoint_saved_at ?? null,
+      startedAt: json.startedAt ?? null,
+      deadline: json.deadline ?? null,
+      endsAt: json.endsAt ?? null,
+    };
+  },
+
+  async saveProgress(
+    answers: Record<string, string | null>,
+    checkpoint?: {
+      revision?: number;
+      flags?: Record<string, boolean>;
+      currentIndex?: number;
+      navMode?: ExamNavMode;
+      startedAt?: string | null;
+      deadline?: string | null;
+      scheduleClosingTime?: string | null;
+      timeSync?: TimeSyncMetadata;
+    },
+  ): Promise<{ saved: boolean; savedAt: string | null }> {
     if (await PeerExamClient.isActive()) {
       const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
       if (!token) return { saved: false, savedAt: null };
-      const checkpointVersion = await nextAnswerRevision(token);
+      const checkpointVersion = Number.isSafeInteger(checkpoint?.revision) && Number(checkpoint?.revision) > 0
+        ? Number(checkpoint?.revision)
+        : await nextAnswerRevision(token);
       const checkpointSavedAt = new Date().toISOString();
       try {
         await PeerExamClient.request('/answers', {
@@ -112,6 +173,13 @@ export const QuestionRepository = {
             answers,
             checkpoint_version: checkpointVersion,
             checkpoint_saved_at: checkpointSavedAt,
+            flags: checkpoint?.flags,
+            current_index: checkpoint?.currentIndex,
+            nav_mode: checkpoint?.navMode,
+            started_at: checkpoint?.startedAt,
+            deadline: checkpoint?.deadline,
+            schedule_closing_time: checkpoint?.scheduleClosingTime,
+            time_sync: checkpoint?.timeSync,
           },
         });
         return { saved: true, savedAt: checkpointSavedAt };
@@ -126,7 +194,9 @@ export const QuestionRepository = {
     // ... keep existing below via reading file
     const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
     if (!token) return { saved: false, savedAt: null };
-    const checkpointVersion = await nextAnswerRevision(token);
+    const checkpointVersion = Number.isSafeInteger(checkpoint?.revision) && Number(checkpoint?.revision) > 0
+      ? Number(checkpoint?.revision)
+      : await nextAnswerRevision(token);
     const checkpointSavedAt = new Date().toISOString();
 
     const payload = Object.entries(answers).map(([questionId, selected]) => ({
@@ -146,6 +216,13 @@ export const QuestionRepository = {
           answers: payload,
           checkpoint_version: checkpointVersion,
           checkpoint_saved_at: checkpointSavedAt,
+          flags: checkpoint?.flags,
+          current_index: checkpoint?.currentIndex,
+          nav_mode: checkpoint?.navMode,
+          started_at: checkpoint?.startedAt,
+          deadline: checkpoint?.deadline,
+          schedule_closing_time: checkpoint?.scheduleClosingTime,
+          time_sync: checkpoint?.timeSync,
         },
       });
 

@@ -23,13 +23,14 @@ import { useRooms, useSchedules, useSessions } from '@/features/schedules/hooks/
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { QUERY_KEYS } from '@/shared/constants';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
-import { colors, shadows } from '@/shared/theme';
+import { shadows, typography } from '@/shared/theme';
 import { safeBack } from '@/shared/utils';
 import { userFacingError } from '@/shared/utils/userFacingError';
 import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { getProctorScheduleAvailability } from '@/features/schedules/utils/proctorScheduleWindow';
 import type { ExamRoom } from '@/shared/types';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 function roomTone(status: string): 'success' | 'warning' | 'danger' | 'default' {
   if (status === 'lobby_open' || status === 'in_progress') return 'success';
@@ -45,6 +46,7 @@ function roomStatusLabel(status: string): string {
 }
 
 export default function RoomsScreen() {
+  const { colors: themeColors } = useAppTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { sessionId, scheduleId } = useLocalSearchParams<{
@@ -301,7 +303,7 @@ export default function RoomsScreen() {
 
   if (roomsQuery.isLoading && !roomsQuery.data && !roomsLoadingTimedOut) {
     return (
-      <View style={styles.screen}>
+      <View style={[styles.screen, { backgroundColor: themeColors.background }]}>
         <Header
           title="Select Examination Room"
           subtitle={session?.timeLabel ?? 'Loading rooms…'}
@@ -317,7 +319,7 @@ export default function RoomsScreen() {
 
   if ((roomsQuery.isError || roomsLoadingTimedOut) && !roomsQuery.data) {
     return (
-      <View style={styles.screen}>
+      <View style={[styles.screen, { backgroundColor: themeColors.background }]}>
         <Header
           title="Select Examination Room"
           subtitle={session?.timeLabel ?? 'Available Rooms'}
@@ -325,7 +327,7 @@ export default function RoomsScreen() {
         />
         <Breadcrumbs segments={breadcrumbs} />
         <View style={styles.errorWrap}>
-          <Text style={styles.errorText}>
+          <Text style={[styles.errorText, { color: themeColors.textSecondary }]}>
             {roomsLoadingTimedOut
               ? 'Loading examination rooms took too long.'
               : 'Unable to load examination rooms.'}
@@ -343,7 +345,7 @@ export default function RoomsScreen() {
   }
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { backgroundColor: themeColors.background }]}>
       <Header
         title="Select Examination Room"
         subtitle={session ? `${session.timeLabel} · ${session.venue}` : 'Available Rooms'}
@@ -360,7 +362,7 @@ export default function RoomsScreen() {
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <View style={styles.headerBlock}>
-            <Text style={styles.intro} maxFontSizeMultiplier={1.2}>
+            <Text style={[styles.intro, { color: themeColors.textSecondary }]} maxFontSizeMultiplier={1.2}>
               Available Rooms for this time slot. Tap any room to open the examination room modal and initialize the lobby.
             </Text>
           </View>
@@ -451,32 +453,38 @@ export default function RoomsScreen() {
                 setModalVisible(true);
               }}
             >
-              <Card delay={index * 60} style={styles.roomCard}>
+              <Card
+                delay={index * 60}
+                style={StyleSheet.flatten([
+                  styles.roomCard,
+                  { backgroundColor: themeColors.card, borderColor: themeColors.cardBorder },
+                ])}
+              >
                 <View style={styles.row}>
                   <View
                     style={[
                       styles.iconWrap,
-                      { backgroundColor: isOpen ? '#142918' : '#1F1F1F' },
+                      { backgroundColor: isOpen ? themeColors.successMuted : themeColors.cardMuted },
                     ]}
                   >
-                    <DoorOpen size={24} color={isOpen ? '#22C55E' : '#71717A'} />
+                    <DoorOpen size={24} color={isOpen ? themeColors.success : themeColors.textMuted} />
                   </View>
 
                   <View style={styles.meta}>
-                    <Text style={styles.roomName} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                    <Text style={[styles.roomName, { color: themeColors.textPrimary }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
                       {item.roomName}
                     </Text>
 
                     <View style={styles.infoRow}>
-                      <Users size={14} color="#71717A" />
-                      <Text style={styles.capacity} numberOfLines={1} maxFontSizeMultiplier={1.15}>
-                        {item.studentCount ?? item.capacity} students assigned · Capacity: {item.capacity}
+                      <Users size={14} color={themeColors.textMuted} />
+                      <Text style={[styles.capacity, { color: themeColors.textSecondary }]} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                        {Number(item.studentCount ?? 0)} students assigned · Capacity: {item.capacity}
                       </Text>
                     </View>
 
                     <View style={styles.infoRow}>
-                      <Layers size={14} color="#7A1F2B" />
-                      <Text style={styles.applicants} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                      <Layers size={14} color={themeColors.accent} />
+                      <Text style={[styles.applicants, { color: themeColors.accent }]} numberOfLines={1} maxFontSizeMultiplier={1.15}>
                         {item.ownerName
                           ? `Managing: ${item.ownerName}`
                           : isAssignedToYou
@@ -495,7 +503,7 @@ export default function RoomsScreen() {
                     </View>
                   </View>
 
-                  <ChevronRight size={22} color={colors.inkMuted} style={{ flexShrink: 0 }} />
+                  <ChevronRight size={22} color={themeColors.textMuted} style={{ flexShrink: 0 }} />
                 </View>
               </Card>
             </Pressable>
@@ -516,47 +524,47 @@ export default function RoomsScreen() {
             onPress={() => !busy && setModalVisible(false)}
           />
 
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, { backgroundColor: themeColors.card, borderColor: themeColors.cardBorder }]}>
             <View style={styles.modalHeader}>
-              <View style={styles.modalIconWrap}>
-                <DoorOpen size={24} color="#7A1F2B" />
+              <View style={[styles.modalIconWrap, { backgroundColor: themeColors.accentMuted }]}>
+                <DoorOpen size={24} color={themeColors.accent} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.modalTitle} maxFontSizeMultiplier={1.2}>
+                <Text style={[styles.modalTitle, { color: themeColors.textPrimary }]} maxFontSizeMultiplier={1.2}>
                   {selectedRoom?.claimRequired ? 'Claim Examination Room' : 'Open Examination Room'}
                 </Text>
-                <Text style={styles.modalSubtitle} maxFontSizeMultiplier={1.15}>
+                <Text style={[styles.modalSubtitle, { color: themeColors.textSecondary }]} maxFontSizeMultiplier={1.15}>
                   {selectedRoom?.claimRequired ? 'Confirm room claim to launch the lobby' : 'Confirm room details to launch the lobby'}
                 </Text>
               </View>
             </View>
 
             {/* DETAIL TABLE */}
-            <View style={styles.detailTable}>
+            <View style={[styles.detailTable, { backgroundColor: themeColors.cardMuted, borderColor: themeColors.cardBorder }]}>
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Room</Text>
-                <Text style={styles.detailValueBold} maxFontSizeMultiplier={1.2}>
+                <Text style={[styles.detailLabel, { color: themeColors.textSecondary }]} maxFontSizeMultiplier={1.15}>Room</Text>
+                <Text style={[styles.detailValueBold, { color: themeColors.textPrimary }]} maxFontSizeMultiplier={1.2}>
                   {selectedRoom?.roomName || 'Room A'}
                 </Text>
               </View>
 
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Schedule</Text>
-                <Text style={styles.detailValue} maxFontSizeMultiplier={1.15}>
+                <Text style={[styles.detailLabel, { color: themeColors.textSecondary }]} maxFontSizeMultiplier={1.15}>Schedule</Text>
+                <Text style={[styles.detailValue, { color: themeColors.textPrimary }]} maxFontSizeMultiplier={1.15}>
                   {scheduleName}
                 </Text>
               </View>
 
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Time</Text>
-                <Text style={styles.detailValue} maxFontSizeMultiplier={1.15}>
+                <Text style={[styles.detailLabel, { color: themeColors.textSecondary }]} maxFontSizeMultiplier={1.15}>Time</Text>
+                <Text style={[styles.detailValue, { color: themeColors.textPrimary }]} maxFontSizeMultiplier={1.15}>
                   {session?.timeLabel || '9:30 AM - 10:30 AM'}
                 </Text>
               </View>
 
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Assigned Proctor</Text>
-                <Text style={styles.detailValue} maxFontSizeMultiplier={1.15}>
+                <Text style={[styles.detailLabel, { color: themeColors.textSecondary }]} maxFontSizeMultiplier={1.15}>Assigned Proctor</Text>
+                <Text style={[styles.detailValue, { color: themeColors.textPrimary }]} maxFontSizeMultiplier={1.15}>
                   {selectedRoom?.claimRequired
                     ? 'Unassigned — You will claim this room'
                     : selectedRoom?.canControl
@@ -567,22 +575,22 @@ export default function RoomsScreen() {
 
               {selectedRoom?.ownerName ? (
                 <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Managing Proctor</Text>
-                  <Text style={styles.detailValueBold} maxFontSizeMultiplier={1.15}>
+                  <Text style={[styles.detailLabel, { color: themeColors.textSecondary }]} maxFontSizeMultiplier={1.15}>Managing Proctor</Text>
+                  <Text style={[styles.detailValueBold, { color: themeColors.textPrimary }]} maxFontSizeMultiplier={1.15}>
                     {selectedRoom.ownerName}
                   </Text>
                 </View>
               ) : null}
 
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Students / Capacity</Text>
-                <Text style={styles.detailValue} maxFontSizeMultiplier={1.15}>
-                  {selectedRoom?.studentCount ?? selectedRoom?.capacity ?? 0} students (Max {selectedRoom?.capacity ?? 60})
+                <Text style={[styles.detailLabel, { color: themeColors.textSecondary }]} maxFontSizeMultiplier={1.15}>Students / Capacity</Text>
+                <Text style={[styles.detailValue, { color: themeColors.textPrimary }]} maxFontSizeMultiplier={1.15}>
+                  {Number(selectedRoom?.studentCount ?? 0)} students assigned (Max {selectedRoom?.capacity ?? 30})
                 </Text>
               </View>
 
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel} maxFontSizeMultiplier={1.15}>Status</Text>
+                <Text style={[styles.detailLabel, { color: themeColors.textSecondary }]} maxFontSizeMultiplier={1.15}>Status</Text>
                 <StatusChip
                   label={
                     selectedRoom?.claimRequired
@@ -606,7 +614,7 @@ export default function RoomsScreen() {
               </View>
             </View>
 
-            <Text style={styles.modalNotice} maxFontSizeMultiplier={1.15}>
+            <Text style={[styles.modalNotice, { color: themeColors.textSecondary }]} maxFontSizeMultiplier={1.15}>
               {selectedRoom?.claimRequired
                 ? 'Claiming this room will make you the active proctor, generate the examination QR code, and start the local Wi-Fi peer server.'
                 : 'Opening this room will generate the examination QR code, start the local Wi-Fi peer server, and allow examinees to enter the lobby.'}
@@ -664,7 +672,7 @@ export default function RoomsScreen() {
                 style={{
                   ...styles.openButton,
                   backgroundColor:
-                    selectedRoom?.status === 'ended' ? '#262626' : '#7A1F2B',
+                    selectedRoom?.status === 'ended' ? themeColors.textMuted : themeColors.accent,
                 }}
               />
             </View>
@@ -676,18 +684,18 @@ export default function RoomsScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#0D0D0D' },
+  screen: { flex: 1, backgroundColor: '#F7F1E8' },
   list: { padding: 16, gap: 12, paddingBottom: 40 },
   errorWrap: { padding: 20, gap: 12, alignItems: 'flex-start' },
-  errorText: { fontSize: 14, color: '#A1A1AA' },
+  errorText: { fontSize: 14, color: '#5B4A45' },
   headerBlock: { marginBottom: 4 },
-  intro: { fontSize: 13, lineHeight: 20, color: '#A1A1AA', fontWeight: '500' },
+  intro: { fontSize: 13, lineHeight: 20, color: '#5B4A45', fontWeight: '500' },
   roomCard: {
-    backgroundColor: '#141414',
+    backgroundColor: '#FFFDF9',
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#262626',
+    borderColor: '#E5D8C8',
     ...shadows.card,
   },
   row: { flexDirection: 'row', alignItems: 'center', gap: 14 },
@@ -699,10 +707,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   meta: { flex: 1, gap: 4 },
-  roomName: { fontSize: 17, fontWeight: '800', color: '#FFFFFF' },
+  roomName: { ...typography.title, fontSize: 22, lineHeight: 30, fontWeight: '800', color: '#2B1A17' },
   infoRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  capacity: { fontSize: 13, fontWeight: '600', color: '#A1A1AA' },
-  applicants: { fontSize: 13, fontWeight: '700', color: '#7A1F2B' },
+  capacity: { ...typography.caption, fontFamily: 'Poppins_500Medium', color: '#A1A1AA' },
+  applicants: { ...typography.caption, fontFamily: 'Poppins_600SemiBold', color: '#7A1F2B' },
   badgeRow: { flexDirection: 'row', marginTop: 4 },
 
   // MODAL STYLING
@@ -716,11 +724,11 @@ const styles = StyleSheet.create({
   modalCard: {
     width: '100%',
     maxWidth: 440,
-    backgroundColor: '#141414',
+    backgroundColor: '#FFFDF9',
     borderRadius: 20,
     padding: 22,
     borderWidth: 1,
-    borderColor: '#262626',
+    borderColor: '#E5D8C8',
     gap: 16,
     ...shadows.card,
   },
