@@ -24,15 +24,14 @@ import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
 import { RESULTS_CHANGED_EVENT } from '@/features/synchronization/services/offlineStore';
 
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
+
+const BRAND = '#7A1F2B';
 const FAB_SIZE = 62;
 const BAR_HEIGHT = 72;
 const NOTCH_GAP = 8;
 const NOTCH_RADIUS = FAB_SIZE / 2 + NOTCH_GAP;
 const CORNER_RADIUS = 34;
-const BRAND = '#7A1F2B';
-const BAR_FILL = '#FFFFFF';
-const BAR_STROKE = '#D4C4B0';
-const ICON_IDLE = '#4A3F36';
 
 /** Pill bar path with a smooth concave cradle at the top center. */
 function notchedBarPath(width: number, height: number): string {
@@ -79,8 +78,14 @@ function CustomCapsuleTabBar({
   onSyncComplete?: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const { colors: themeColors, isDark } = useAppTheme();
   const [syncing, setSyncing] = useState(false);
   const [barWidth, setBarWidth] = useState(340);
+
+  const barFill = isDark ? themeColors.card : '#FFFFFF';
+  const barStroke = isDark ? themeColors.cardBorder : '#D4C4B0';
+  const iconIdle = isDark ? themeColors.textSecondary : '#4A3F36';
+  const activeFg = isDark ? themeColors.card : '#FFFFFF';
 
   const handleSync = useCallback(async () => {
     if (syncing || autoSyncing) return;
@@ -140,7 +145,7 @@ function CustomCapsuleTabBar({
       navigation.emit({ type: 'tabLongPress', target: route.key });
     };
 
-    const iconColor = isFocused ? '#FFFFFF' : ICON_IDLE;
+    const iconColor = isFocused ? activeFg : iconIdle;
     const iconSize = 22;
     const stroke = isFocused ? 2.6 : 2.4;
 
@@ -166,12 +171,22 @@ function CustomCapsuleTabBar({
         testID={options.tabBarButtonTestID || (options as any).tabBarTestID}
         onPress={onPress}
         onLongPress={onLongPress}
-        style={[styles.tabItem, isFocused && styles.tabItemActive]}
+        style={[
+          styles.tabItem,
+          isFocused && {
+            backgroundColor: themeColors.accent,
+            shadowColor: isDark ? 'transparent' : '#7A1F2B',
+            elevation: isDark ? 0 : 5,
+          },
+        ]}
         hitSlop={8}
       >
         {icon}
         <Text
-          style={[styles.tabLabel, isFocused ? styles.tabLabelActive : styles.tabLabelIdle]}
+          style={[
+            styles.tabLabel,
+            isFocused ? { color: activeFg } : { color: iconIdle },
+          ]}
           numberOfLines={1}
         >
           {label}
@@ -188,7 +203,16 @@ function CustomCapsuleTabBar({
       pointerEvents="box-none"
     >
       <View style={styles.barRow} pointerEvents="box-none">
-        <View style={styles.barShell} onLayout={onBarLayout}>
+        <View
+          style={[
+            styles.barShell,
+            isDark && {
+              shadowColor: 'transparent',
+              elevation: 0,
+            },
+          ]}
+          onLayout={onBarLayout}
+        >
           <Svg
             width={barWidth}
             height={BAR_HEIGHT}
@@ -197,8 +221,8 @@ function CustomCapsuleTabBar({
           >
             <Path
               d={notchedBarPath(barWidth, BAR_HEIGHT)}
-              fill={BAR_FILL}
-              stroke={BAR_STROKE}
+              fill={barFill}
+              stroke={barStroke}
               strokeWidth={1.5}
             />
           </Svg>
@@ -212,8 +236,16 @@ function CustomCapsuleTabBar({
           <Pressable
             style={[
               styles.syncFab,
-              { top: fabTop },
-              pendingSyncCount > 0 && styles.syncFabPending,
+              {
+                top: fabTop,
+                backgroundColor: themeColors.accent,
+                borderColor: barFill,
+                shadowColor: isDark ? 'transparent' : '#7A1F2B',
+                elevation: isDark ? 0 : 18,
+              },
+              pendingSyncCount > 0 && {
+                backgroundColor: isDark ? themeColors.accent : '#9B2C3A',
+              },
             ]}
             onPress={handleSync}
             disabled={syncing || autoSyncing}
@@ -221,16 +253,24 @@ function CustomCapsuleTabBar({
             accessibilityLabel="Sync results to Admin"
           >
             {syncing || autoSyncing ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
+              <ActivityIndicator size="small" color={activeFg} />
             ) : (
               <>
-                <RefreshCw size={21} color="#FFFFFF" strokeWidth={2.7} />
-                <Text style={styles.syncFabLabel}>Sync</Text>
+                <RefreshCw size={21} color={activeFg} strokeWidth={2.7} />
+                <Text style={[styles.syncFabLabel, { color: activeFg }]}>Sync</Text>
               </>
             )}
             {pendingSyncCount > 0 && !syncing && !autoSyncing && (
-              <View style={styles.syncFabBadge}>
-                <Text style={styles.syncFabBadgeText}>
+              <View
+                style={[
+                  styles.syncFabBadge,
+                  {
+                    backgroundColor: isDark ? themeColors.modal : '#FFFFFF',
+                    borderColor: themeColors.accent,
+                  },
+                ]}
+              >
+                <Text style={[styles.syncFabBadgeText, { color: themeColors.accent }]}>
                   {pendingSyncCount > 99 ? '99+' : pendingSyncCount}
                 </Text>
               </View>
@@ -396,32 +436,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   tabItemActive: {
-    backgroundColor: BRAND,
-    ...Platform.select({
-      ios: {
-        shadowColor: BRAND,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.45,
-        shadowRadius: 6,
-      },
-      android: {
-        elevation: 5,
-      },
-      web: {
-        boxShadow: '0px 4px 12px rgba(122, 31, 43, 0.4)',
-      },
-    }),
+    borderRadius: 16,
   },
   tabLabel: {
     fontSize: 10,
     fontWeight: '700',
     letterSpacing: 0.15,
-  },
-  tabLabelIdle: {
-    color: ICON_IDLE,
-  },
-  tabLabelActive: {
-    color: '#FFFFFF',
   },
   syncFab: {
     position: 'absolute',
@@ -429,32 +449,13 @@ const styles = StyleSheet.create({
     width: FAB_SIZE,
     height: FAB_SIZE,
     borderRadius: FAB_SIZE / 2,
-    backgroundColor: BRAND,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 1,
     borderWidth: 4,
-    borderColor: '#FFFFFF',
-    ...Platform.select({
-      ios: {
-        shadowColor: BRAND,
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.5,
-        shadowRadius: 12,
-      },
-      android: {
-        elevation: 18,
-      },
-      web: {
-        boxShadow: '0px 10px 24px rgba(122, 31, 43, 0.5)',
-      },
-    }),
   },
-  syncFabPending: {
-    backgroundColor: '#9B2C3A',
-  },
+  syncFabPending: {},
   syncFabLabel: {
-    color: '#FFFFFF',
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.2,
@@ -464,7 +465,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -2,
     right: -2,
-    backgroundColor: '#FFFFFF',
     borderRadius: 10,
     minWidth: 20,
     height: 20,
@@ -472,11 +472,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1.5,
-    borderColor: BRAND,
   },
   syncFabBadgeText: {
     fontSize: 10,
     fontWeight: '800',
-    color: BRAND,
   },
 });

@@ -3,9 +3,10 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Check } from 'lucide-react-native';
 import {
   EXAM_PROCESS_STEPS,
-  examProcess,
+  useExamProcess,
   type ExamProcessStepIndex,
 } from '@/shared/theme/examProcess';
+import { useThemeTokens } from '@/shared/contexts/ThemeContext';
 
 type ExamProcessStepperProps = {
   step: ExamProcessStepIndex;
@@ -18,6 +19,9 @@ type ExamProcessStepperProps = {
  * upcoming = muted.
  */
 export function ExamProcessStepper({ step, compact = false }: ExamProcessStepperProps) {
+  const tokens = useExamProcess();
+  const { isDark } = useThemeTokens();
+
   return (
     <View style={styles.row} accessibilityRole="progressbar">
       {EXAM_PROCESS_STEPS.map((label, index) => {
@@ -30,26 +34,57 @@ export function ExamProcessStepper({ step, compact = false }: ExamProcessStepper
           <React.Fragment key={label}>
             {index > 0 ? (
               <View
-                  style={[styles.line, { backgroundColor: lineDone ? examProcess.progressActive : examProcess.progressTrack }]}
+                style={[
+                  styles.line,
+                  {
+                    backgroundColor: lineDone ? tokens.progressActive : tokens.progressTrack,
+                  },
+                ]}
               />
             ) : null}
             <View style={styles.stepWrap}>
               <View
                 style={[
                   styles.circle,
-                  done && styles.circleDone,
-                  current && styles.circleCurrent,
-                  upcoming && styles.circleUpcoming,
+                  done && {
+                    backgroundColor: tokens.progressActive,
+                    borderColor: tokens.progressActive,
+                  },
+                  current && {
+                    backgroundColor: tokens.accentSoft,
+                    borderColor: tokens.progressActive,
+                  },
+                  upcoming && {
+                    backgroundColor: tokens.cardElevated,
+                    borderColor: tokens.progressTrack,
+                  },
                 ]}
               >
-                {done ? <Check size={14} color={examProcess.white} strokeWidth={2.5} /> : <Text style={[styles.number, current && styles.numberCurrent, upcoming && styles.numberUpcoming]}>{index + 1}</Text>}
+                {done ? (
+                  <Check size={14} color={isDark ? tokens.cardBg : '#FFFFFF'} strokeWidth={2.5} />
+                ) : (
+                  <Text
+                    style={[
+                      styles.number,
+                      {
+                        color: current ? tokens.progressActive : tokens.progressInactive,
+                      },
+                    ]}
+                  >
+                    {index + 1}
+                  </Text>
+                )}
               </View>
               {!compact ? (
                 <Text
                   style={[
                     styles.label,
-                    current && styles.labelCurrent,
-                    (done || upcoming) && styles.labelMuted,
+                    {
+                      color: current
+                        ? tokens.progressActive
+                        : tokens.progressInactive,
+                      fontFamily: current ? 'Poppins_600SemiBold' : 'Poppins_400Regular',
+                    },
                   ]}
                   numberOfLines={1}
                   adjustsFontSizeToFit
@@ -88,18 +123,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 2,
   },
-  circleDone: {
-    backgroundColor: examProcess.progressActive,
-    borderColor: examProcess.progressActive,
-  },
-  circleCurrent: {
-    backgroundColor: examProcess.accentSoft,
-    borderColor: examProcess.progressActive,
-  },
-  circleUpcoming: {
-    backgroundColor: examProcess.white,
-    borderColor: examProcess.progressInactive,
-  },
   line: {
     flex: 1,
     height: 2,
@@ -109,23 +132,11 @@ const styles = StyleSheet.create({
   label: {
     marginTop: 6,
     fontSize: 10,
-    fontFamily: examProcess.fontRegular,
     textAlign: 'center',
     width: '100%',
-    color: examProcess.muted,
-  },
-  labelCurrent: {
-    fontFamily: examProcess.fontSemiBold,
-    color: examProcess.progressActive,
-  },
-  labelMuted: {
-    color: examProcess.progressInactive,
   },
   number: {
     fontSize: 12,
-    fontFamily: examProcess.fontSemiBold,
-    color: examProcess.progressInactive,
+    fontFamily: 'Poppins_600SemiBold',
   },
-  numberCurrent: { color: examProcess.progressActive },
-  numberUpcoming: { color: examProcess.progressInactive },
 });

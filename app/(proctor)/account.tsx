@@ -13,15 +13,11 @@ import { useRouter } from 'expo-router';
 import {
   User,
   Shield,
-  KeyRound,
-  Mail,
   Camera,
   ChevronRight,
   ShieldCheck,
   Check,
   X,
-  Eye,
-  EyeOff,
 } from 'lucide-react-native';
 import { Header, Button, Card } from '@/shared/components/ui';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
@@ -29,8 +25,6 @@ import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { AuthRepository } from '@/features/authentication/repositories/AuthRepository';
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
-import { ProctorAuthCache } from '@/features/authentication/services/proctorAuthCache';
-import { userFacingError } from '@/shared/utils/userFacingError';
 
 const AVATAR_COLORS = [
   { id: '1', bg: '#003366', border: '#0055A4', label: 'Classic Navy' },
@@ -49,23 +43,17 @@ export default function ProctorAccountScreen() {
 
   // Profile fields
   const [name, setName] = useState(profile?.displayName || '');
-  const [gmail, setGmail] = useState(profile?.username || '');
+  const [username, setUsername] = useState(profile?.username || '');
   const [avatarBg, setAvatarBg] = useState('#003366');
   const [avatarModalOpen, setAvatarModalOpen] = useState(false);
 
-  // Password fields
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [showPasswords, setShowPasswords] = useState(false);
-  const [savingPassword, setSavingPassword] = useState(false);
 
   useEffect(() => {
     void (async () => {
       const session = await AuthRepository.getCachedSessionFast();
       if (session) {
         setName(session.displayName || '');
-        setGmail(session.username || '');
+        setUsername(session.username || '');
       }
       try {
         const storedAvatar = await appStorage.getItem('tcc.proctor.avatar_color');
@@ -78,86 +66,28 @@ export default function ProctorAccountScreen() {
     })();
   }, []);
 
-  // Save Name & Gmail
+  // Proctor login names are administrator managed. Only update the local display name here.
   const handleSaveProfile = async () => {
     if (!name.trim()) {
       Alert.alert('Required', 'Please enter your full name.');
       return;
     }
-    if (!gmail.trim() || !gmail.includes('@')) {
-      Alert.alert('Invalid Email', 'Please provide a valid Gmail or email address.');
-      return;
-    }
-
     try {
       const current = (await AuthRepository.getCachedSessionFast()) || profile;
       const updated = {
         ...(current || {}),
         displayName: name.trim(),
-        username: gmail.trim(),
       };
 
       await appStorage.setItem(STORAGE_KEYS.proctorSession, JSON.stringify(updated));
       setProfile(updated as any);
 
-      Alert.alert(
-        'Profile Updated',
-        'Your name and Gmail address have been updated successfully (the same as Facebook Personal Details).',
-      );
+      Alert.alert('Profile Updated', 'Your display name was updated. Contact an administrator to change account details.');
     } catch (error) {
       Alert.alert(
         'Profile update failed',
-        userFacingError(error, 'Unable to save profile changes. Please try again.'),
+        'Unable to save profile changes. Please try again.',
       );
-    }
-  };
-
-  // Change Password
-  const handleChangePassword = async () => {
-    if (!currentPassword) {
-      Alert.alert('Current Password Required', 'Please enter your current password.');
-      return;
-    }
-    if (newPassword.length < 6) {
-      Alert.alert('Weak Password', 'New password must be at least 6 characters long.');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      Alert.alert('Mismatch', 'New password and confirm password do not match.');
-      return;
-    }
-
-    setSavingPassword(true);
-    try {
-      if (!gmail) {
-        Alert.alert('Unable to verify password', 'A proctor email is required to locate the offline account cache.');
-        return;
-      }
-      const currentAccount = await ProctorAuthCache.verify(gmail, currentPassword);
-      if (!currentAccount) {
-        Alert.alert('Current password incorrect', 'Enter the current password saved for offline sign-in, then try again.');
-        return;
-      }
-      const updated = await ProctorAuthCache.updatePassword(gmail, newPassword);
-      if (!updated) {
-        throw new Error('Unable to update the offline password cache.');
-      }
-
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-
-      Alert.alert(
-        'Offline password updated',
-        'The new password is saved securely on this device for offline sign-in. Change your central account password through the online account service.',
-      );
-    } catch (error) {
-      Alert.alert(
-        'Password update failed',
-        userFacingError(error, 'Unable to update the password in the local account cache. Please try again.'),
-      );
-    } finally {
-      setSavingPassword(false);
     }
   };
 
@@ -179,7 +109,7 @@ export default function ProctorAccountScreen() {
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
       <Header
         title="Account Center"
-        subtitle="Personal Details & Security"
+        subtitle="Personal Details"
         onBack={handleBack}
       />
 
@@ -189,6 +119,7 @@ export default function ProctorAccountScreen() {
           style={[
             styles.profileHeaderCard,
             { backgroundColor: colors.card, borderColor: colors.cardBorder },
+            isDark && { shadowColor: 'transparent', elevation: 0 },
           ]}
         >
           <View style={styles.avatarSection}>
@@ -197,7 +128,7 @@ export default function ProctorAccountScreen() {
               onPress={() => setAvatarModalOpen(true)}
             >
               <User size={36} color="#FFFFFF" />
-              <View style={styles.cameraIconBadge}>
+              <View style={[styles.cameraIconBadge, { borderColor: isDark ? colors.card : '#FFFFFF' }]}>
                 <Camera size={12} color="#FFFFFF" />
               </View>
             </Pressable>
@@ -224,7 +155,7 @@ export default function ProctorAccountScreen() {
               numberOfLines={1}
               maxFontSizeMultiplier={fontMultiplier}
             >
-              {gmail || 'proctor@example.com'}
+              {username ? `@${username}` : 'Proctor account'}
             </Text>
             <View style={[styles.verifiedPill, { backgroundColor: colors.accentMuted }]}>
               <ShieldCheck size={12} color={colors.accent} />
@@ -238,7 +169,7 @@ export default function ProctorAccountScreen() {
           </View>
         </View>
 
-        {/* 2. PERSONAL DETAILS (Name & Gmail) */}
+        {/* 2. PERSONAL DETAILS */}
         <Text
           style={[styles.sectionHeading, { color: colors.textPrimary }]}
           maxFontSizeMultiplier={fontMultiplier}
@@ -250,6 +181,7 @@ export default function ProctorAccountScreen() {
           style={[
             styles.formCard,
             { backgroundColor: colors.card, borderColor: colors.cardBorder },
+            isDark && { shadowColor: 'transparent', elevation: 0 },
           ]}
         >
           {/* Full Name */}
@@ -277,39 +209,6 @@ export default function ProctorAccountScreen() {
             </View>
           </View>
 
-          {/* Gmail / Email */}
-          <View style={styles.inputGroup}>
-            <Text
-              style={[styles.inputLabel, { color: colors.textSecondary }]}
-              maxFontSizeMultiplier={fontMultiplier}
-            >
-              Gmail / Contact Email
-            </Text>
-            <View
-              style={[
-                styles.inputWrapper,
-                { backgroundColor: colors.inputBg, borderColor: colors.inputBorder },
-              ]}
-            >
-              <Mail size={18} color={colors.textMuted} />
-              <TextInput
-                style={[styles.textInput, { color: colors.textPrimary }]}
-                value={gmail}
-                onChangeText={setGmail}
-                placeholder="proctor@gmail.com"
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                keyboardType="email-address"
-              />
-            </View>
-            <Text
-              style={[styles.helperNote, { color: colors.textMuted }]}
-              maxFontSizeMultiplier={fontMultiplier}
-            >
-              Updating your Gmail updates notification alerts and session recovery keys.
-            </Text>
-          </View>
-
           <Button
             title="Save Personal Details"
             variant="primary"
@@ -318,113 +217,6 @@ export default function ProctorAccountScreen() {
           />
         </View>
 
-        {/* 3. PASSWORD & SECURITY */}
-        <Text
-          style={[styles.sectionHeading, { color: colors.textPrimary }]}
-          maxFontSizeMultiplier={fontMultiplier}
-        >
-          Password & Security
-        </Text>
-
-        <View
-          style={[
-            styles.formCard,
-            { backgroundColor: colors.card, borderColor: colors.cardBorder },
-          ]}
-        >
-          {/* Current Password */}
-          <View style={styles.inputGroup}>
-            <Text
-              style={[styles.inputLabel, { color: colors.textSecondary }]}
-              maxFontSizeMultiplier={fontMultiplier}
-            >
-              Current Password
-            </Text>
-            <View
-              style={[
-                styles.inputWrapper,
-                { backgroundColor: colors.inputBg, borderColor: colors.inputBorder },
-              ]}
-            >
-              <KeyRound size={18} color={colors.textMuted} />
-              <TextInput
-                style={[styles.textInput, { color: colors.textPrimary }]}
-                value={currentPassword}
-                onChangeText={setCurrentPassword}
-                placeholder="Enter current password"
-                placeholderTextColor={colors.textMuted}
-                secureTextEntry={!showPasswords}
-              />
-              <Pressable onPress={() => setShowPasswords((s) => !s)} hitSlop={8}>
-                {showPasswords ? (
-                  <EyeOff size={18} color={colors.textMuted} />
-                ) : (
-                  <Eye size={18} color={colors.textMuted} />
-                )}
-              </Pressable>
-            </View>
-          </View>
-
-          {/* New Password */}
-          <View style={styles.inputGroup}>
-            <Text
-              style={[styles.inputLabel, { color: colors.textSecondary }]}
-              maxFontSizeMultiplier={fontMultiplier}
-            >
-              New Password
-            </Text>
-            <View
-              style={[
-                styles.inputWrapper,
-                { backgroundColor: colors.inputBg, borderColor: colors.inputBorder },
-              ]}
-            >
-              <KeyRound size={18} color={colors.textMuted} />
-              <TextInput
-                style={[styles.textInput, { color: colors.textPrimary }]}
-                value={newPassword}
-                onChangeText={setNewPassword}
-                placeholder="At least 6 characters"
-                placeholderTextColor={colors.textMuted}
-                secureTextEntry={!showPasswords}
-              />
-            </View>
-          </View>
-
-          {/* Confirm New Password */}
-          <View style={styles.inputGroup}>
-            <Text
-              style={[styles.inputLabel, { color: colors.textSecondary }]}
-              maxFontSizeMultiplier={fontMultiplier}
-            >
-              Confirm New Password
-            </Text>
-            <View
-              style={[
-                styles.inputWrapper,
-                { backgroundColor: colors.inputBg, borderColor: colors.inputBorder },
-              ]}
-            >
-              <KeyRound size={18} color={colors.textMuted} />
-              <TextInput
-                style={[styles.textInput, { color: colors.textPrimary }]}
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                placeholder="Re-enter new password"
-                placeholderTextColor={colors.textMuted}
-                secureTextEntry={!showPasswords}
-              />
-            </View>
-          </View>
-
-          <Button
-            title="Update Password"
-            variant="outline"
-            size="md"
-            loading={savingPassword}
-            onPress={handleChangePassword}
-          />
-        </View>
       </ScrollView>
 
       {/* AVATAR COLOR SELECTOR MODAL */}
@@ -438,7 +230,7 @@ export default function ProctorAccountScreen() {
           <View
             style={[
               styles.avatarModalSheet,
-              { backgroundColor: colors.card, borderColor: colors.cardBorder },
+              { backgroundColor: colors.modal, borderColor: colors.cardBorder },
             ]}
           >
             <View style={styles.modalHeaderRow}>

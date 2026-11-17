@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  countOfflineAssignedStudents,
+  filterOfflineRoomsWithAssignedStudents,
   validateOfflineHostRoom,
   validateOfflineRoomAssignment,
   type OfflineRoomSchedule,
@@ -163,6 +165,115 @@ test('legacy packs cannot host managed-room admission until refreshed', () => {
     assert.equal(result.code, 'assignment_data_unavailable');
     assert.match(result.message, /update the examination pack/i);
   }
+});
+
+test('room counts are isolated by examination schedule and room', () => {
+  const registrations = [
+    { examination_schedule_id: 10, assigned_room_id: 101 },
+    { examination_schedule_id: 10, assigned_room_id: 101 },
+    { examination_schedule_id: 10, assigned_room_id: 102 },
+    { examination_schedule_id: 11, assigned_room_id: 101 },
+  ];
+
+  assert.equal(countOfflineAssignedStudents(registrations, 10, 101), 2);
+  assert.equal(countOfflineAssignedStudents(registrations, 10, 102), 1);
+  assert.equal(countOfflineAssignedStudents(registrations, 11, 101), 1);
+  assert.equal(countOfflineAssignedStudents(registrations, 11, 102), 0);
+});
+
+test('room visibility includes only rooms with students for the selected batch', () => {
+  const rooms = [{ id: 101 }, { id: 102 }, { id: 103 }, { id: 104 }];
+  const registrations = Array.from({ length: 30 }, () => ({
+    examination_schedule_id: 10,
+    assigned_room_id: 102,
+  }));
+
+  assert.deepEqual(
+    filterOfflineRoomsWithAssignedStudents({ rooms, registrations, scheduleId: 10 }),
+    [{ id: 102 }],
+  );
+});
+
+test('room visibility supports zero, one, and multiple occupied rooms without using capacity', () => {
+  const rooms = [{ id: 101 }, { id: 102 }, { id: 103 }, { id: 104 }];
+  assert.deepEqual(
+    filterOfflineRoomsWithAssignedStudents({ rooms, registrations: [], scheduleId: 10 }),
+    [],
+  );
+  assert.deepEqual(
+    filterOfflineRoomsWithAssignedStudents({
+      rooms,
+      registrations: [{ examination_schedule_id: 10, assigned_room_id: 101 }],
+      scheduleId: 10,
+    }),
+    [{ id: 101 }],
+  );
+  assert.deepEqual(
+    filterOfflineRoomsWithAssignedStudents({
+      rooms,
+      registrations: [
+        { examination_schedule_id: 10, assigned_room_id: 101 },
+        { examination_schedule_id: 10, assigned_room_id: 103 },
+      ],
+      scheduleId: 10,
+    }),
+    [{ id: 101 }, { id: 103 }],
+  );
+});
+
+test('room visibility never borrows assignments from another batch', () => {
+  const rooms = [{ id: 101 }, { id: 102 }];
+  const registrations = [
+    { examination_schedule_id: 10, assigned_room_id: 101 },
+    { examination_schedule_id: 11, assigned_room_id: 102 },
+  ];
+
+  assert.deepEqual(
+    filterOfflineRoomsWithAssignedStudents({ rooms, registrations, scheduleId: 10 }),
+    [{ id: 101 }],
+  );
+  assert.deepEqual(
+    filterOfflineRoomsWithAssignedStudents({ rooms, registrations, scheduleId: 11 }),
+    [{ id: 102 }],
+  );
+});
+
+test('an already-active room is preserved for recovery even if the updated roster is empty', () => {
+  const rooms = [{ id: 101 }, { id: 102 }];
+  assert.deepEqual(
+    filterOfflineRoomsWithAssignedStudents({
+      rooms,
+      registrations: [],
+      scheduleId: 10,
+      preserveRoom: (room) => room.id === 102,
+    }),
+    [{ id: 102 }],
+  );
+});
+
+test('an empty room cannot start a new offline host session', () => {
+  const result = validateOfflineHostRoom({
+    schedule: managedSchedule,
+    authority: { scheduleId: 10, roomId: 101 },
+    assignedStudentCount: 0,
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.code, 'empty_room');
+    assert.equal(result.message, 'This room has no assigned students for the selected examination batch.');
+  }
+});
+
+test('an already-active empty room remains recoverable after a pack update', () => {
+  const result = validateOfflineHostRoom({
+    schedule: managedSchedule,
+    authority: { scheduleId: 10, roomId: 101 },
+    assignedStudentCount: 0,
+    hasExistingActiveSession: true,
+  });
+
+  assert.deepEqual(result, { ok: true });
 });
 
 test('REGRESSION-ROOM-001: Single schedule with two rooms (Room 201 and Room 202) room assignment enforcement', () => {

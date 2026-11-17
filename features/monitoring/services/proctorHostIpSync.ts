@@ -16,16 +16,22 @@ let lastSyncedIp: string | null = null;
 let syncing = false;
 let refreshQueued = false;
 
-async function readWifiSsid(): Promise<string | null> {
+async function readWifiIdentity(): Promise<{ ssid: string | null; bssid: string | null }> {
   try {
     const net = await Network.getNetworkStateAsync();
-    if (net.type !== Network.NetworkStateType.WIFI) return null;
-    const ssid = (net as { ssid?: string | null }).ssid;
-    const cleaned = ssid ? String(ssid).replace(/^"|"$/g, '').trim() : '';
-    if (!cleaned || /^<?unknown\s*ssid>?$/i.test(cleaned)) return null;
-    return cleaned;
+    if (net.type !== Network.NetworkStateType.WIFI) return { ssid: null, bssid: null };
+    const details = (net as { details?: { ssid?: string | null; bssid?: string | null } }).details;
+    const ssid = (net as { ssid?: string | null }).ssid ?? details?.ssid;
+    const bssid = (net as { bssid?: string | null }).bssid ?? details?.bssid;
+    const clean = (value: unknown) => {
+      const normalized = String(value ?? '').replace(/^"|"$/g, '').trim();
+      return !normalized || /^<?unknown\s*ssid>?$/i.test(normalized) || normalized === '02:00:00:00:00:00'
+        ? null
+        : normalized;
+    };
+    return { ssid: clean(ssid), bssid: clean(bssid) };
   } catch {
-    return null;
+    return { ssid: null, bssid: null };
   }
 }
 
@@ -39,7 +45,9 @@ export async function syncProctorHostIp(force = false): Promise<string | null> {
     return lastSyncedIp;
   }
   const info = PeerExamServer.info();
-  if (!info.running && info.listenerState === 'stopped' && !options.examSessionId) return null;
+  // Offline-only rooms have no Laravel session id. Keep polling while the
+  // local room exists, including the no-IP interval between Wi-Fi networks.
+  if (!info.code && !options.examSessionId) return null;
 
   syncing = true;
   try {
@@ -63,11 +71,12 @@ export async function syncProctorHostIp(force = false): Promise<string | null> {
       options.onHostChanged?.(ip);
 
       if (options.examSessionId) {
-        const wifiSsid = await readWifiSsid();
+        const wifiIdentity = await readWifiIdentity();
         try {
           const result = await LobbyRepository.updateSessionNetwork(options.examSessionId, {
             localServerIp: ip,
-            wifiSsid,
+            wifiSsid: wifiIdentity.ssid,
+            wifiBssid: wifiIdentity.bssid,
             // Mint a new code only while lobby is empty (server decides).
             regenerateIfEmpty: true,
           });

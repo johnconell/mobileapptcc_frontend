@@ -4,6 +4,17 @@ export type ProctorRestoreResult =
   | { route: '/(proctor)/(tabs)/dashboard'; recoveryMessage?: string }
   | { route: string; recoveryMessage?: string };
 
+/** Route the lobby by schedule identity, never by its composite local session id. */
+export function restoredScheduleRouteId(snapshot: {
+  schedule?: { id?: string | number | null } | null;
+  session?: { scheduleId?: string | number | null; id?: string | number | null } | null;
+}): string {
+  const scheduleId = snapshot.schedule?.id ?? snapshot.session?.scheduleId;
+  if (scheduleId != null && String(scheduleId).trim()) return String(scheduleId).replace(/^offline-/, '');
+  const localSessionId = String(snapshot.session?.id ?? '').replace(/^offline-/, '');
+  return localSessionId.match(/^\d+/)?.[0] ?? '';
+}
+
 /**
  * Rebind a persisted peer room after process death and return the exact screen
  * the proctor was managing. This never creates a room or regenerates its code.
@@ -25,7 +36,7 @@ export async function restoreProctorDestination(): Promise<ProctorRestoreResult>
     };
   }
 
-  const sessionId = String(snapshot.session?.id || snapshot.schedule?.id || '');
+  const sessionId = restoredScheduleRouteId(snapshot);
   if (!sessionId) {
     return {
       route: '/(proctor)/(tabs)/dashboard',
@@ -47,6 +58,8 @@ export async function restoreProctorDestination(): Promise<ProctorRestoreResult>
     route: `/(proctor)/lobby?${params.toString()}`,
     recoveryMessage: info.running
       ? undefined
-      : 'The saved examination was restored. Reconnecting the local LAN listener now; the original timer and student progress remain unchanged.',
+      : info.host
+        ? 'The saved examination was restored. Reconnecting the local LAN listener; the original timer and student progress remain unchanged.'
+        : 'The saved examination was restored. Connect the proctor phone to Wi-Fi to make the local LAN available. The original timer and student progress remain unchanged.',
   };
 }

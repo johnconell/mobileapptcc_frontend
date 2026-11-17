@@ -1,0 +1,1702 @@
+[
+  {
+    "id": "1",
+    "number": 1,
+    "subjectId": "701",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "I went ______ the street.",
+    "choices": {
+      "A": "across",
+      "B": "acrost",
+      "C": "crossing",
+      "D": "none of these"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "2",
+    "number": 2,
+    "subjectId": "702",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "Of the two pictures, I like this one _______.",
+    "choices": {
+      "A": "good",
+      "B": "better",
+      "C": "most",
+      "D": "none of these"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "3",
+    "number": 3,
+    "subjectId": "703",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "This is different ______ that.",
+    "choices": {
+      "A": "from",
+      "B": "than",
+      "C": "in",
+      "D": "none of these"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "4",
+    "number": 4,
+    "subjectId": "704",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "I _______ my work well.",
+    "choices": {
+      "A": "do",
+      "B": "done",
+      "C": "did",
+      "D": "none of these"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "5",
+    "number": 5,
+    "subjectId": "700",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "Yesterday I ________ down for a rest.",
+    "choices": {
+      "A": "lays",
+      "B": "lay",
+      "C": "laid",
+      "D": "none of these"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "6",
+    "number": 6,
+    "subjectId": "701",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "He __________ to do that kind of job.",
+    "choices": {
+      "A": "ought not",
+      "B": "doesn't ought",
+      "C": "hadn't ought",
+      "D": "none of these"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "7",
+    "number": 7,
+    "subjectId": "702",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "Mario is absent _______ the class.",
+    "choices": {
+      "A": "on",
+      "B": "from",
+      "C": "at",
+      "D": "none of these"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "8",
+    "number": 8,
+    "subjectId": "703",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "Sherwin runs ____________ the town of San Agustin.",
+    "choices": {
+      "A": "at",
+      "B": "through",
+      "C": "from",
+      "D": "none of these"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "9",
+    "number": 9,
+    "subjectId": "704",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "My birthday is, ________ Monday.",
+    "choices": {
+      "A": "in",
+      "B": "on",
+      "C": "it",
+      "D": "none of these"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "10",
+    "number": 10,
+    "subjectId": "700",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "___________ is a Christmas gift from my uncle.",
+    "choices": {
+      "A": "These",
+      "B": "This",
+      "C": "Those",
+      "D": "none of these"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "11",
+    "number": 11,
+    "subjectId": "701",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "I did not come _________ you did not allow me.",
+    "choices": {
+      "A": "therefore",
+      "B": "through",
+      "C": "because",
+      "D": "none of these"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "12",
+    "number": 12,
+    "subjectId": "702",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "She wrote a first-rate report. What does it say about the report?",
+    "choices": {
+      "A": "Ordinary",
+      "B": "Run of the mill",
+      "C": "Excellent",
+      "D": "Mediocre"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "13",
+    "number": 13,
+    "subjectId": "703",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "I lived with them _________ I was in College.",
+    "choices": {
+      "A": "while",
+      "B": "until",
+      "C": "where",
+      "D": "though"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "14",
+    "number": 14,
+    "subjectId": "704",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "The sun __________ brightly this morning.",
+    "choices": {
+      "A": "shine",
+      "B": "shines",
+      "C": "shined",
+      "D": "shining"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "15",
+    "number": 15,
+    "subjectId": "700",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "I have ___________ my term papers for English.",
+    "choices": {
+      "A": "write",
+      "B": "writing",
+      "C": "written",
+      "D": "wrote"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "16",
+    "number": 16,
+    "subjectId": "701",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "He __________ in bed for eleven days.",
+    "choices": {
+      "A": "stay",
+      "B": "staying",
+      "C": "stood",
+      "D": "stayed"
+    },
+    "correctAnswer": "D",
+    "explanation": ""
+  },
+  {
+    "id": "17",
+    "number": 17,
+    "subjectId": "702",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "The soldiers fought ___________ in the battle.",
+    "choices": {
+      "A": "fierce",
+      "B": "fiercely",
+      "C": "bitter",
+      "D": "none of these"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "18",
+    "number": 18,
+    "subjectId": "703",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "\"She was a Phantom of delight\" means:",
+    "choices": {
+      "A": "Lovely",
+      "B": "Illusion",
+      "C": "real",
+      "D": "fake"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "19",
+    "number": 19,
+    "subjectId": "704",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "The longest epic ever written is:",
+    "choices": {
+      "A": "Lam-ang",
+      "B": "Mahabharata",
+      "C": "Siegfried",
+      "D": "Lament"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "20",
+    "number": 20,
+    "subjectId": "700",
+    "category": "Verbal Ability",
+    "categoryCode": "VERB",
+    "type": "multiple_choice",
+    "question": "A long poem which depicts the adventure of a great hero, who reveals his country's aspirations:",
+    "choices": {
+      "A": "Epic",
+      "B": "Short story",
+      "C": "Novel",
+      "D": "Legend"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "21",
+    "number": 21,
+    "subjectId": "701",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "80% of 65 =",
+    "choices": {
+      "A": "530",
+      "B": "5.2",
+      "C": "52",
+      "D": "5.3"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "22",
+    "number": 22,
+    "subjectId": "702",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "5 is ______ of 20.",
+    "choices": {
+      "A": "25%",
+      "B": "20%",
+      "C": "50%",
+      "D": "30%"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "23",
+    "number": 23,
+    "subjectId": "703",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "The population of a certain island was 5,000 in 1935. By 1960 it was increased by 50%. How many did the population increase?",
+    "choices": {
+      "A": "2,500",
+      "B": "10,000",
+      "C": "7,500",
+      "D": "8,000"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "24",
+    "number": 24,
+    "subjectId": "704",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "Mr. Reyes had read 160 pages of his reviewer. He said this was 80% of the whole reviewer. How many pages were there in Mr. Reyes' reviewer?",
+    "choices": {
+      "A": "200 pages",
+      "B": "240 pages",
+      "C": "320 pages",
+      "D": "150 pages"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "25",
+    "number": 25,
+    "subjectId": "700",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "The oldest man on an island was born on June 20, 1902. How old was he on July 30, 1942?",
+    "choices": {
+      "A": "40 years, 1 month and 10 days",
+      "B": "40 years, 2 months",
+      "C": "42 years, 1 month and 10 days",
+      "D": "41 years, 2 months and 2 days"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "26",
+    "number": 26,
+    "subjectId": "701",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "Subtract 27 5/14 from 43 1/6:",
+    "choices": {
+      "A": "15",
+      "B": "16",
+      "C": "15 8/21",
+      "D": "15 17/21"
+    },
+    "correctAnswer": "D",
+    "explanation": ""
+  },
+  {
+    "id": "27",
+    "number": 27,
+    "subjectId": "702",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "Multiply 17 5/8 by 128:",
+    "choices": {
+      "A": "2,200",
+      "B": "2,305",
+      "C": "2,356",
+      "D": "2,256"
+    },
+    "correctAnswer": "D",
+    "explanation": ""
+  },
+  {
+    "id": "28",
+    "number": 28,
+    "subjectId": "703",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "Nicky is a cell phone dealer who uses a mark-up rate of 7.5%. If he bought a new model phone for \u20b112,000.00 from the manufacturer, how much will he sell it?",
+    "choices": {
+      "A": "\u20b112,750.00",
+      "B": "\u20b112,800.00",
+      "C": "\u20b112,900.00",
+      "D": "\u20b121,000.00"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "29",
+    "number": 29,
+    "subjectId": "704",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "5.9 - 2.4 equals:",
+    "choices": {
+      "A": "4.6",
+      "B": "3.5",
+      "C": "3.6",
+      "D": "4.5"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "30",
+    "number": 30,
+    "subjectId": "700",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "10 millimeters is equal to:",
+    "choices": {
+      "A": "one decimeter",
+      "B": "one centimeter",
+      "C": "one meter",
+      "D": "kilometer"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "31",
+    "number": 31,
+    "subjectId": "701",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "The storekeeper ordered a half gross of notebooks. How many notebooks did he order?",
+    "choices": {
+      "A": "72 units",
+      "B": "82 units",
+      "C": "68 units",
+      "D": "96 units"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "32",
+    "number": 32,
+    "subjectId": "702",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "If a child weighs 50 kilograms, how many kilos is the child?",
+    "choices": {
+      "A": "500 kilos",
+      "B": "5 kilos",
+      "C": "50 kilos",
+      "D": "0.5 kilos"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "33",
+    "number": 33,
+    "subjectId": "703",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "If you subtract -1 from +1 the result will be _______.",
+    "choices": {
+      "A": "-2",
+      "B": "1",
+      "C": "0",
+      "D": "2"
+    },
+    "correctAnswer": "D",
+    "explanation": ""
+  },
+  {
+    "id": "34",
+    "number": 34,
+    "subjectId": "704",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "The difference between one hundred five thousand eighty-four and ninety-three thousand seven hundred 9 is:",
+    "choices": {
+      "A": "11,375",
+      "B": "12,131",
+      "C": "56,294",
+      "D": "56,375"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "35",
+    "number": 35,
+    "subjectId": "700",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "285 is 5% of:",
+    "choices": {
+      "A": "5,700",
+      "B": "1,700",
+      "C": "7,350",
+      "D": "1,750"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "36",
+    "number": 36,
+    "subjectId": "701",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "The Roman numeral for 1151 is:",
+    "choices": {
+      "A": "CLXI",
+      "B": "MCLI",
+      "C": "MVCI",
+      "D": "LCXI"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "37",
+    "number": 37,
+    "subjectId": "702",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "A is 15 years old. B is one-third older. The number of years ago when B was twice as old as A is _________.",
+    "choices": {
+      "A": "3",
+      "B": "5",
+      "C": "7.5",
+      "D": "10"
+    },
+    "correctAnswer": "D",
+    "explanation": ""
+  },
+  {
+    "id": "38",
+    "number": 38,
+    "subjectId": "703",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "2,003 multiplied by 6.02 is _________.",
+    "choices": {
+      "A": "8.32205",
+      "B": "4.09003",
+      "C": "12,058.06",
+      "D": "6.0005"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "39",
+    "number": 39,
+    "subjectId": "704",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "The ratio of 24 to 64 is ___________.",
+    "choices": {
+      "A": "8:3",
+      "B": "24:100",
+      "C": "3:8",
+      "D": "64:100"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "40",
+    "number": 40,
+    "subjectId": "700",
+    "category": "Numerical Ability",
+    "categoryCode": "NUM",
+    "type": "multiple_choice",
+    "question": "If the product of two terms is 25a\u00b2b\u00b2 and one of the terms is 5ab, what is the other term?",
+    "choices": {
+      "A": "5ab\u00b2",
+      "B": "5ab",
+      "C": "5a\u00b2b",
+      "D": "5a\u2074b\u00b3"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "41",
+    "number": 41,
+    "subjectId": "701",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "Which of the following is an example of physical change?",
+    "choices": {
+      "A": "Burning metal",
+      "B": "Changing of iodine crystals into a violet gas",
+      "C": "Formation of two gases during electrolysis of water",
+      "D": "Formation of black solid from heated iron and sulfur"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "42",
+    "number": 42,
+    "subjectId": "702",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "An example of a pure element:",
+    "choices": {
+      "A": "Diamond",
+      "B": "Brass",
+      "C": "Nail",
+      "D": "Alloy"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "43",
+    "number": 43,
+    "subjectId": "703",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "A process of change in matter from solid to gas:",
+    "choices": {
+      "A": "Sublimation",
+      "B": "Saturation",
+      "C": "Evaporation",
+      "D": "Condensation"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "44",
+    "number": 44,
+    "subjectId": "704",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "DNA stands for:",
+    "choices": {
+      "A": "Deoxyribonucleic acid",
+      "B": "Derybonucleic Acid",
+      "C": "DeoNeurorobotic acid",
+      "D": "None of these"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "45",
+    "number": 45,
+    "subjectId": "700",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "Oxygen is released into the atmosphere through:",
+    "choices": {
+      "A": "Photosynthetic plants",
+      "B": "Burning fossil fuels",
+      "C": "Burning forest",
+      "D": "Acid precipitation"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "46",
+    "number": 46,
+    "subjectId": "701",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "NaCl means:",
+    "choices": {
+      "A": "Salt",
+      "B": "Acid",
+      "C": "Sodium Chloride",
+      "D": "Sugar"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "47",
+    "number": 47,
+    "subjectId": "702",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "The unit of measurement for the intensity of sounds:",
+    "choices": {
+      "A": "Hertz",
+      "B": "Angstrom",
+      "C": "Decibel",
+      "D": "Frequency"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "48",
+    "number": 48,
+    "subjectId": "703",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "The theory of relativity was developed by:",
+    "choices": {
+      "A": "Isaac Newton",
+      "B": "Galileo Galilei",
+      "C": "Albert Einstein",
+      "D": "Aristotle"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "49",
+    "number": 49,
+    "subjectId": "704",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "The scientific study of the human mind and its functions:",
+    "choices": {
+      "A": "Psychology",
+      "B": "Geometry",
+      "C": "Philosophy",
+      "D": "Botany"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "50",
+    "number": 50,
+    "subjectId": "700",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "The force of attraction between different kinds of molecules is called force of:",
+    "choices": {
+      "A": "Adhesion",
+      "B": "Transmission",
+      "C": "Cohesion",
+      "D": "Deformation"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "51",
+    "number": 51,
+    "subjectId": "701",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "The process of spreading out spontaneously to occupy a space uniformly:",
+    "choices": {
+      "A": "compression",
+      "B": "Expansion",
+      "C": "diffusion",
+      "D": "Pressure"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "52",
+    "number": 52,
+    "subjectId": "702",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "Simplest duplication of a cell and all its parts:",
+    "choices": {
+      "A": "symbiosis",
+      "B": "mitosis",
+      "C": "Metaphase",
+      "D": "Meiosis"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "53",
+    "number": 53,
+    "subjectId": "703",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "The red tide phenomenon causes what particular marine organism to be poisonous for human consumption?",
+    "choices": {
+      "A": "mollusk",
+      "B": "earth worms",
+      "C": "algae",
+      "D": "arthropods"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "54",
+    "number": 54,
+    "subjectId": "704",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "Commonly used sugar in day to day life:",
+    "choices": {
+      "A": "fructose",
+      "B": "Sucrose",
+      "C": "Glucose",
+      "D": "lactose"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "55",
+    "number": 55,
+    "subjectId": "700",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "An acidic substance _____:",
+    "choices": {
+      "A": "Donates protons",
+      "B": "Neither donates nor accepts",
+      "C": "Accepts protons",
+      "D": "None of the above"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "56",
+    "number": 56,
+    "subjectId": "701",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "One is not present in an animal cell:",
+    "choices": {
+      "A": "mitochondria",
+      "B": "nucleolus",
+      "C": "Chloroplast",
+      "D": "plasma membrane"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "57",
+    "number": 57,
+    "subjectId": "702",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "An antidote would have a similar neutralizing effect if vinegar or citrus juice were not available:",
+    "choices": {
+      "A": "Water",
+      "B": "Raw egg white",
+      "C": "Vegetable Oil",
+      "D": "Milk"
+    },
+    "correctAnswer": "D",
+    "explanation": ""
+  },
+  {
+    "id": "58",
+    "number": 58,
+    "subjectId": "703",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "A phenomenon associated with a change in direction of the equatorial current:",
+    "choices": {
+      "A": "Tsunami",
+      "B": "La Nina",
+      "C": "Eutrophication",
+      "D": "El Nino"
+    },
+    "correctAnswer": "D",
+    "explanation": ""
+  },
+  {
+    "id": "59",
+    "number": 59,
+    "subjectId": "704",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "The smallest bones in the human body are found in which part?",
+    "choices": {
+      "A": "Neck",
+      "B": "Back",
+      "C": "Ear",
+      "D": "Fingers"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "60",
+    "number": 60,
+    "subjectId": "700",
+    "category": "Scientific Ability",
+    "categoryCode": "SCI",
+    "type": "multiple_choice",
+    "question": "The heaviest organ in the human body:",
+    "choices": {
+      "A": "Brain",
+      "B": "Skin",
+      "C": "Liver",
+      "D": "Hair"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "61",
+    "number": 61,
+    "subjectId": "701",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Find the odd one out: Apple, Banana, Carrot, Mango",
+    "choices": {
+      "A": "Apple",
+      "B": "Banana",
+      "C": "Carrot",
+      "D": "Mango"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "62",
+    "number": 62,
+    "subjectId": "702",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Complete the series: 5, 10, 20, 40, ____",
+    "choices": {
+      "A": "50",
+      "B": "60",
+      "C": "80",
+      "D": "100"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "63",
+    "number": 63,
+    "subjectId": "703",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "If all roses are flowers and some flowers fade quickly, which is true?",
+    "choices": {
+      "A": "All roses fade quickly",
+      "B": "Some roses may fade quickly",
+      "C": "No roses fade",
+      "D": "Roses are not flowers"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "64",
+    "number": 64,
+    "subjectId": "704",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Dog is to puppy as cat is to ____.",
+    "choices": {
+      "A": "kitten",
+      "B": "cub",
+      "C": "calf",
+      "D": "foal"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "65",
+    "number": 65,
+    "subjectId": "700",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Which comes next: AZ, BY, CX, ____?",
+    "choices": {
+      "A": "DW",
+      "B": "EV",
+      "C": "DU",
+      "D": "DV"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "66",
+    "number": 66,
+    "subjectId": "701",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "If Monday is coded as 123456, what is DAY?",
+    "choices": {
+      "A": "456",
+      "B": "145",
+      "C": "345",
+      "D": "156"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "67",
+    "number": 67,
+    "subjectId": "702",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Find the missing number: 3, 6, 11, 18, ____",
+    "choices": {
+      "A": "25",
+      "B": "27",
+      "C": "29",
+      "D": "30"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "68",
+    "number": 68,
+    "subjectId": "703",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Which statement is a valid conclusion? All A are B. All B are C.",
+    "choices": {
+      "A": "All A are C",
+      "B": "All C are A",
+      "C": "Some A are not C",
+      "D": "No A are C"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "69",
+    "number": 69,
+    "subjectId": "704",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Odd one out: Square, Circle, Triangle, Rectangle",
+    "choices": {
+      "A": "Square",
+      "B": "Circle",
+      "C": "Triangle",
+      "D": "Rectangle"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "70",
+    "number": 70,
+    "subjectId": "700",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "If 2 = 6, 3 = 12, 4 = 20, then 5 =",
+    "choices": {
+      "A": "25",
+      "B": "30",
+      "C": "35",
+      "D": "40"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "71",
+    "number": 71,
+    "subjectId": "701",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Book is to reading as fork is to ____.",
+    "choices": {
+      "A": "drawing",
+      "B": "writing",
+      "C": "eating",
+      "D": "cooking"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "72",
+    "number": 72,
+    "subjectId": "702",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Complete: 1, 4, 9, 16, 25, ____",
+    "choices": {
+      "A": "30",
+      "B": "35",
+      "C": "36",
+      "D": "49"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "73",
+    "number": 73,
+    "subjectId": "703",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Which does not belong: Red, Blue, Green, Soft",
+    "choices": {
+      "A": "Red",
+      "B": "Blue",
+      "C": "Green",
+      "D": "Soft"
+    },
+    "correctAnswer": "D",
+    "explanation": ""
+  },
+  {
+    "id": "74",
+    "number": 74,
+    "subjectId": "704",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "If north becomes east, then west becomes ____.",
+    "choices": {
+      "A": "north",
+      "B": "south",
+      "C": "east",
+      "D": "west"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "75",
+    "number": 75,
+    "subjectId": "700",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Arrange in logical order: 1. Seed 2. Tree 3. Fruit 4. Flower",
+    "choices": {
+      "A": "1-4-3-2",
+      "B": "1-2-4-3",
+      "C": "2-1-4-3",
+      "D": "1-4-2-3"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "76",
+    "number": 76,
+    "subjectId": "701",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Find the analogy: Night : Day :: Dark : ____",
+    "choices": {
+      "A": "Black",
+      "B": "Light",
+      "C": "Moon",
+      "D": "Shadow"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "77",
+    "number": 77,
+    "subjectId": "702",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Which number is different: 2, 3, 5, 7, 9, 11?",
+    "choices": {
+      "A": "3",
+      "B": "7",
+      "C": "9",
+      "D": "11"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "78",
+    "number": 78,
+    "subjectId": "703",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "If A > B and B > C, then:",
+    "choices": {
+      "A": "C > A",
+      "B": "A > C",
+      "C": "A = C",
+      "D": "Cannot say"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "79",
+    "number": 79,
+    "subjectId": "704",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "Series: Z, X, V, T, ____",
+    "choices": {
+      "A": "R",
+      "B": "S",
+      "C": "Q",
+      "D": "P"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "80",
+    "number": 80,
+    "subjectId": "700",
+    "category": "Logical Ability",
+    "categoryCode": "LOG",
+    "type": "multiple_choice",
+    "question": "If \"PEN\" is coded as 35, how is \"PIN\" coded? (P=16, E=5, N=14)",
+    "choices": {
+      "A": "39",
+      "B": "40",
+      "C": "45",
+      "D": "48"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "81",
+    "number": 81,
+    "subjectId": "701",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "The place where Father Burgos, Gomez and Zamora were executed is ___.",
+    "choices": {
+      "A": "Fort Santiago",
+      "B": "Luneta/Bagumbayan",
+      "C": "Madrid",
+      "D": "Fort Aguinaldo"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "82",
+    "number": 82,
+    "subjectId": "702",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "Who is the father of the Philippine Independence?",
+    "choices": {
+      "A": "Manuel L. Quezon",
+      "B": "Emilio Aguinaldo",
+      "C": "Sergio Osme\u00f1a",
+      "D": "Elpidio Quirino"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "83",
+    "number": 83,
+    "subjectId": "703",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "It is a month of fasting among the Muslims nationwide ___________.",
+    "choices": {
+      "A": "Zakat",
+      "B": "Ramadan",
+      "C": "Jihad",
+      "D": "Police Power"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "84",
+    "number": 84,
+    "subjectId": "704",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "The founder of Katipunan was ___________.",
+    "choices": {
+      "A": "Dr. Jose Rizal",
+      "B": "Emilio Aguinaldo",
+      "C": "Andres Bonifacio",
+      "D": "Gregorio del Pilar"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "85",
+    "number": 85,
+    "subjectId": "700",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "Who is the 16th president of the Philippines?",
+    "choices": {
+      "A": "Ferdinand Marcos Jr.",
+      "B": "Ferdinand Marcos Sr.",
+      "C": "Rodrigo R. Duterte",
+      "D": "Benigno S. Aquino Jr."
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "86",
+    "number": 86,
+    "subjectId": "701",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "A republic act that allows foreign investors to invest up to 100% equity in domestic market enterprises.",
+    "choices": {
+      "A": "RA 7042",
+      "B": "RA 8179",
+      "C": "RA 9253",
+      "D": "RA 8214"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "87",
+    "number": 87,
+    "subjectId": "702",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "The WHO declared the outbreak a public health emergency of International concern on:",
+    "choices": {
+      "A": "January 30, 2020",
+      "B": "March 15, 2020",
+      "C": "February 15, 2020",
+      "D": "January 15, 2020"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "88",
+    "number": 88,
+    "subjectId": "703",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "The COVID-19 virus originated in:",
+    "choices": {
+      "A": "Beijing, China",
+      "B": "Shanghai, China",
+      "C": "Wuhan, China",
+      "D": "Guangzhou, China"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "89",
+    "number": 89,
+    "subjectId": "704",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "Are smokers most likely to develop severe diseases with COVID-19?",
+    "choices": {
+      "A": "Yes",
+      "B": "No",
+      "C": "Most likely",
+      "D": "Never"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "90",
+    "number": 90,
+    "subjectId": "700",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "The national task force against COVID-19 (NDRRMC or MDRRMC) is under what branch of Government?",
+    "choices": {
+      "A": "Executive",
+      "B": "Judiciary",
+      "C": "DILG",
+      "D": "Legislative"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "91",
+    "number": 91,
+    "subjectId": "701",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "Can you be arrested without a warrant of arrest?",
+    "choices": {
+      "A": "No, if you are a minor",
+      "B": "Yes, if you were reported to have committed a crime",
+      "C": "No, if you are more than 60 yrs. old",
+      "D": "Yes, if you are in the act of committing a crime"
+    },
+    "correctAnswer": "D",
+    "explanation": ""
+  },
+  {
+    "id": "92",
+    "number": 92,
+    "subjectId": "702",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "A task force organized by the executive of the Government of the Philippines to respond to affairs concerning emerging infectious diseases in the country:",
+    "choices": {
+      "A": "MDRRMC",
+      "B": "DOH",
+      "C": "IATF",
+      "D": "WHO"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "93",
+    "number": 93,
+    "subjectId": "703",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "Scurvy is caused by the lack of:",
+    "choices": {
+      "A": "Vitamin E",
+      "B": "Vitamin D",
+      "C": "Vitamin C",
+      "D": "Vitamin A"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "94",
+    "number": 94,
+    "subjectId": "704",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "Goods that are increasingly demanded when income increases:",
+    "choices": {
+      "A": "Substitute goods",
+      "B": "Prestige goods",
+      "C": "Normal goods",
+      "D": "Inferior goods"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "95",
+    "number": 95,
+    "subjectId": "700",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "The nuclear family consists of:",
+    "choices": {
+      "A": "Grandfathers and Mothers",
+      "B": "Sons, Daughters and Cousins",
+      "C": "Mother, Father, Sons & Daughters",
+      "D": "Sons, Daughters and Sons-in-law"
+    },
+    "correctAnswer": "C",
+    "explanation": ""
+  },
+  {
+    "id": "96",
+    "number": 96,
+    "subjectId": "701",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "The total number of provinces in the Philippines:",
+    "choices": {
+      "A": "71",
+      "B": "81",
+      "C": "65",
+      "D": "90"
+    },
+    "correctAnswer": "B",
+    "explanation": ""
+  },
+  {
+    "id": "97",
+    "number": 97,
+    "subjectId": "702",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "The Philippines is a __________.",
+    "choices": {
+      "A": "Republican State",
+      "B": "Dominican State",
+      "C": "Commonwealth State",
+      "D": "Federal State"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "98",
+    "number": 98,
+    "subjectId": "703",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "Free Trade means:",
+    "choices": {
+      "A": "Levels of taxing is mutual between countries",
+      "B": "Goods are all imported",
+      "C": "Goods come and Taxed",
+      "D": "Government restrict entry of identified goods"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "99",
+    "number": 99,
+    "subjectId": "704",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "What stress can do to your mental health:",
+    "choices": {
+      "A": "Increase risk of mental health problems",
+      "B": "Promotes anxiety and depression",
+      "C": "Sleep problems",
+      "D": "Bodily complaints"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  },
+  {
+    "id": "100",
+    "number": 100,
+    "subjectId": "700",
+    "category": "General Information",
+    "categoryCode": "GEN",
+    "type": "multiple_choice",
+    "question": "A compulsory contribution to the government to defray the expenses incurred in the common interest is ______________.",
+    "choices": {
+      "A": "Tax",
+      "B": "Fee",
+      "C": "Budget",
+      "D": "Fund"
+    },
+    "correctAnswer": "A",
+    "explanation": ""
+  }
+]

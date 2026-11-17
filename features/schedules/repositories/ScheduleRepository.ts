@@ -9,6 +9,9 @@ import {
   getProctorScheduleAvailability,
   isPersistedOpenedRoomActive,
 } from '@/features/schedules/utils/proctorScheduleWindow';
+import {
+  countOfflineAssignedStudents,
+} from '@/features/examinations/services/offlineRoomAssignment';
 
 type BackendSchedule = {
   id: number;
@@ -19,6 +22,7 @@ type BackendSchedule = {
   time_slot?: string | null;
   venue?: string | null;
   batch_code?: string | null;
+  day_label?: string | null;
   course?: string | null;
   status?: string;
   expected_examinees?: number;
@@ -28,9 +32,23 @@ type BackendSchedule = {
   session_type?: 'regular' | 'rescheduled';
   reschedule_state?: 'proposed' | 'confirmed' | 'review_required' | null;
   schedule_revision?: number;
+  rooms?: Array<{
+    id: number;
+    room_name: string;
+    capacity: number;
+    student_count?: number;
+    proctor_id?: number | null;
+    proctor_name?: string | null;
+  }>;
 };
 
 const SCHEDULE_CATALOG_KEY = 'tcc.offline.schedule.catalog';
+const EXAMINATION_DAYS_KEY = 'tcc.offline.examination.days';
+
+export type OfficialExaminationDay = {
+  date: string;
+  dayLabel: string;
+};
 let serverClockSample: { serverMs: number; monotonicMs: number | null } | null = null;
 
 function monotonicNow(): number | null {
@@ -105,6 +123,7 @@ function formatTimeRange(value?: string | null): string {
 function toMobileSession(row: BackendSchedule): ExamSession {
   const examDate = row.exam_date || '';
   const title = row.title || 'Entrance Examination';
+  const assignedRoom = row.rooms?.length === 1 ? row.rooms[0] : undefined;
   const timeLabel =
     formatTimeRange(row.time_slot) ||
     [formatTime(row.start_time), formatTime(row.end_time)].filter(Boolean).join('–');
@@ -115,9 +134,13 @@ function toMobileSession(row: BackendSchedule): ExamSession {
     timeLabel,
     startTime: formatTime(row.start_time),
     endTime: formatTime(row.end_time),
-    venue: row.venue || 'Room assignment available in the downloaded pack',
+    roomId: assignedRoom ? String(assignedRoom.id) : null,
+    roomName: assignedRoom?.room_name ?? null,
+    venue: assignedRoom?.room_name || row.venue || (row.rooms?.length ? `${row.rooms.length} rooms` : 'Room assignment not configured'),
     batchNumber: row.batch_code || `Batch ${row.id}`,
-    registeredStudents: Number(row.registrations_count ?? row.expected_examinees ?? 0),
+    registeredStudents: Number(
+      row.registrations_count ?? row.expected_examinees ?? 0,
+    ),
     durationMinutes: 60,
     totalQuestions: 0,
     historyStatus:
@@ -172,6 +195,7 @@ function toMobileSchedules(rows: BackendSchedule[], serverNow?: string): ExamSch
         schoolYear: date.slice(0, 4) || String(new Date().getFullYear()),
         examinationDate: formatDateLabel(date),
         examinationDateIso: date,
+        dayLabel: row.day_label || undefined,
         batchCount: 0,
         description: row.venue || row.course || undefined,
         timeLabel: row.time_slot || undefined,
@@ -231,11 +255,40 @@ export const ScheduleRepository = {
     }
   },
 
+  async getOfficialExaminationDays(): Promise<OfficialExaminationDay[]> {
+    try {
+      const raw = await appStorage.getItem(EXAMINATION_DAYS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as OfficialExaminationDay[];
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // Fall back to the downloaded assignments below.
+    }
+
+    const pack = await OfflineStore.getPack();
+    const byDate = new Map<string, OfficialExaminationDay>();
+    for (const schedule of pack?.schedules ?? []) {
+      const date = String(schedule.exam_date ?? '').slice(0, 10);
+      if (!date || byDate.has(date)) continue;
+      byDate.set(date, { date, dayLabel: schedule.day_label || '' });
+    }
+    return Array.from(byDate.values())
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map((day, index) => ({
+        ...day,
+        dayLabel: day.dayLabel || `Day ${index + 1}`,
+      }));
+  },
+
   async refreshSchedulesFromCloud(): Promise<ExamSchedule[]> {
     const json = await apiRequest<{
       success: boolean;
       data: BackendSchedule[];
-      meta?: { server_now?: string };
+      meta?: {
+        server_now?: string;
+        examination_days?: Array<{ date: string; day_label: string }>;
+      };
     }>(
       '/proctor/schedules?per_page=200&include_history=1',
     );
@@ -245,6 +298,13 @@ export const ScheduleRepository = {
       serverClockSample = { serverMs, monotonicMs: monotonicNow() };
     }
     const cloud = toMobileSchedules(json.data || [], serverNow);
+    const officialDays = (json.meta?.examination_days ?? [])
+      .map((day) => ({ date: String(day.date).slice(0, 10), dayLabel: day.day_label }))
+      .filter((day) => Boolean(day.date))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    if (officialDays.length) {
+      await appStorage.setItem(EXAMINATION_DAYS_KEY, JSON.stringify(officialDays));
+    }
     const cachedPackSchedules = await OfflineExamRepository.getCachedSchedules();
     // Keep a downloaded pack authoritative for offline use. The cloud catalog
     // may omit previously downloaded schedules (for example, after its
@@ -275,7 +335,14 @@ export const ScheduleRepository = {
         title = scheduleId.substring(16).replace(/-/g, ' ');
       }
 
+      const actorId = Number(pack.authorization?.actor_id ?? 0);
       const rows = pack.schedules.filter((s) => {
+        const assignedToActor =
+          pack.authorization?.scope !== 'assigned_rooms' ||
+          (actorId > 0 &&
+            (Number(s.proctor_id) === actorId ||
+              (s.rooms ?? []).some((room) => Number(room.proctor_id) === actorId)));
+        if (!assignedToActor) return false;
         if (date && title) {
           return (s.exam_date || '') === date && (s.title || 'Entrance Examination') === title;
         }
@@ -295,11 +362,16 @@ export const ScheduleRepository = {
             time_slot: row.time_slot,
             venue: row.venue,
             batch_code: row.batch_code,
+            day_label: row.day_label,
             course: row.course,
             status: row.status,
             session_type: row.session_type,
             reschedule_state: row.reschedule_state,
             schedule_revision: row.schedule_revision,
+            rooms: (row.rooms ?? []).filter(
+              (room) => room.proctor_id == null
+                || Number(room.proctor_id) === Number(pack.authorization?.actor_id),
+            ),
             registrations_count:
               row.registration_count ??
               pack.registrations.filter(
@@ -378,8 +450,13 @@ export const ScheduleRepository = {
       if (typeof schedule.rooms_managed !== 'boolean') {
         throw new Error('Room authorization data is outdated. Update the examination package before opening a room.');
       }
-      const rooms = schedule.rooms;
       const opened = await OfflineStore.getOpenedRooms();
+      // Keep every configured room in the preview, including rooms with no
+      // students and rooms assigned to another proctor. Opening permission is
+      // calculated below and remains separate from visibility.
+      const rooms = schedule.rooms.filter(
+        (room) => Number(room.examination_schedule_id ?? sid) === sid,
+      );
       const actorId = Number(pack.authorization?.actor_id ?? 0);
       const authorizationKnown =
         Number.isInteger(actorId) &&
@@ -397,7 +474,7 @@ export const ScheduleRepository = {
         )
         .map(([key]) => key);
 
-      return rooms.map((row) => {
+      return rooms.flatMap((row) => {
         const key = OfflineStore.roomKey(sid, row.id);
         const persisted = opened[key];
         const live = isPersistedOpenedRoomActive(
@@ -410,6 +487,9 @@ export const ScheduleRepository = {
           : undefined;
         const status = persisted && !live ? 'ended' : (live?.status ?? 'idle');
         const isLive = status === 'lobby_open' || status === 'in_progress';
+        const studentCount = Number(
+          row.student_count ?? countOfflineAssignedStudents(pack.registrations, sid, row.id),
+        );
         const liveOwnerId = live?.ownerId != null ? Number(live.ownerId) : null;
         const ownedByCurrent = Boolean(
           live && isLive && (liveOwnerId === actorId || liveOwnerId == null),
@@ -441,6 +521,7 @@ export const ScheduleRepository = {
         const canOpen =
           authorizationKnown &&
           roomMetadataKnown &&
+          studentCount > 0 &&
           !assignedToOther &&
           !hasOtherActiveRoom &&
           status !== 'ended' &&
@@ -455,7 +536,7 @@ export const ScheduleRepository = {
           ) === 'available' &&
           (assignedToCurrent || locallyClaimed || unassignedEligible);
 
-        const claimRequired = unassignedEligible && !locallyClaimed;
+        const claimRequired = studentCount > 0 && unassignedEligible && !locallyClaimed;
 
         const assignedProctor = pack.proctors?.find((p) => Number(p.id) === assignedProctorId);
         const assignedProctorName = assignedProctor?.name ?? (assignedToCurrent ? 'You' : assignedProctorId != null ? `Proctor #${assignedProctorId}` : null);
@@ -468,6 +549,8 @@ export const ScheduleRepository = {
 
         const authorizationReason = !authorizationKnown || !roomMetadataKnown
           ? 'Room assignment authorization is missing or outdated. Update the examination pack.'
+          : studentCount <= 0 && !isLive
+            ? 'This room has no assigned students for the selected examination batch.'
           : assignedToOther
             ? 'This room is assigned to another proctor. Please select your assigned room or an available unassigned room.'
             : hasOtherActiveRoom
@@ -476,18 +559,12 @@ export const ScheduleRepository = {
                 ? 'You already have an assigned room for this examination schedule.'
                 : null;
 
-        return toMobileRoom(
+        return [toMobileRoom(
           {
             id: row.id,
             room_name: row.room_name,
             capacity: row.capacity,
-            student_count:
-              row.student_count ??
-              pack.registrations.filter(
-                (registration) =>
-                  Number(registration.examination_schedule_id) === sid &&
-                  Number(registration.assigned_room_id) === Number(row.id),
-              ).length,
+            student_count: studentCount,
             proctor_id: assignedProctorId,
             proctor_name: assignedProctorName,
             assigned_proctor_id: assignedProctorId,
@@ -506,7 +583,7 @@ export const ScheduleRepository = {
             can_reopen: status !== 'ended',
           },
           String(sid),
-        );
+        )];
       });
     };
 
@@ -520,6 +597,8 @@ export const ScheduleRepository = {
       const json = await apiRequest<{ success: boolean; data: BackendRoom[] }>(
         `/proctor/schedules/${sessionId}/rooms`,
       );
+      // The room list is a schedule preview. Keep empty and other-proctor
+      // rooms visible; canOpen/canControl are the authoritative access flags.
       const rooms = (json.data || []).map((row) => toMobileRoom(row, sessionId));
 
       // If we are online, also check for locally opened rooms (opened while offline)

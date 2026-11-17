@@ -947,14 +947,14 @@ export default function ProctorResultsScreen() {
               styles.navIconBtn,
               { backgroundColor: colors.card, borderColor: colors.cardBorder },
             ]}
-            onPress={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
-            accessibilityLabel={themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            onPress={() => setThemeMode(isDark ? 'light' : 'dark')}
+            accessibilityLabel={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
             hitSlop={8}
           >
-            {themeMode === 'dark' ? (
-              <Moon size={18} color="#C4A35A" />
+            {isDark ? (
+              <Moon size={18} color={colors.warning} />
             ) : (
-              <Sun size={18} color="#B45309" />
+              <Sun size={18} color={colors.warning} />
             )}
           </Pressable>
 
@@ -962,8 +962,8 @@ export default function ProctorResultsScreen() {
             style={[
               styles.navIconBtn,
               {
-                backgroundColor: isSearchOpen ? '#7A1F2B' : colors.card,
-                borderColor: isSearchOpen ? '#7A1F2B' : colors.cardBorder,
+                backgroundColor: isSearchOpen ? colors.accent : colors.card,
+                borderColor: isSearchOpen ? colors.accent : colors.cardBorder,
               },
             ]}
             onPress={() => setIsSearchOpen(!isSearchOpen)}
@@ -972,7 +972,7 @@ export default function ProctorResultsScreen() {
           >
             <Search
               size={18}
-              color={isSearchOpen ? '#FFFFFF' : colors.textPrimary}
+              color={isSearchOpen ? (isDark ? colors.card : '#FFFFFF') : colors.textPrimary}
             />
           </Pressable>
 
@@ -985,7 +985,7 @@ export default function ProctorResultsScreen() {
             accessibilityLabel="Logout"
             hitSlop={8}
           >
-            <LogOut size={18} color="#7A1F2B" />
+            <LogOut size={18} color={colors.danger} />
           </Pressable>
         </View>
       </View>
@@ -994,7 +994,7 @@ export default function ProctorResultsScreen() {
         contentContainerStyle={styles.contentScroll}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={loadData} tintColor="#7A1F2B" />
+          <RefreshControl refreshing={refreshing} onRefresh={loadData} tintColor={colors.accent} />
         }
       >
         {/* Screen Title (Matching Reference 'Transactions History' / 'Wallet Value') */}
@@ -1028,11 +1028,22 @@ export default function ProctorResultsScreen() {
         {/* ================================================================= */}
         {/* 2. COMPACT HERO SUMMARY CARD ("SAKTO LANG" PROPORTION)            */}
         {/* ================================================================= */}
-        <View style={styles.walletHeroCard}>
+        <View
+          style={[
+            styles.walletHeroCard,
+            isDark && {
+              backgroundColor: '#1A1416',
+              borderColor: 'rgba(210, 137, 148, 0.2)',
+              borderWidth: 1,
+              shadowColor: 'transparent',
+              elevation: 0,
+            },
+          ]}
+        >
           {/* Card Top Row: Label & LIVE Pill on Left, Time Range Filter on Right */}
           <View style={styles.walletTopRow}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text style={styles.walletLabel}>Overall Pass Rate</Text>
+              <Text style={[styles.walletLabel, isDark && { color: colors.textPrimary }]}>Overall Pass Rate</Text>
               <View style={styles.walletLiveBadge}>
                 <View style={styles.walletLiveDot} />
                 <Text style={styles.walletLiveText}>LIVE</Text>
@@ -1160,8 +1171,8 @@ export default function ProctorResultsScreen() {
             style={[
               styles.filterPill,
               {
-                backgroundColor: statusFilter === 'all' ? '#7A1F2B' : colors.card,
-                borderColor: statusFilter === 'all' ? '#7A1F2B' : colors.cardBorder,
+                backgroundColor: statusFilter === 'all' ? colors.accent : colors.card,
+                borderColor: statusFilter === 'all' ? colors.accent : colors.cardBorder,
               },
             ]}
             onPress={() => setStatusFilter('all')}
@@ -1169,7 +1180,9 @@ export default function ProctorResultsScreen() {
             <Text
               style={[
                 styles.filterPillText,
-                statusFilter === 'all' ? styles.filterPillTextActive : { color: colors.textSecondary },
+                statusFilter === 'all'
+                  ? [styles.filterPillTextActive, isDark && { color: colors.card }]
+                  : { color: colors.textSecondary },
               ]}
             >
               All ({lobbies.length})
@@ -1180,8 +1193,8 @@ export default function ProctorResultsScreen() {
             style={[
               styles.filterPill,
               {
-                backgroundColor: statusFilter === 'in_progress' ? '#7A1F2B' : colors.card,
-                borderColor: statusFilter === 'in_progress' ? '#7A1F2B' : colors.cardBorder,
+                backgroundColor: statusFilter === 'in_progress' ? colors.accent : colors.card,
+                borderColor: statusFilter === 'in_progress' ? colors.accent : colors.cardBorder,
               },
             ]}
             onPress={() => setStatusFilter('in_progress')}
@@ -1189,7 +1202,9 @@ export default function ProctorResultsScreen() {
             <Text
               style={[
                 styles.filterPillText,
-                statusFilter === 'in_progress' ? styles.filterPillTextActive : { color: colors.textSecondary },
+                statusFilter === 'in_progress'
+                  ? [styles.filterPillTextActive, isDark && { color: colors.card }]
+                  : { color: colors.textSecondary },
               ]}
             >
               In Progress ({lobbies.filter((l) => l.status === 'in_progress').length})
@@ -1200,8 +1215,8 @@ export default function ProctorResultsScreen() {
             style={[
               styles.filterPill,
               {
-                backgroundColor: statusFilter === 'ended' ? '#7A1F2B' : colors.card,
-                borderColor: statusFilter === 'ended' ? '#7A1F2B' : colors.cardBorder,
+                backgroundColor: statusFilter === 'ended' ? colors.accent : colors.card,
+                borderColor: statusFilter === 'ended' ? colors.accent : colors.cardBorder,
               },
             ]}
             onPress={() => setStatusFilter('ended')}
@@ -1209,7 +1224,9 @@ export default function ProctorResultsScreen() {
             <Text
               style={[
                 styles.filterPillText,
-                statusFilter === 'ended' ? styles.filterPillTextActive : { color: colors.textSecondary },
+                statusFilter === 'ended'
+                  ? [styles.filterPillTextActive, isDark && { color: colors.card }]
+                  : { color: colors.textSecondary },
               ]}
             >
               Ended ({lobbies.filter((l) => l.status === 'ended').length})
@@ -1221,18 +1238,20 @@ export default function ProctorResultsScreen() {
               style={[
                 styles.filterPill,
                 {
-                  backgroundColor: statusFilter === 'pending_sync' ? '#7A1F2B' : colors.card,
-                  borderColor: statusFilter === 'pending_sync' ? '#7A1F2B' : colors.cardBorder,
+                  backgroundColor: statusFilter === 'pending_sync' ? colors.accent : colors.card,
+                  borderColor: statusFilter === 'pending_sync' ? colors.accent : colors.cardBorder,
                 },
               ]}
               onPress={() => setStatusFilter('pending_sync')}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <View style={styles.notificationDot} />
+                <View style={[styles.notificationDot, { backgroundColor: isDark ? colors.card : '#FFFFFF' }]} />
                 <Text
                   style={[
                     styles.filterPillText,
-                    statusFilter === 'pending_sync' ? styles.filterPillTextActive : { color: colors.textSecondary },
+                    statusFilter === 'pending_sync'
+                      ? [styles.filterPillTextActive, isDark && { color: colors.card }]
+                      : { color: colors.textSecondary },
                   ]}
                 >
                   Pending ({lobbies.filter((l) => l.hasUnsynced).length})
@@ -1323,20 +1342,20 @@ export default function ProctorResultsScreen() {
                     {
                       backgroundColor: isEnded
                         ? isPass
-                          ? isDark ? '#142918' : '#DCFCE7'
-                          : isDark ? '#2A1414' : '#FEE2E2'
-                        : isDark ? '#1F1F1F' : '#FEF3C7',
+                          ? isDark ? colors.successMuted : '#DCFCE7'
+                          : isDark ? colors.dangerMuted : '#FEE2E2'
+                        : isDark ? colors.warningMuted : '#FEF3C7',
                     },
                   ]}
                 >
                   {isEnded ? (
                     isPass ? (
-                      <CheckCircle2 size={18} color={isDark ? '#22C55E' : '#16A34A'} />
+                      <CheckCircle2 size={18} color={colors.success} />
                     ) : (
-                      <XCircle size={18} color={isDark ? '#7A1F2B' : '#DC2626'} />
+                      <XCircle size={18} color={colors.danger} />
                     )
                   ) : (
-                    <DoorOpen size={18} color={isDark ? '#F59E0B' : '#D97706'} />
+                    <DoorOpen size={18} color={colors.warning} />
                   )}
                   {lobby.hasUnsynced && (
                     <View style={[styles.txRowUnsyncedDot, { borderColor: colors.card }]} />
@@ -1362,26 +1381,26 @@ export default function ProctorResultsScreen() {
                     <Text
                       style={[
                         styles.txScoreValue,
-                        isPass ? styles.txScorePass : styles.txScoreFail,
+                        isPass ? { color: colors.success } : { color: colors.danger },
                       ]}
                     >
                       {isPass ? '+' : '-'}
                       {avg.toFixed(1)}%
                     </Text>
                   ) : (
-                    <Text style={styles.txScorePending}>In Progress</Text>
+                    <Text style={[styles.txScorePending, { color: colors.warning }]}>In Progress</Text>
                   )}
 
                   <View style={styles.txStatusBadge}>
                     {!lobby.hasUnsynced ? (
                       <View style={styles.txSyncedRow}>
-                        <Check size={11} color="#22C55E" />
-                        <Text style={styles.txSyncedText}>Successfully Synced</Text>
+                        <Check size={11} color={colors.success} />
+                        <Text style={[styles.txSyncedText, { color: colors.success }]}>Successfully Synced</Text>
                       </View>
                     ) : (
                       <View style={styles.txUnsyncedRow}>
-                        <View style={styles.txUnsyncedDot} />
-                        <Text style={styles.txUnsyncedText}>Pending Sync</Text>
+                        <View style={[styles.txUnsyncedDot, { backgroundColor: colors.danger }]} />
+                        <Text style={[styles.txUnsyncedText, { color: colors.danger }]}>Pending Sync</Text>
                       </View>
                     )}
                     <ChevronRight size={14} color={colors.textMuted} style={{ marginLeft: 4 }} />

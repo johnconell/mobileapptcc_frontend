@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import { ChevronRight } from 'lucide-react-native';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 export interface BreadcrumbSegment {
   /** Display label — use actual data (schedule name, time slot, room name). */
@@ -22,11 +23,12 @@ interface BreadcrumbsProps {
  * Horizontally scrollable so breadcrumbs NEVER truncate or clip on small phones or large font scales.
  */
 export function Breadcrumbs({ segments }: BreadcrumbsProps) {
+  const { colors: themeColors } = useAppTheme();
   // Find the index of the current page (first segment without onPress)
   const currentIndex = segments.findIndex((s) => !s.onPress);
 
   return (
-    <View style={styles.bar}>
+    <View style={[styles.bar, { backgroundColor: themeColors.cardMuted, borderBottomColor: themeColors.cardBorder }]}>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -47,7 +49,7 @@ export function Breadcrumbs({ segments }: BreadcrumbsProps) {
                   style={styles.linkWrap}
                 >
                   <Text
-                    style={styles.link}
+                    style={[styles.link, { color: themeColors.accent }]}
                     numberOfLines={1}
                     maxFontSizeMultiplier={1.2}
                   >
@@ -58,8 +60,9 @@ export function Breadcrumbs({ segments }: BreadcrumbsProps) {
                 <Text
                   style={[
                     styles.text,
-                    isCurrent && styles.current,
-                    isFuture && styles.future,
+                    { color: themeColors.textSecondary },
+                    isCurrent && [styles.current, { color: themeColors.textPrimary }],
+                    isFuture && [styles.future, { color: themeColors.textMuted }],
                   ]}
                   numberOfLines={1}
                   maxFontSizeMultiplier={1.2}
@@ -70,7 +73,7 @@ export function Breadcrumbs({ segments }: BreadcrumbsProps) {
               {!isLast && (
                 <ChevronRight
                   size={12}
-                  color={isFuture ? '#94A3B8' : '#64748B'}
+                  color={isFuture ? themeColors.textMuted : themeColors.textSecondary}
                   style={styles.chevron}
                 />
               )}
@@ -84,10 +87,8 @@ export function Breadcrumbs({ segments }: BreadcrumbsProps) {
 
 const styles = StyleSheet.create({
   bar: {
-    backgroundColor: '#EBF3FE',
     paddingVertical: 7,
     borderBottomWidth: 1,
-    borderBottomColor: '#CBD5E1',
   },
   row: {
     flexDirection: 'row',
@@ -104,20 +105,16 @@ const styles = StyleSheet.create({
   link: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#0055A4',
     textDecorationLine: 'underline',
   },
   text: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#64748B',
   },
   current: {
-    color: '#003366',
     fontWeight: '800',
   },
   future: {
-    color: '#94A3B8',
     fontWeight: '600',
   },
   chevron: {

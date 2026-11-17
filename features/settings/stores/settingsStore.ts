@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { STORAGE_KEYS } from '@/shared/constants';
 import { appStorage } from '@/shared/services/storage';
 
-export type ThemeMode = 'light' | 'dark';
+export type ThemeMode = 'light' | 'dark' | 'system';
 export type AppFontSize = 'small' | 'standard' | 'large';
 
 interface SettingsState {

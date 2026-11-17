@@ -1,16 +1,21 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useColorScheme } from 'react-native';
 import { lightTheme, darkTheme, type ExamTheme } from '@/shared/theme/theme';
 import { appStorage } from '@/shared/services/storage';
+import { useSettingsStore, type ThemeMode } from '@/features/settings/stores/settingsStore';
 
 export const FONT_SCALE_MIN = 0.85;
 export const FONT_SCALE_MAX = 1.35;
 export const FONT_SCALE_STEP = 0.1;
+export const DEFAULT_THEME_MODE: ThemeMode = 'light';
 
 export interface ThemeTokenContextValue {
   theme: ExamTheme;
   isDark: boolean;
+  themeMode: ThemeMode;
   toggleTheme: () => void;
-  setTheme: (mode: 'light' | 'dark') => void;
+  setTheme: (mode: ThemeMode) => void;
+  setThemeMode: (mode: ThemeMode) => void;
 }
 
 export interface FontScaleActions {
@@ -28,17 +33,38 @@ const FontScaleActionsContext = createContext<FontScaleActions | null>(null);
 
 interface ThemeProviderProps {
   children: React.ReactNode;
-  initialDark?: boolean;
+  initialMode?: ThemeMode;
   initialFontScale?: number;
 }
 
 export function ThemeProvider({
   children,
-  initialDark = false,
+  initialMode = DEFAULT_THEME_MODE,
   initialFontScale = 1.0,
 }: ThemeProviderProps) {
-  // Light is the default theme
-  const [isDark, setIsDark] = useState<boolean>(initialDark);
+  // If a parent ThemeContext already exists (e.g. root ThemeProvider), reuse it
+  const parentTheme = useContext(ThemeContext);
+  const parentFontScale = useContext(FontScaleContext);
+  const parentFontScaleActions = useContext(FontScaleActionsContext);
+
+  if (parentTheme && parentFontScale !== null && parentFontScaleActions) {
+    return <>{children}</>;
+  }
+
+  return (
+    <RootThemeProvider initialMode={initialMode} initialFontScale={initialFontScale}>
+      {children}
+    </RootThemeProvider>
+  );
+}
+
+function RootThemeProvider({
+  children,
+  initialMode = DEFAULT_THEME_MODE,
+  initialFontScale = 1.0,
+}: ThemeProviderProps) {
+  const systemColorScheme = useColorScheme();
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(initialMode);
   const [fontScale, setFontScaleState] = useState<number>(initialFontScale);
 
   // Restore persisted preferences on mount
@@ -46,10 +72,16 @@ export function ThemeProvider({
     let active = true;
     void (async () => {
       try {
-        const storedTheme = await appStorage.getItem('tcc.settings.exam.dark_mode');
-        if (active && storedTheme !== null) {
-          setIsDark(storedTheme === 'true');
+        const storedMode = await appStorage.getItem('tcc.settings.theme_mode');
+        if (active && storedMode !== null && (storedMode === 'light' || storedMode === 'dark' || storedMode === 'system')) {
+          setThemeModeState(storedMode as ThemeMode);
+          useSettingsStore.getState().setThemeMode(storedMode as ThemeMode);
+        } else if (active) {
+          // Legacy dark-mode storage no longer overrides the light default.
+          setThemeModeState(DEFAULT_THEME_MODE);
+          useSettingsStore.getState().setThemeMode(DEFAULT_THEME_MODE);
         }
+
         const storedScale = await appStorage.getItem('tcc.settings.exam.font_scale');
         if (active && storedScale !== null) {
           const parsed = parseFloat(storedScale);
@@ -66,16 +98,28 @@ export function ThemeProvider({
     };
   }, []);
 
-  const setTheme = useCallback((mode: 'light' | 'dark') => {
-    const nextDark = mode === 'dark';
-    setIsDark(nextDark);
-    void appStorage.setItem('tcc.settings.exam.dark_mode', String(nextDark));
-  }, []);
+  // Compute resolved isDark
+  const isDark = useMemo(() => {
+    if (themeMode === 'system') {
+      return systemColorScheme === 'dark';
+    }
+    return themeMode === 'dark';
+  }, [themeMode, systemColorScheme]);
+
+  const setThemeMode = useCallback((mode: ThemeMode) => {
+    setThemeModeState(mode);
+    void appStorage.setItem('tcc.settings.theme_mode', mode);
+    const resolvedDark = mode === 'system' ? systemColorScheme === 'dark' : mode === 'dark';
+    void appStorage.setItem('tcc.settings.exam.dark_mode', String(resolvedDark));
+    useSettingsStore.getState().setThemeMode(mode);
+  }, [systemColorScheme]);
 
   const toggleTheme = useCallback(() => {
-    setIsDark((prev) => {
-      const next = !prev;
-      void appStorage.setItem('tcc.settings.exam.dark_mode', String(next));
+    setThemeModeState((prev) => {
+      const next: ThemeMode = prev === 'dark' ? 'light' : 'dark';
+      void appStorage.setItem('tcc.settings.theme_mode', next);
+      void appStorage.setItem('tcc.settings.exam.dark_mode', String(next === 'dark'));
+      useSettingsStore.getState().setThemeMode(next);
       return next;
     });
   }, []);
@@ -104,11 +148,14 @@ export function ThemeProvider({
     () => ({
       theme,
       isDark,
+      themeMode,
       toggleTheme,
-      setTheme,
+      setTheme: setThemeMode,
+      setThemeMode,
     }),
-    [theme, isDark, toggleTheme, setTheme],
+    [theme, isDark, themeMode, toggleTheme, setThemeMode],
   );
+
   const fontScaleActions = useMemo(
     () => ({ setFontScale, stepFontScale }),
     [setFontScale, stepFontScale],
@@ -131,8 +178,10 @@ export function useThemeTokens(): ThemeTokenContextValue {
     return {
       theme: lightTheme,
       isDark: false,
+      themeMode: 'light',
       toggleTheme: () => {},
       setTheme: () => {},
+      setThemeMode: () => {},
     };
   }
   return ctx;

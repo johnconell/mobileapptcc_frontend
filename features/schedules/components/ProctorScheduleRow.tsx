@@ -95,14 +95,14 @@ export function ProctorScheduleRow({
   const cardStyle = [
     styles.card,
     {
-      backgroundColor: isToday ? colors.card : isDark ? '#202124' : '#F0F1F2',
-      borderColor: isToday ? (isDark ? '#8B6A2B' : '#B28A3A') : colors.cardBorder,
+      backgroundColor: isToday ? colors.card : isDark ? colors.cardMuted : '#F0F1F2',
+      borderColor: isToday ? (isDark ? colors.accentGold : '#B28A3A') : colors.cardBorder,
     },
-    isToday ? styles.todayCard : styles.lockedCard,
+    isToday ? (isDark ? styles.todayCardDark : styles.todayCard) : styles.lockedCard,
   ];
   const cardContent = (
     <>
-      {isToday ? <View style={styles.goldStripe} /> : null}
+      {isToday ? <View style={[styles.goldStripe, { backgroundColor: colors.accentGold }]} /> : null}
       <View style={styles.content}>
         <View style={styles.topRow}>
           <View style={styles.titleGroup}>
@@ -114,19 +114,15 @@ export function ProctorScheduleRow({
                 styles.badge,
                 {
                   backgroundColor: isToday
-                    ? isDark
-                      ? '#51252B'
-                      : '#F4E6C4'
-                    : isDark
-                      ? '#30343A'
-                      : '#E1E4E8',
+                    ? (isDark ? colors.accentMuted : '#F4E6C4')
+                    : (isDark ? colors.cardMuted : '#E1E4E8'),
                 },
               ]}
             >
               <Text
                 style={[
                   styles.badgeText,
-                  { color: isToday ? (isDark ? '#F3D68A' : '#704A0B') : colors.textSecondary },
+                  { color: isToday ? (isDark ? colors.accentGold : '#704A0B') : colors.textSecondary },
                 ]}
               >
                 {badge || (isToday ? 'TODAY' : 'Not today')}
@@ -193,8 +189,8 @@ export function ProctorScheduleRow({
               title={actionLabel}
               disabled={actionDisabled}
               onPress={onOpen}
-              backgroundColor={actionDisabled ? colors.cardMuted : '#7A1F2B'}
-              textColor={actionDisabled ? colors.textSecondary : '#FFFFFF'}
+              backgroundColor={actionDisabled ? colors.cardMuted : colors.accent}
+              textColor={actionDisabled ? colors.textSecondary : isDark ? colors.background : '#FFFFFF'}
             />
           </View>
         )}
@@ -229,6 +225,10 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
     elevation: 2,
+  },
+  todayCardDark: {
+    elevation: 0,
+    shadowColor: 'transparent',
   },
   lockedCard: {
     borderStyle: 'solid',

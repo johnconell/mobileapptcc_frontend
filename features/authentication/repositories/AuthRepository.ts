@@ -2,6 +2,7 @@ import { STORAGE_KEYS } from '@/shared/constants';
 import { ApiError, apiRequest, getAuthApiBaseUrl } from '@/shared/services/api';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
+import { PeerExamServer } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
@@ -56,7 +57,6 @@ export const AuthRepository = {
         auth: false,
         baseUrl: getAuthApiBaseUrl(),
         body: {
-          email: username.trim(),
           username: username.trim(),
           password,
         },
@@ -78,7 +78,7 @@ export const AuthRepository = {
           message: unreachable
             ? 'Cannot connect to the sign-in server. Check your internet connection and try again.'
             : error.status === 401
-              ? 'Incorrect email or password. Please try again.'
+              ? 'Incorrect username or password. Please try again.'
             : error.message,
         };
       }
@@ -88,73 +88,6 @@ export const AuthRepository = {
         message: userFacingError(
           error,
           'Unable to reach the sign-in server. Check your internet connection and try again.',
-        ),
-      };
-    }
-  },
-
-  async loginWithGoogleIdToken(idToken: string): Promise<AuthResult> {
-    try {
-      const json = await apiRequest<LoginResponse>('/proctor/google-login', {
-        method: 'POST',
-        auth: false,
-        baseUrl: getAuthApiBaseUrl(),
-        body: { id_token: idToken },
-      });
-
-      const profile = json.data?.profile;
-      const token = json.data?.token;
-      if (!profile || !token) {
-        return { success: false, message: json.message || 'Google sign-in failed.' };
-      }
-
-      await OfflineStore.setOfflineMode(false);
-      return persistSession({ ...profile, offlineSession: false }, token);
-    } catch (error) {
-      if (error instanceof ApiError) {
-        return {
-          success: false,
-          message:
-            error.status === 0
-              ? 'Cannot connect to the sign-in server. Check your internet connection and try again.'
-              : error.status === 401
-                ? 'Google sign-in expired or could not be verified. Please try again.'
-                : error.status === 403
-                  ? 'This Google account is not an active registered proctor.'
-                  : error.status >= 500
-                    ? 'Google sign-in is temporarily unavailable. Please try again.'
-                    : error.message,
-        };
-      }
-
-      return {
-        success: false,
-        message: userFacingError(error, 'Google sign-in failed. Please try again.'),
-      };
-    }
-  },
-
-  async loginWithToken(token: string): Promise<AuthResult> {
-    const trimmed = token.trim();
-    if (!trimmed) {
-      return { success: false, message: 'Google sign-in did not return a session.' };
-    }
-    try {
-      const me = await apiRequest<{ success: boolean; data?: { profile: ProctorProfile } }>(
-        '/proctor/me',
-        { token: trimmed, baseUrl: getAuthApiBaseUrl() },
-      );
-      if (!me.data?.profile) {
-        return { success: false, message: 'Google sign-in could not load your proctor profile.' };
-      }
-      await OfflineStore.setOfflineMode(false);
-      return persistSession({ ...me.data.profile, offlineSession: false }, trimmed);
-    } catch (error) {
-      return {
-        success: false,
-        message: userFacingError(
-          error,
-          'Google sign-in failed. Connect to the internet and try again.',
         ),
       };
     }
@@ -239,7 +172,18 @@ export const AuthRepository = {
   },
 
   async logout(): Promise<void> {
+    const peerInfo = PeerExamServer.info();
+    const lobbyStatus = useLobbyStore.getState().snapshot?.status;
+    if (
+      (peerInfo.code && peerInfo.status !== 'ended') ||
+      (lobbyStatus && lobbyStatus !== 'ended')
+    ) {
+      throw new Error('Close or end the active examination room before logging out.');
+    }
     try {
+      // Stop only the native listener. Ended session snapshots and queued
+      // results remain in their protected offline stores for later recovery/sync.
+      await PeerExamServer.stop();
       const authKeys = authStorageKeys();
       const token = await appStorage.getItem(authKeys.token);
 

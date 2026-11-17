@@ -20,20 +20,21 @@ interface DialogProps {
 }
 
 export function Dialog({ visible, title, description, children, onClose }: DialogProps) {
-  const { colors: themeColors } = useAppTheme();
+  const { colors: themeColors, isDark } = useAppTheme();
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <View style={styles.overlay}>
+      <View style={[styles.overlay, { backgroundColor: themeColors.overlay }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <Animated.View
           entering={FadeInDown.springify()}
           style={[
             styles.sheet,
             {
-              backgroundColor: themeColors.card,
-              borderColor: themeColors.cardBorder,
+              backgroundColor: isDark ? '#222730' : themeColors.card,
+              borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : themeColors.cardBorder,
               borderWidth: 1,
             },
+            isDark && styles.sheetDark,
           ]}
         >
           <Text style={[styles.title, { color: themeColors.textPrimary }]}>{title}</Text>
@@ -75,16 +76,17 @@ export function ConfirmationModal({
   const { colors: themeColors, isDark } = useAppTheme();
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.overlay}>
+      <View style={[styles.overlay, { backgroundColor: themeColors.overlay }]}>
         <Animated.View
           entering={FadeIn.duration(180)}
           style={[
             styles.sheet,
             {
-              backgroundColor: themeColors.card,
-              borderColor: themeColors.cardBorder,
+              backgroundColor: isDark ? '#222730' : themeColors.card,
+              borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : themeColors.cardBorder,
               borderWidth: 1,
             },
+            isDark && styles.sheetDark,
           ]}
         >
           <Text style={[styles.title, { color: themeColors.textPrimary }]}>{title}</Text>
@@ -99,8 +101,8 @@ export function ConfirmationModal({
               style={[
                 styles.actionBtn,
                 {
-                  borderColor: isDark ? '#333333' : themeColors.cardBorder,
-                  backgroundColor: isDark ? '#1A1A1A' : themeColors.card,
+                  borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : themeColors.cardBorder,
+                  backgroundColor: isDark ? '#1A1E25' : themeColors.card,
                 },
               ]}
               disabled={loading}
@@ -110,10 +112,7 @@ export function ConfirmationModal({
               variant={danger ? 'danger' : 'primary'}
               onPress={onConfirm}
               loading={loading}
-              style={[
-                styles.actionBtn,
-                !danger && { backgroundColor: '#7A1F2B' },
-              ]}
+              style={styles.actionBtn}
             />
           </View>
         </Animated.View>
@@ -138,6 +137,11 @@ const styles = StyleSheet.create({
     padding: 22,
     gap: 12,
     ...shadows.card,
+  },
+  sheetDark: {
+    shadowColor: 'transparent',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   title: {
     fontSize: 20,

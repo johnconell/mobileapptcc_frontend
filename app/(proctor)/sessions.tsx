@@ -11,8 +11,10 @@ import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 import { Button } from '@/shared/components/ui/Button';
 import { useSkeletonLoadingTimeout } from '@/components/skeleton';
 import { safeBack } from '@/shared/utils';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 export default function SessionsScreen() {
+  const { colors: themeColors } = useAppTheme();
   const router = useRouter();
   const { scheduleId } = useLocalSearchParams<{ scheduleId: string }>();
   const setSelectedSession = useProctorStore((s) => s.setSelectedSession);
@@ -40,7 +42,7 @@ export default function SessionsScreen() {
 
   if (sessionsQuery.isLoading && !sessionsQuery.data && !loadingTimedOut) {
     return (
-      <View style={styles.screen}>
+      <View style={[styles.screen, { backgroundColor: themeColors.background }]}>
         <Header
           title="Examination Time"
           subtitle={schedule?.name ?? 'Loading…'}
@@ -56,7 +58,7 @@ export default function SessionsScreen() {
 
   if ((sessionsQuery.isError || loadingTimedOut) && !sessionsQuery.data) {
     return (
-      <View style={styles.screen}>
+      <View style={[styles.screen, { backgroundColor: themeColors.background }]}>
         <Header
           title="Examination Time"
           subtitle={schedule?.name ?? 'Select a session'}
@@ -64,7 +66,7 @@ export default function SessionsScreen() {
         />
         <Breadcrumbs segments={breadcrumbs} />
         <View style={styles.error}>
-          <Text style={styles.errorText}>
+          <Text style={[styles.errorText, { color: themeColors.textSecondary }]}>
             {loadingTimedOut
               ? 'Loading examination times took too long.'
               : 'Unable to load examination times.'}
@@ -82,7 +84,7 @@ export default function SessionsScreen() {
   }
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { backgroundColor: themeColors.background }]}>
       <Header
         title="Examination Time"
         subtitle={schedule?.name ?? 'Select a session'}
@@ -97,7 +99,7 @@ export default function SessionsScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
-          <Text style={styles.intro}>
+          <Text style={[styles.intro, { color: themeColors.textMuted }]}>
             {schedule
               ? `${schedule.examinationDate} · ${schedule.batchCount} sessions available`
               : 'Available sessions'}
@@ -123,11 +125,11 @@ export default function SessionsScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#0D0D0D' },
+  screen: { flex: 1 },
   list: { padding: 16, gap: 12, paddingBottom: 40 },
-  intro: { fontSize: 13, lineHeight: 20, color: '#A1A1AA', fontWeight: '500', marginBottom: 4 },
+  intro: { fontSize: 13, lineHeight: 20, fontWeight: '500', marginBottom: 4 },
   error: { padding: 20, gap: 12, alignItems: 'flex-start' },
-  errorText: { fontSize: 14, color: '#A1A1AA' },
+  errorText: { fontSize: 14 },
 });
 
 

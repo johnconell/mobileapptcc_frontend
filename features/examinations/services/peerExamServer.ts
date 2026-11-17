@@ -19,9 +19,11 @@ import {
   type PeerCiphertext,
 } from '@/features/examinations/services/peerTransportCrypto';
 import { resolveWifiLanIp } from '@/features/monitoring/services/wifiLanIp';
+import { peerListenerRecoveryAction } from '@/features/examinations/services/peerListenerRecovery';
 import { clampViolationLimit } from '@/shared/utils/violationLimit';
 import { ExamSecurityService } from '@/features/examinations/services/ExamSecurityService';
 import { normalizePasskey } from '@/features/examinations/services/passkeyFormat';
+import { attendanceAtSnapshot, closeAttendanceAtStart, recordAdmissionAttendance } from '@/features/examinations/services/attendance';
 import {
   normalizeAnswerCheckpoint,
   shouldApplyAnswerCheckpoint,
@@ -31,6 +33,7 @@ import {
   getProctorScheduleAvailability,
 } from '@/features/schedules/utils/proctorScheduleWindow';
 import {
+  countOfflineAssignedStudents,
   validateOfflineHostRoom,
   validateOfflineProctorRoom,
 } from '@/features/examinations/services/offlineRoomAssignment';
@@ -135,6 +138,7 @@ type PeerStudentState = {
   approvalRequestedAt?: string | null;
   approvedAt?: string | null;
   declinedAt?: string | null;
+  attendanceStatus?: 'not_arrived' | 'present' | 'absent';
 };
 
 type PeerViolation = {
@@ -173,6 +177,8 @@ type PeerSessionState = {
   peerIdentityPrivateKey?: string;
   peerIdentityPublicKey?: string;
   wifiSsid?: string | null;
+  /** Optional BSSID/interface hint; never used as an admission credential. */
+  wifiBssid?: string | null;
   startSeq: number;
 };
 
@@ -190,9 +196,14 @@ let running = false;
 export type PeerListenerState = 'live' | 'reconnecting' | 'unavailable' | 'stopped';
 let listenerState: PeerListenerState = 'stopped';
 let hostIp: string | null = null;
+/** Identifies the active LAN interface so same-IP Wi-Fi swaps still rebind. */
+let hostNetworkKey: string | null = null;
 let listeners: Array<() => void> = [];
 let examWatchdog: ReturnType<typeof setInterval> | null = null;
 let endingExam = false;
+let hostIpRefresh: Promise<string | null> | null = null;
+let peerRestoreInFlight: Promise<boolean> | null = null;
+let persistQueue: Promise<void> = Promise.resolve();
 const activePeerSessions = new Map<string, { key: Uint8Array; sequence: number }>();
 
 // Performance optimizations & Bulletproof Caching
@@ -408,8 +419,19 @@ function waitForPeerListenerLive(timeoutMs = 1500): Promise<boolean> {
   });
 }
 
-async function persist() {
-  if (session) await OfflineStore.savePeerSession(session);
+function persist(): Promise<void> {
+  // Network rebinding, heartbeats, and answer checkpoints can arrive at the
+  // same time. Serialize encrypted writes so a network metadata write cannot
+  // finish after a newer checkpoint and overwrite it with an older snapshot.
+  const capturedSession = session;
+  const save = async () => {
+    if (capturedSession && session === capturedSession) {
+      await OfflineStore.savePeerSession(capturedSession);
+    }
+  };
+  const next = persistQueue.then(save, save);
+  persistQueue = next;
+  return next;
 }
 
 function makeToken(registrationId: number): string {
@@ -472,7 +494,7 @@ function toLobbyStudent(state: PeerStudentState): LobbyStudent {
     approvalRequestedAt: state.approvalRequestedAt ?? state.joinedAt,
     approvedAt: state.approvedAt ?? null,
     declinedAt: state.declinedAt ?? null,
-    attendanceStatus: approvalStatus === 'approved' ? 'present' : approvalStatus === 'declined' ? 'blocked' : 'pending',
+    attendanceStatus: state.attendanceStatus ?? (approvalStatus === 'approved' ? 'present' : 'not_arrived'),
     isAssigned: true,
     isConnected: status !== 'disconnected',
   };
@@ -524,7 +546,7 @@ async function assignedRosterForSession(state: PeerSessionState): Promise<Assign
         programName: String(applicant?.course_applied || ''),
         avatarInitials: parts.slice(0, 2).map((part) => part[0] || '').join('').toUpperCase() || 'ST',
         examSet: String(registration.exam_set || 'Set 1'),
-        attendanceStatus: registration.attendance_status,
+        attendanceStatus: attendanceAtSnapshot(registration.attendance_status, state.status !== 'lobby_open'),
       };
     });
 }
@@ -533,9 +555,7 @@ function toNotArrivedRosterStudent(
   entry: AssignedRosterEntry,
   sessionStatus: PeerSessionState['status'],
 ): LobbyStudent {
-  const attendanceStatus = sessionStatus === 'in_progress' || sessionStatus === 'ended'
-    ? 'absent'
-    : 'not_arrived';
+  const attendanceStatus = attendanceAtSnapshot(entry.attendanceStatus, sessionStatus !== 'lobby_open');
   return {
     id: String(entry.registrationId),
     studentId: entry.applicantCode,
@@ -1374,6 +1394,7 @@ function registerRoutes(mod: HttpServerModule) {
       packageVersion: pack.pack_version || 1,
       examinationSettings: {
         ...(pack.examination_settings ?? {}),
+        shuffle_answers: pack.examination_settings?.shuffle_answers ?? false,
       },
     });
   });
@@ -1514,6 +1535,11 @@ function registerRoutes(mod: HttpServerModule) {
       if (student) {
         // Rejoin: refresh activity, readiness, and return the existing token
         student.lastActivityAt = now;
+        if (student.status === 'disconnected' && session.status === 'lobby_open') {
+          // An explicit same-device rejoin restores the waiting-room presence;
+          // the timeout-based disconnect behavior remains unchanged.
+          student.status = 'waiting';
+        }
         student.isReady = isReady;
         student.deviceId = providedDeviceId || student.deviceId;
         student.packageHash = studentPackHash || student.packageHash;
@@ -1524,7 +1550,12 @@ function registerRoutes(mod: HttpServerModule) {
       } else {
         const reg = pack.registrations.find((r) => Number(r.id) === registrationId);
         const assignedExamSet = reg?.exam_set?.trim() || validated.student?.examSet?.trim() || undefined;
-        const paper = buildStudentExamPaper(pack, assignedExamSet);
+        const studentIdentifier = (validated.student?.studentId || String(registrationId)).trim();
+        const paper = buildStudentExamPaper(pack, {
+          studentIdentifier,
+          examSet: assignedExamSet,
+          settings: pack.examination_settings,
+        });
         student = {
           token: makeToken(registrationId),
           deviceId: providedDeviceId || undefined,
@@ -1570,6 +1601,7 @@ function registerRoutes(mod: HttpServerModule) {
           approvalRequestedAt: now,
           approvedAt: null,
           declinedAt: null,
+          attendanceStatus: 'not_arrived',
         };
         session.students[registrationId] = student;
         if (!session.tokenMap) session.tokenMap = {};
@@ -1608,6 +1640,15 @@ function registerRoutes(mod: HttpServerModule) {
     }
     const roomFailure = await enforceStudentRoom(session, student);
     if (roomFailure) return roomFailure;
+
+    // A successful authenticated lobby fetch after approval acknowledges
+    // admission. Persist once; later disconnects and reconnects cannot undo it.
+    if (student.approvalStatus === 'approved' && student.attendanceStatus !== 'present') {
+      student.attendanceStatus = recordAdmissionAttendance(student.attendanceStatus);
+      await persist();
+      invalidateSnapshot();
+      notify();
+    }
 
     student.lastActivityAt = new Date().toISOString();
 
@@ -1693,6 +1734,7 @@ function registerRoutes(mod: HttpServerModule) {
       checkpoint_version: Number(student.answerRevision ?? 0),
       checkpoint_saved_at: student.answersUpdatedAt ?? null,
       examSet: student.examSet || 'Set 1',
+      choiceMaps: student.choiceMaps ?? {},
     });
   });
 
@@ -1735,6 +1777,7 @@ function registerRoutes(mod: HttpServerModule) {
       checkpoint_version: Number(student.answerRevision ?? 0),
       checkpoint_saved_at: student.answersUpdatedAt ?? null,
       examSet: student.examSet || 'Set 1',
+      choiceMaps: student.choiceMaps ?? {},
     });
   });
 
@@ -1747,6 +1790,10 @@ function registerRoutes(mod: HttpServerModule) {
     if (roomFailure) return roomFailure;
     if (student.submittedAt || student.status === 'finished') {
       return fail(403, 'Examination Already Completed: Cannot modify answers for a submitted examination.');
+    }
+
+    if (body.choice_maps && typeof body.choice_maps === 'object' && (!student.choiceMaps || Object.keys(student.choiceMaps).length === 0)) {
+      student.choiceMaps = body.choice_maps as Record<string, ChoiceDisplayMap>;
     }
 
     const answers = body.answers;
@@ -1804,6 +1851,11 @@ function registerRoutes(mod: HttpServerModule) {
     const body = parseBody(request.body);
     const student = studentByToken(String(body.participation_token ?? ''));
     if (!student) return fail(404, 'You are no longer joined to this examination.');
+
+    if (body.choice_maps && typeof body.choice_maps === 'object' && (!student.choiceMaps || Object.keys(student.choiceMaps).length === 0)) {
+      student.choiceMaps = body.choice_maps as Record<string, ChoiceDisplayMap>;
+    }
+
     const answers = body.answers;
     const submittedAnswers: Record<string, string | null> = {};
     if (answers && typeof answers === 'object') {
@@ -2240,9 +2292,133 @@ function registerRoutes(mod: HttpServerModule) {
   });
 }
 
-async function resolveHostIp(): Promise<string | null> {
+type HostNetworkIdentity = {
+  ip: string | null;
+  /** SSID/BSSID/type/IP signature used only to decide whether to rebind. */
+  key: string | null;
+  wifiSsid: string | null;
+  wifiBssid: string | null;
+};
+
+function cleanNetworkLabel(value: unknown): string | null {
+  const cleaned = String(value ?? '').replace(/^"|"$/g, '').trim();
+  if (!cleaned || /^<?unknown\s*ssid>?$/i.test(cleaned) || cleaned === '02:00:00:00:00:00') {
+    return null;
+  }
+  return cleaned;
+}
+
+/**
+ * Read the current host interface as one transaction.  expo-network exposes
+ * the address through `resolveWifiLanIp`; SSID/BSSID are optional native
+ * fields, so their absence must never prevent offline hosting.
+ */
+async function resolveHostNetwork(): Promise<HostNetworkIdentity> {
   const lan = await resolveWifiLanIp();
-  return lan.ip;
+  let type = lan.type ? String(lan.type) : '';
+  let wifiSsid: string | null = null;
+  let wifiBssid: string | null = null;
+  try {
+    const net = await Network.getNetworkStateAsync();
+    type = net.type ? String(net.type) : type;
+    const details = (net as { details?: { ssid?: string | null; bssid?: string | null } }).details;
+    wifiSsid = cleanNetworkLabel((net as { ssid?: string | null }).ssid ?? details?.ssid);
+    wifiBssid = cleanNetworkLabel((net as { bssid?: string | null }).bssid ?? details?.bssid);
+  } catch {
+    // Keep the IP-only identity.  The listener can still follow DHCP changes.
+  }
+
+  const ip = lan.ip;
+  const keyParts = [type, wifiSsid ?? '', wifiBssid ?? '', ip ?? ''];
+  const key = keyParts.some(Boolean) ? keyParts.join('|') : null;
+  return { ip, key, wifiSsid, wifiBssid };
+}
+
+async function refreshPeerHostIp(): Promise<string | null> {
+  const network = await resolveHostNetwork();
+  const ip = network.ip;
+  const previousHost = hostIp;
+  const previousNetworkKey = hostNetworkKey;
+  const networkIdentityChanged = previousNetworkKey !== network.key;
+  const action = peerListenerRecoveryAction({
+    hasActiveSession: Boolean(session && session.status !== 'ended'),
+    previousHost,
+    nextHost: ip,
+    listenerState,
+    previousNetworkKey,
+    nextNetworkKey: network.key,
+  });
+
+  hostIp = ip;
+  hostNetworkKey = network.key;
+
+  if (action === 'mark_unavailable') {
+    const mod = loadHttpServer();
+    try {
+      mod?.stop();
+    } catch {
+      // The old interface may already have removed the native socket.
+    }
+    listenerState = 'unavailable';
+    running = false;
+    routesRegistered = false;
+    invalidateSnapshot();
+    notify();
+  } else if (action === 'rebind') {
+    const mod = loadHttpServer();
+    if (!mod) throw new Error('The local examination server is unavailable.');
+
+    listenerState = 'reconnecting';
+    running = false;
+    notify();
+    try {
+      mod.stop();
+    } catch {
+      // A listener lost with the old interface can already be closed.
+    }
+    try {
+      bindPeerListener(mod);
+      const listenerLive = await waitForPeerListenerLive(2_000);
+      if (!listenerLive) {
+        throw new Error('The local examination server did not become available after rebinding.');
+      }
+    } catch (error) {
+      // Preserve the session and let the active monitor retry the rebind.
+      listenerState = 'unavailable';
+      running = false;
+      routesRegistered = false;
+      notify();
+      console.warn('[PEER SERVER] LAN listener rebind will be retried:', error);
+    }
+  }
+
+  if (session && (ip !== previousHost || networkIdentityChanged)) {
+    // Replace stale labels, including with null when the OS hides SSID/BSSID
+    // on the new interface. The student gate then falls back to LAN reachability
+    // instead of incorrectly treating Wi-Fi B as Wi-Fi A.
+    session.wifiSsid = network.wifiSsid;
+    session.wifiBssid = network.wifiBssid;
+    await persist();
+  }
+
+  if (ip !== previousHost || action !== 'none') {
+    invalidateSnapshot();
+    notify();
+    if (__DEV__) {
+      console.log('[PROCTOR NETWORK] host address refreshed', {
+        previousIp: previousHost,
+        currentIp: ip,
+        previousNetworkKey,
+        currentNetworkKey: network.key,
+        qrIp: ip,
+        listenerAction: action,
+        listenerState,
+        serverRunning: running,
+        port: PEER_PORT,
+      });
+    }
+  }
+  return ip;
 }
 
 /**
@@ -2342,6 +2518,7 @@ export const PeerExamServer = {
     host: string | null;
     port: number;
     code: string | null;
+    status: PeerSessionState['status'] | null;
   } {
     return {
       running,
@@ -2349,11 +2526,12 @@ export const PeerExamServer = {
       host: hostIp,
       port: PEER_PORT,
       code: session?.examCode ?? null,
+      status: session?.status ?? null,
     };
   },
 
   /** Restore a session after the proctor app was killed mid-examination. */
-  async restore(): Promise<boolean> {
+  async restoreNow(): Promise<boolean> {
     if (!session) {
       const saved = await OfflineStore.getPeerSession<PeerSessionState>();
       if (!saved) return false;
@@ -2397,7 +2575,11 @@ export const PeerExamServer = {
     const mod = loadHttpServer();
     if (!mod) return Boolean(session);
 
-    hostIp = await resolveHostIp();
+    const restoredNetwork = await resolveHostNetwork();
+    hostIp = restoredNetwork.ip;
+    hostNetworkKey = restoredNetwork.key;
+    session.wifiSsid = restoredNetwork.wifiSsid;
+    session.wifiBssid = restoredNetwork.wifiBssid;
     if (listenerState === 'stopped') {
       try {
         bindPeerListener(mod);
@@ -2414,7 +2596,13 @@ export const PeerExamServer = {
     // expo-http-server reports STARTED asynchronously. Wait briefly so the
     // restored lobby can offer a truthful LAN status and students do not race
     // the listener during the first cold-start render.
-    await waitForPeerListenerLive();
+    const listenerLive = await waitForPeerListenerLive();
+    if (!listenerLive) {
+      listenerState = 'unavailable';
+      running = false;
+      routesRegistered = false;
+      notify();
+    }
 
     // Pre-warm questions cache into memory
     if (!_packCache) {
@@ -2451,6 +2639,14 @@ export const PeerExamServer = {
       });
     }
     return true;
+  },
+
+  async restore(): Promise<boolean> {
+    if (peerRestoreInFlight) return peerRestoreInFlight;
+    peerRestoreInFlight = this.restoreNow().finally(() => {
+      peerRestoreInFlight = null;
+    });
+    return peerRestoreInFlight;
   },
 
   async start(input: {
@@ -2490,16 +2686,29 @@ export const PeerExamServer = {
     }
 
     const schedule = pack.schedules.find((candidate) => Number(candidate.id) === scheduleId);
+    const openedRooms = await OfflineStore.getOpenedRooms();
+    const roomKey = OfflineStore.roomKey(scheduleId, roomId ?? 0);
+    const locallyClaimed = ['lobby_open', 'in_progress'].includes(openedRooms[roomKey]?.status);
+    const existingInMemorySession = Boolean(
+      session &&
+      session.scheduleId === scheduleId &&
+      session.roomId === roomId &&
+      session.status !== 'ended',
+    );
+    const assignedStudentCount = countOfflineAssignedStudents(
+      pack.registrations,
+      scheduleId,
+      roomId,
+    );
     const hostRoomDecision = validateOfflineHostRoom({
       schedule,
       authority: { scheduleId, roomId },
+      assignedStudentCount,
+      hasExistingActiveSession: locallyClaimed || existingInMemorySession,
     });
     if (!hostRoomDecision.ok) {
       throw new Error(hostRoomDecision.message);
     }
-    const openedRooms = await OfflineStore.getOpenedRooms();
-    const roomKey = OfflineStore.roomKey(scheduleId, roomId ?? 0);
-    const locallyClaimed = ['lobby_open', 'in_progress'].includes(openedRooms[roomKey]?.status);
     const hasOtherActiveRoom = Object.entries(openedRooms).some(
       ([key, value]) =>
         key !== roomKey && (value.status === 'lobby_open' || value.status === 'in_progress'),
@@ -2510,6 +2719,8 @@ export const PeerExamServer = {
       authority: { scheduleId, roomId },
       locallyClaimed,
       hasOtherActiveRoom,
+      assignedStudentCount,
+      hasExistingActiveSession: locallyClaimed || existingInMemorySession,
     });
     if (!proctorRoomDecision.ok) {
       throw new Error(proctorRoomDecision.message);
@@ -2549,28 +2760,44 @@ export const PeerExamServer = {
       );
     }
 
-    const lan = await resolveWifiLanIp();
-    hostIp = lan.ip;
+    const previousHost = hostIp;
+    const previousNetworkKey = hostNetworkKey;
+    const lan = await resolveHostNetwork();
+    let refreshedForReopen = false;
+    // A route/open-lobby call can race the global network monitor. If this is
+    // the same active room but the interface changed first, run the normal
+    // serialized recovery before returning a QR for the new address.
+    if (
+      reopening &&
+      (lan.ip !== previousHost || lan.key !== previousNetworkKey)
+    ) {
+      await this.refreshHostIp();
+      refreshedForReopen = true;
+    }
+    if (!refreshedForReopen) {
+      hostIp = lan.ip;
+      hostNetworkKey = lan.key;
+    }
     if (__DEV__) {
       console.log('[PROCTOR NETWORK] server opened', {
         currentIp: hostIp,
         qrIp: hostIp,
         port: PEER_PORT,
-        wifi: lan.isWifi,
-        cellularLikely: lan.cellularLikely,
+        wifi: Boolean(lan.wifiSsid || hostIp),
       });
     }
-    const netState = await Network.getNetworkStateAsync();
-    const wifiSsid = netState.type === Network.NetworkStateType.WIFI ? (netState as any).ssid : null;
+    const wifiSsid = lan.wifiSsid;
+    const wifiBssid = lan.wifiBssid;
+    const currentLan = await resolveWifiLanIp();
 
-    if (!hostIp && (lan.type === Network.NetworkStateType.CELLULAR || (!lan.isWifi && lan.cellularLikely))) {
+    if (!hostIp && (currentLan.type === Network.NetworkStateType.CELLULAR || (!currentLan.isWifi && currentLan.cellularLikely))) {
       throw new Error(
         'Turn off mobile data and stay on examination Wi‑Fi only. Dual Wi‑Fi + mobile data can bind the room to an unreachable address.',
       );
     }
     if (!hostIp) {
       throw new Error(
-        lan.cellularLikely
+        currentLan.cellularLikely
           ? 'Could not read a Wi‑Fi LAN address (mobile data may be active). Turn off mobile data, connect to the exam Wi‑Fi, then try again.'
           : 'This phone has no Wi‑Fi address. Connect to the exam Wi‑Fi (or turn on a hotspot) and try again.',
       );
@@ -2580,6 +2807,10 @@ export const PeerExamServer = {
     if (session && !reopening) {
       console.log('[SERVER] Switching schedules/rooms or minting new code. Resetting old server session state.');
       await this.reset();
+      // reset() clears the old host address; retain the address resolved for
+      // this new room so its first QR is not emitted with a null host.
+      hostIp = lan.ip;
+      hostNetworkKey = lan.key;
     }
 
     if (reopening && session) {
@@ -2609,6 +2840,7 @@ export const PeerExamServer = {
         peerIdentityPrivateKey: undefined,
         peerIdentityPublicKey: undefined,
         wifiSsid,
+        wifiBssid,
         startSeq: 0,
       };
       activePeerSessions.clear();
@@ -2678,6 +2910,7 @@ export const PeerExamServer = {
         student.approvalStatus = 'declined';
         student.declinedAt = nowIso;
       }
+      student.attendanceStatus = closeAttendanceAtStart(student.attendanceStatus);
     }
     session.status = 'in_progress';
     session.startedAt = session.startedAt ?? nowIso;
@@ -2927,6 +3160,13 @@ export const PeerExamServer = {
   },
 
   async stop(): Promise<void> {
+    // If a network event is already rebinding, let it settle before the room
+    // shutdown closes the listener. This prevents a late start from reviving a
+    // room the proctor has intentionally closed.
+    if (hostIpRefresh) await hostIpRefresh.catch(() => undefined);
+    // Do not let an in-flight checkpoint finish after an intentional reset
+    // and recreate the protected session that was just closed.
+    await persistQueue.catch(() => undefined);
     const mod = loadHttpServer();
     try {
       mod?.stop();
@@ -2946,68 +3186,19 @@ export const PeerExamServer = {
     session = null;
     activePeerSessions.clear();
     hostIp = null;
+    hostNetworkKey = null;
     invalidateSnapshot();
     await OfflineStore.clearPeerSession();
   },
 
   async refreshHostIp(): Promise<string | null> {
-    const ip = await resolveHostIp();
-    const previousHost = hostIp;
-    if (ip !== previousHost) {
-      const shouldRecoverListener = listenerState !== 'stopped';
-      hostIp = ip;
-
-      if (!ip && shouldRecoverListener) {
-        listenerState = 'unavailable';
-        running = false;
-        invalidateSnapshot();
-        notify();
-      } else if (ip && shouldRecoverListener) {
-        const mod = loadHttpServer();
-        if (!mod) {
-          throw new Error('The local examination server is unavailable.');
-        }
-        listenerState = 'reconnecting';
-        running = false;
-        notify();
-        mod.stop();
-        try {
-          bindPeerListener(mod);
-        } catch (error) {
-          listenerState = 'stopped';
-          running = false;
-          routesRegistered = false;
-          notify();
-          throw error;
-        }
-      }
-
-      if (session) {
-        try {
-          const netState = await Network.getNetworkStateAsync();
-          session.wifiSsid =
-            netState.type === Network.NetworkStateType.WIFI
-              ? ((netState as { ssid?: string | null }).ssid ?? session.wifiSsid)
-              : session.wifiSsid;
-        } catch {
-          // Keep the last known SSID; the host address is always read fresh.
-        }
-        await persist();
-      }
-
-      invalidateSnapshot();
-      notify();
-      if (__DEV__) {
-        console.log('[PROCTOR NETWORK] host address refreshed', {
-          previousIp: previousHost,
-          currentIp: ip,
-          qrIp: ip,
-          serverRunning: running,
-          port: PEER_PORT,
-        });
-      }
-    }
-    return ip;
+    // Network events and fallback polling can fire together. Serialize native
+    // stop/setup/start so two refreshes cannot race the same listener.
+    if (hostIpRefresh) return hostIpRefresh;
+    hostIpRefresh = refreshPeerHostIp().finally(() => {
+      hostIpRefresh = null;
+    });
+    return hostIpRefresh;
   },
 
   /**

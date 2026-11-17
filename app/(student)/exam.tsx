@@ -49,6 +49,7 @@ import { useExamLock } from '@/features/examinations/hooks/useExamLock';
 import { useGuidedAccessStatus } from '@/features/examinations/hooks/useGuidedAccessStatus';
 import { SecurityRepository } from '@/features/examinations/repositories/SecurityRepository';
 import { useWifiExamGate } from '@/features/monitoring/hooks/useWifiExamGate';
+import { usePeerAutoReconnect } from '@/features/monitoring/hooks/usePeerAutoReconnect';
 import { resolveDisconnectGraceSeconds } from '@/shared/utils/gracePeriod';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { QuestionRepository } from '@/features/examinations/repositories/QuestionRepository';
@@ -142,6 +143,7 @@ function ExamScreenInner() {
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string | null | undefined>(undefined);
   const openSubmitConfirmation = useCallback(() => {
+    setNavigatorOpen(false);
     setSubmitConfirmOpen(true);
   }, []);
   const closeSubmitConfirmation = useCallback(() => {
@@ -184,6 +186,7 @@ function ExamScreenInner() {
   const answeredCount = useExamStore((s) => s.answeredCount);
   const setPaused = useExamStore((s) => s.setPaused);
   const markSubmitting = useExamStore((s) => s.markSubmitting);
+  const isSubmitting = useExamStore((s) => s.isSubmitting);
   const markSubmitted = useExamStore((s) => s.markSubmitted);
   const restoreProgress = useExamStore((s) => s.restoreProgress);
   const timerStatus = useExamStore((s) => s.timerStatus);
@@ -225,6 +228,8 @@ function ExamScreenInner() {
         scheduleClosingTime: state.scheduleClosingTime,
         timeSync: state.timeSync ?? undefined,
         revision: state.checkpointRevision,
+        questionOrder: state.questions.map((q) => q.id),
+        choiceMaps: state.choiceMaps,
       });
       markAutoSaved();
       setCheckpointSaved(true);
@@ -395,6 +400,18 @@ function ExamScreenInner() {
     gracePeriodSeconds,
   });
 
+  const { networkBanner } = usePeerAutoReconnect({
+    enabled: securityEnabled && !isLeavingExam,
+    onReconnected: async () => {
+      if (exitStartedRef.current) return;
+      const unlocked = await unlockAfterReconnect();
+      if (unlocked) {
+        setReconnectError(null);
+        setManualReconnectFailed(false);
+      }
+    },
+  });
+
   const exitToLanding = useCallback(
     async (reason: StudentDisconnectReason, message: string) => {
       if (exitStartedRef.current) return;
@@ -460,6 +477,7 @@ function ExamScreenInner() {
         deadline: state.deadline,
         scheduleClosingTime: state.scheduleClosingTime,
         timeSync: state.timeSync ?? undefined,
+        choiceMaps: state.choiceMaps,
       }).catch((error) => {
         console.warn('[EXAM CHECKPOINT] Server autosave unavailable:', {
           errorName: error instanceof Error ? error.name : 'UnknownError',
@@ -701,6 +719,7 @@ function ExamScreenInner() {
           applicantCode: appCode,
           studentName: verifiedStudent?.fullName,
           answers: payload,
+          choiceMaps: state.choiceMaps,
           finalReason,
           status: 'pending',
           destination,
@@ -729,14 +748,10 @@ function ExamScreenInner() {
         );
       }
 
-      try {
-        await releaseExamSessionRestrictions('submission_confirmed');
-      } catch (error) {
-        console.error('[EXAM SECURITY] Could not release restrictions after saving submission:', {
-          errorName: error instanceof Error ? error.name : 'SecurityError',
-        });
-      }
-
+      // Do NOT unpin or release kiosk mode here.
+      // Calling stopLockTask on personal Android devices triggers OS-level Keyguard (device lock),
+      // interrupting navigation to /submitting and aborting automatic LAN transmission.
+      // Restrictions are cleanly released only when the student explicitly exits from the completed screen.
       router.replace('/(student)/submitting');
     },
     [answers, sessionId, verifiedStudent, markSubmitting, router, persistLocalCheckpoint],
@@ -803,11 +818,17 @@ function ExamScreenInner() {
 
   // Android Kiosk Pinning
   const { isKioskActive, requestLock } = useExamLock({
-    enabled: securityEnabled && !wifiLocked && !roomEnded && !isLeavingExam && remainingSeconds > 0,
+    enabled:
+      securityEnabled &&
+      !wifiLocked &&
+      !roomEnded &&
+      !isLeavingExam &&
+      !isSubmitting &&
+      remainingSeconds > 0,
   });
 
-  const isAndroidUnpinned = Platform.OS === 'android' && !isKioskActive;
-  const isIosUnguided = Platform.OS === 'ios' && guidedAccess !== 'enabled';
+  const isAndroidUnpinned = Platform.OS === 'android' && !isKioskActive && !isSubmitting;
+  const isIosUnguided = Platform.OS === 'ios' && guidedAccess !== 'enabled' && !isSubmitting;
   const paused =
     wifiLocked ||
     emergencySuspended ||
@@ -823,7 +844,13 @@ function ExamScreenInner() {
   }, [paused, setPaused]);
 
   useExamSecurity({
-    enabled: securityEnabled && !wifiLocked && !roomEnded && !isLeavingExam && remainingSeconds > 0,
+    enabled:
+      securityEnabled &&
+      !wifiLocked &&
+      !roomEnded &&
+      !isLeavingExam &&
+      !isSubmitting &&
+      remainingSeconds > 0,
     sessionId,
     studentId: verifiedStudent?.id ?? null,
     studentName: verifiedStudent?.fullName ?? null,
@@ -1091,6 +1118,7 @@ function ExamScreenInner() {
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 20 }).current;
 
   const openNavigator = useCallback(() => {
+    setSubmitConfirmOpen(false);
     setNavigatorOpen(true);
   }, []);
 
@@ -1205,6 +1233,26 @@ function ExamScreenInner() {
           </Text>
           <Text style={{ color: theme.textSecondary, fontSize: 12, lineHeight: 16 }}>
             A system clock change was detected. Your examination answers are safely preserved. Please stay connected to the exam Wi‑Fi to synchronize time with the proctor.
+          </Text>
+        </View>
+      ) : null}
+
+      {networkBanner ? (
+        <View
+          accessibilityRole="alert"
+          style={{
+            marginHorizontal: 16,
+            marginTop: 8,
+            marginBottom: 4,
+            padding: 12,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: theme.accent,
+            backgroundColor: theme.accentSoft,
+          }}
+        >
+          <Text style={{ color: theme.accent, fontWeight: '700', fontSize: 13 }}>
+            {networkBanner}
           </Text>
         </View>
       ) : null}
@@ -1469,7 +1517,7 @@ function ExamScreenInner() {
 
       {/* Submit Confirmation Dialog */}
       <SubmitConfirmDialog
-        visible={submitConfirmOpen}
+        visible={submitConfirmOpen && !wifiLocked && !roomEnded}
         answeredCount={answered}
         unansweredCount={unanswered}
         flaggedCount={flaggedCount}

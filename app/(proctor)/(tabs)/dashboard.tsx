@@ -27,7 +27,6 @@ import {
   LogOut,
   Search,
   Bell,
-  AlertTriangle,
   Sun,
   Moon,
 } from 'lucide-react-native';
@@ -58,7 +57,6 @@ export default function ProctorDashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [rulesModalOpen, setRulesModalOpen] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [roomWarnings, setRoomWarnings] = useState<string[]>([]);
 
   const [stats, setStats] = useState({
     totalApplicants: 0,
@@ -92,7 +90,6 @@ export default function ProctorDashboardScreen() {
     try {
       setRefreshing(true);
       setLoadError(null);
-      setRoomWarnings([]);
       const [packSummary, queued] = await Promise.all([
         OfflineStore.getPackDashboardSnapshot(),
         OfflineStore.getResults(),
@@ -100,16 +97,6 @@ export default function ProctorDashboardScreen() {
 
       const primarySchedule = packSummary?.schedules?.[0];
       const examTitle = primarySchedule?.title || 'Entrance Examination';
-      const schedules = packSummary?.schedules ?? [];
-      const integrityWarnings = schedules.flatMap((schedule) =>
-        (schedule.integrity_warnings ?? []).map((warning) =>
-          schedules.length > 1
-            ? `${schedule.title || `Schedule ${schedule.id}`}: ${warning}`
-            : warning,
-        ),
-      );
-      setRoomWarnings([...new Set(integrityWarnings)]);
-
       // Registered applicants for today's examination
       const todayRegistered =
         (primarySchedule &&
@@ -216,9 +203,9 @@ export default function ProctorDashboardScreen() {
             hitSlop={8}
           >
             {themeMode === 'dark' ? (
-              <Moon size={17} color="#C4A35A" />
+              <Moon size={17} color={colors.warning} />
             ) : (
-              <Sun size={17} color="#B45309" />
+              <Sun size={17} color={colors.warning} />
             )}
           </Pressable>
 
@@ -239,7 +226,7 @@ export default function ProctorDashboardScreen() {
             accessibilityLabel="Logout"
             hitSlop={8}
           >
-            <LogOut size={17} color="#7A1F2B" />
+            <LogOut size={17} color={colors.danger} />
           </Pressable>
         </View>
       </View>
@@ -251,7 +238,7 @@ export default function ProctorDashboardScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={loadData}
-            tintColor="#7A1F2B"
+            tintColor={colors.accent}
           />
         }
       >
@@ -264,51 +251,6 @@ export default function ProctorDashboardScreen() {
           <Text accessibilityRole="alert" style={{ color: colors.danger, fontSize: 13 }}>
             {loadError}
           </Text>
-        ) : null}
-        {roomWarnings.length > 0 ? (
-          <View
-            accessibilityRole="alert"
-            style={[
-              styles.assignmentWarning,
-              { backgroundColor: colors.warningMuted, borderColor: colors.warning },
-            ]}
-          >
-            <View style={styles.assignmentWarningHeader}>
-              <AlertTriangle size={20} color={colors.warning} />
-              <Text
-                style={[styles.assignmentWarningTitle, { color: colors.textPrimary }]}
-                maxFontSizeMultiplier={fontMultiplier}
-              >
-                Room assignment warning
-              </Text>
-            </View>
-            {roomWarnings.map((warning, index) => (
-              <Text
-                key={`${warning}-${index}`}
-                style={[styles.assignmentWarningText, { color: colors.textPrimary }]}
-                maxFontSizeMultiplier={fontMultiplier}
-              >
-                {warning}
-              </Text>
-            ))}
-            <Text
-              style={[styles.assignmentWarningAction, { color: colors.textSecondary }]}
-              maxFontSizeMultiplier={fontMultiplier}
-            >
-              Action: ask an administrator to review the live roster and use the explicit alphabetical reassignment action. Download the updated examination pack after the correction.
-            </Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open examination pack update"
-              style={[styles.assignmentWarningButton, { borderColor: colors.warning }]}
-              onPress={() => router.push('/offline-prepare')}
-            >
-              <RefreshCw size={14} color={colors.warning} />
-              <Text style={[styles.assignmentWarningButtonText, { color: colors.warning }]}>
-                Update examination pack
-              </Text>
-            </Pressable>
-          </View>
         ) : null}
         {/* 1. WELCOME CARD */}
         <View
@@ -376,10 +318,11 @@ export default function ProctorDashboardScreen() {
               style={[
                 styles.statCard,
                 { backgroundColor: colors.card, borderColor: colors.cardBorder },
+                isDark && { shadowColor: 'transparent', elevation: 0 },
               ]}
             >
-              <View style={[styles.statIconWrap, { backgroundColor: isDark ? '#2A1818' : '#FEE2E2' }]}>
-                <Users size={20} color="#7A1F2B" />
+              <View style={[styles.statIconWrap, { backgroundColor: isDark ? colors.accentMuted : '#FEE2E2' }]}>
+                <Users size={20} color={colors.accent} />
               </View>
               <View style={styles.statContent}>
                 <Text
@@ -404,10 +347,11 @@ export default function ProctorDashboardScreen() {
               style={[
                 styles.statCard,
                 { backgroundColor: colors.card, borderColor: colors.cardBorder },
+                isDark && { shadowColor: 'transparent', elevation: 0 },
               ]}
             >
-              <View style={[styles.statIconWrap, { backgroundColor: isDark ? '#142918' : '#DCFCE7' }]}>
-                <UserCheck size={20} color="#22C55E" />
+              <View style={[styles.statIconWrap, { backgroundColor: isDark ? colors.successMuted : '#DCFCE7' }]}>
+                <UserCheck size={20} color={colors.success} />
               </View>
               <View style={styles.statContent}>
                 <Text
@@ -435,10 +379,11 @@ export default function ProctorDashboardScreen() {
               style={[
                 styles.statCard,
                 { backgroundColor: colors.card, borderColor: colors.cardBorder },
+                isDark && { shadowColor: 'transparent', elevation: 0 },
               ]}
             >
-              <View style={[styles.statIconWrap, { backgroundColor: isDark ? '#291E0A' : '#FEF3C7' }]}>
-                <Award size={20} color="#F59E0B" />
+              <View style={[styles.statIconWrap, { backgroundColor: isDark ? colors.warningMuted : '#FEF3C7' }]}>
+                <Award size={20} color={colors.warning} />
               </View>
               <View style={styles.statContent}>
                 <Text
@@ -463,10 +408,11 @@ export default function ProctorDashboardScreen() {
               style={[
                 styles.statCard,
                 { backgroundColor: colors.card, borderColor: colors.cardBorder },
+                isDark && { shadowColor: 'transparent', elevation: 0 },
               ]}
             >
-              <View style={[styles.statIconWrap, { backgroundColor: isDark ? '#2A1818' : '#FEE2E2' }]}>
-                <Clock size={20} color="#7A1F2B" />
+              <View style={[styles.statIconWrap, { backgroundColor: isDark ? colors.accentMuted : '#FEE2E2' }]}>
+                <Clock size={20} color={colors.accent} />
               </View>
               <View style={styles.statContent}>
                 <Text
@@ -501,7 +447,7 @@ export default function ProctorDashboardScreen() {
                 style={[styles.sectionTitle, { color: colors.accent }]}
                 maxFontSizeMultiplier={fontMultiplier}
               >
-                EXAMINATION REMINDERS
+                TODAY'S EXAMINATION SCHEDULE
               </Text>
             </View>
             <View
@@ -551,15 +497,27 @@ export default function ProctorDashboardScreen() {
                 {stats.todayExamDate}
               </Text>
             </View>
-            <View
-              style={[
-                styles.scheduleBadge,
-                { backgroundColor: colors.warningMuted, borderColor: colors.cardBorder },
-              ]}
-            >
-              <Clock size={13} color={colors.warning} />
+          </View>
+
+          <View
+            style={[
+              styles.largeScheduleTime,
+              { backgroundColor: colors.warningMuted, borderColor: colors.warning },
+            ]}
+          >
+            <Clock size={26} color={colors.warning} />
+            <View style={styles.largeScheduleTimeContent}>
               <Text
-                style={[styles.scheduleBadgeText, { color: colors.warning }]}
+                style={[styles.largeScheduleTimeLabel, { color: colors.textSecondary }]}
+                maxFontSizeMultiplier={fontMultiplier}
+              >
+                EXAMINATION TIME
+              </Text>
+              <Text
+                style={[styles.largeScheduleTimeValue, { color: colors.warning }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.75}
                 maxFontSizeMultiplier={fontMultiplier}
               >
                 {stats.startTime} - {stats.endTime}
@@ -600,14 +558,14 @@ export default function ProctorDashboardScreen() {
             style={[
               styles.registeredBanner,
               {
-                backgroundColor: isDark ? '#141414' : colors.cardMuted,
+                backgroundColor: colors.cardMuted,
                 borderWidth: 1.5,
-                borderColor: '#7A1F2B',
+                borderColor: colors.accent,
               },
             ]}
           >
             <View style={styles.registeredBannerLeft}>
-              <GraduationCap size={20} color="#7A1F2B" />
+              <GraduationCap size={20} color={colors.accent} />
               <View>
                 <Text
                   style={[styles.registeredLabel, { color: colors.textSecondary }]}
@@ -616,7 +574,7 @@ export default function ProctorDashboardScreen() {
                   Registered Total Applicants
                 </Text>
                 <Text
-                  style={[styles.registeredCount, { color: '#7A1F2B' }]}
+                  style={[styles.registeredCount, { color: colors.accent }]}
                   maxFontSizeMultiplier={fontMultiplier}
                 >
                   {stats.todayRegistered} Examinees Scheduled
@@ -823,10 +781,10 @@ export default function ProctorDashboardScreen() {
           <View
             style={[
               styles.modalSheet,
-              { backgroundColor: colors.card, borderColor: colors.cardBorder },
+              { backgroundColor: colors.modal, borderColor: colors.cardBorder },
             ]}
           >
-            <View style={styles.modalHeader}>
+            <View style={[styles.modalHeader, { borderBottomColor: colors.cardBorder }]}>
               <View style={styles.modalHeaderTitleWrap}>
                 <BookOpen size={22} color={colors.accent} />
                 <Text
@@ -986,45 +944,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 3,
   },
-  assignmentWarning: {
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 13,
-    gap: 8,
-  },
-  assignmentWarningHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  assignmentWarningTitle: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  assignmentWarningText: {
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  assignmentWarningAction: {
-    fontSize: 12,
-    lineHeight: 18,
-    fontWeight: '600',
-  },
-  assignmentWarningButton: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  assignmentWarningButtonText: {
-    fontSize: 12,
-    fontWeight: '800',
-  },
   content: { padding: 16, gap: 14, paddingBottom: 100 },
 
   // Welcome Card
@@ -1142,6 +1061,34 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
   },
+  largeScheduleTime: {
+    minHeight: 82,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    marginTop: 2,
+    marginBottom: 4,
+  },
+  largeScheduleTimeContent: {
+    flex: 1,
+    minWidth: 0,
+  },
+  largeScheduleTimeLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginBottom: 2,
+  },
+  largeScheduleTimeValue: {
+    fontSize: 25,
+    lineHeight: 31,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+  },
 
   // Registered Total Applicants Banner
   registeredBanner: {
@@ -1256,19 +1203,4 @@ const styles = StyleSheet.create({
   policyBlock: { gap: 4 },
   policyHeading: { fontSize: 13, fontWeight: '700' },
   policyText: { fontSize: 12, lineHeight: 18, fontWeight: '500' },
-  signOutHeaderBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#EF444430',
-    backgroundColor: '#EF444410',
-  },
-  signOutHeaderText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
 });

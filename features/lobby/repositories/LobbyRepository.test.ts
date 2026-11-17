@@ -31,7 +31,14 @@ const validPack = {
     },
   ],
   applicants: [],
-  registrations: [],
+  registrations: [
+    {
+      id: 1,
+      examination_schedule_id: 10,
+      applicant_id: 1,
+      assigned_room_id: 101,
+    },
+  ],
   question_banks: [],
 } as unknown as OfflinePack;
 
@@ -112,6 +119,14 @@ test('room absent from the authorized pack cannot be opened offline', () => {
   assert.throws(
     () => selectPreparedOfflineLobby(validPack, '10', '999'),
     /room is not available in the authorized offline pack/i,
+  );
+});
+
+test('room with no batch-specific roster cannot be opened offline', () => {
+  const emptyRoomPack = { ...validPack, registrations: [] } as OfflinePack;
+  assert.throws(
+    () => selectPreparedOfflineLobby(emptyRoomPack, '10', '101'),
+    /no assigned students for the selected examination batch/i,
   );
 });
 

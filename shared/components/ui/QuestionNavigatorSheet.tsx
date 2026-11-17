@@ -37,7 +37,7 @@ function QuestionNavigatorSheetComponent({
   onJumpToQuestion,
 }: QuestionNavigatorSheetProps) {
   const { theme, isDark } = useThemeTokens();
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const { height: windowHeight } = useWindowDimensions();
 
   const categoriesData = useMemo(() => {
     const map = new Map<string, Array<{ question: Question; index: number }>>();
@@ -47,8 +47,13 @@ function QuestionNavigatorSheetComponent({
       items.push({ question, index });
       map.set(name, items);
     });
-    return Array.from(map.entries()).map(([name, items]) => ({ name, items }));
-  }, [questions]);
+    return Array.from(map.entries()).map(([name, items]) => {
+      const answeredCount = items.filter(({ question }) =>
+        isQuestionAnswered(answers[question.id]),
+      ).length;
+      return { name, items, answeredCount };
+    });
+  }, [questions, answers]);
 
   const handleSelectQuestion = useCallback(
     (index: number) => {
@@ -58,14 +63,7 @@ function QuestionNavigatorSheetComponent({
     [onJumpToQuestion, onClose],
   );
 
-  // Size each cell from the actual sheet content width. Explicit column/row
-  // gaps avoid flex-wrap distributing a fifth cell onto a visually uneven row.
-  const horizontalPadding = 32;
-  const gap = 6;
-  const numColumns = 5;
-  const itemWidth = Math.floor(
-    (windowWidth - horizontalPadding - gap * (numColumns - 1)) / numColumns,
-  );
+  const currentHighlightColor = isDark ? '#60A5FA' : '#0284C7';
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -80,9 +78,9 @@ function QuestionNavigatorSheetComponent({
           style={[
             styles.sheet,
             {
-              backgroundColor: theme.surface,
+              backgroundColor: isDark ? '#222730' : theme.surface,
               borderColor: theme.border,
-              maxHeight: Math.min(windowHeight * 0.9, 760),
+              maxHeight: Math.min(windowHeight * 0.88, 760),
             },
           ]}
         >
@@ -105,20 +103,22 @@ function QuestionNavigatorSheetComponent({
             <Legend
               color={theme.notSure.bg}
               borderColor={theme.notSure.border}
+              dotColor={theme.notSure.dot}
               label="Not Sure"
               textColor={theme.text}
             />
             <Legend
-              color={theme.surface}
+              color={isDark ? theme.surfaceAlt : '#EDEEF4'}
               borderColor={theme.border}
               label="Unanswered"
               textColor={theme.text}
             />
             <Legend
               color={theme.surface}
-              borderColor={theme.ring}
+              borderColor={currentHighlightColor}
               label="Current"
               textColor={theme.text}
+              borderWidth={2.5}
             />
           </View>
 
@@ -127,53 +127,117 @@ function QuestionNavigatorSheetComponent({
             contentContainerStyle={styles.gridContent}
             showsVerticalScrollIndicator
           >
-            {categoriesData.map((category) => (
-              <View key={category.name} style={styles.categoryBlock}>
-                <Text style={[styles.categoryTitle, { color: theme.text }]}>{category.name}</Text>
-                <View style={styles.gridContainer}>
-                  {category.items.map(({ question, index }) => {
-                    const answered = isQuestionAnswered(answers[question.id]);
-                    const flagged = Boolean(flags[question.id]);
-                    const current = index === currentIndex;
-                    const number = Number.isFinite(question.number) ? question.number : index + 1;
+            {categoriesData.map((category) => {
+              // Chunk items into exact rows of 5 buttons each
+              const rows: Array<Array<{ question: Question; index: number }>> = [];
+              for (let i = 0; i < category.items.length; i += 5) {
+                rows.push(category.items.slice(i, i + 5));
+              }
 
-                    let backgroundColor = theme.surface;
-                    let borderColor = theme.border;
-                    let textColor = theme.text;
-                    if (flagged) {
-                      backgroundColor = theme.notSure.bg;
-                      borderColor = theme.notSure.border;
-                      textColor = theme.notSure.text;
-                    } else if (answered) {
-                      backgroundColor = theme.accent;
-                      borderColor = theme.accent;
-                      textColor = theme.onAccent;
-                    }
-                    if (current) borderColor = theme.ring;
+              return (
+                <View key={category.name} style={styles.categoryBlock}>
+                  <View style={styles.categoryHeader}>
+                    <Text style={[styles.categoryTitle, { color: theme.text }]}>
+                      {category.name}
+                    </Text>
+                    <Text style={[styles.categoryCount, { color: theme.textSecondary }]}>
+                      ({category.answeredCount}/{category.items.length})
+                    </Text>
+                  </View>
 
-                    return (
-                      <Pressable
-                        key={question.id}
-                        onPress={() => handleSelectQuestion(index)}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Question ${number}${flagged ? ', marked as not sure' : answered ? ', answered' : ', unanswered'}${current ? ', current question' : ''}`}
-                        style={[
-                          styles.gridButton,
-                          {
-                            width: itemWidth,
-                            backgroundColor,
-                            borderColor,
-                            borderWidth: current ? 2 : 1,
-                          },
-                        ]}
-                      >
-                        <Text style={[styles.gridButtonText, { color: textColor }]}>{number}</Text>
-                      </Pressable>
-                    );
-                  })}
+                  <View style={styles.categoryGrid}>
+                    {rows.map((rowItems, rowIndex) => (
+                      <View key={rowIndex} style={styles.gridRow}>
+                        {rowItems.map(({ question, index }) => {
+                          const answered = isQuestionAnswered(answers[question.id]);
+                          const flagged = Boolean(flags[question.id]);
+                          const current = index === currentIndex;
+                          const number = Number.isFinite(question.number)
+                            ? question.number
+                            : index + 1;
+
+                          let backgroundColor = isDark ? theme.surfaceAlt : '#EDEEF4';
+                          let borderColor = theme.border;
+                          let textColor = theme.text;
+
+                          if (flagged) {
+                            backgroundColor = theme.notSure.bg;
+                            borderColor = theme.notSure.border;
+                            textColor = theme.notSure.text;
+                          } else if (answered) {
+                            backgroundColor = theme.accent;
+                            borderColor = theme.accent;
+                            textColor = theme.onAccent;
+                          }
+
+                          if (current) {
+                            borderColor = currentHighlightColor;
+                          }
+
+                          return (
+                            <Pressable
+                              key={question.id}
+                              onPress={() => handleSelectQuestion(index)}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Question ${number}${flagged ? ', marked as not sure' : ''}${answered ? ', answered' : ', unanswered'}${current ? ', current question' : ''}`}
+                              style={[
+                                styles.gridButton,
+                                {
+                                  backgroundColor,
+                                  borderColor,
+                                  borderWidth: current ? 2.5 : 1,
+                                },
+                              ]}
+                            >
+                              <Text
+                                numberOfLines={1}
+                                style={[
+                                  styles.gridButtonText,
+                                  {
+                                    color: textColor,
+                                    fontWeight: current ? '700' : '600',
+                                  },
+                                ]}
+                              >
+                                {number}
+                              </Text>
+
+                              {/* Flagged / Not Sure dot indicator at top-right */}
+                              {flagged && (
+                                <View
+                                  style={[
+                                    styles.flagBadge,
+                                    { backgroundColor: theme.notSure.dot },
+                                  ]}
+                                />
+                              )}
+
+                              {/* If both answered and flagged, show blue answered pip indicator */}
+                              {flagged && answered && (
+                                <View
+                                  style={[
+                                    styles.answeredPip,
+                                    { backgroundColor: theme.accent },
+                                  ]}
+                                />
+                              )}
+                            </Pressable>
+                          );
+                        })}
+
+                        {/* Fill trailing empty slots in partial row to keep equal sizing */}
+                        {Array.from({ length: 5 - rowItems.length }).map((_, placeholderIdx) => (
+                          <View
+                            key={`placeholder-${placeholderIdx}`}
+                            style={styles.gridPlaceholder}
+                          />
+                        ))}
+                      </View>
+                    ))}
+                  </View>
                 </View>
-              </View>
-            ))}
+              );
+            })}
           </ScrollView>
         </View>
       </View>
@@ -184,17 +248,32 @@ function QuestionNavigatorSheetComponent({
 function Legend({
   color,
   borderColor,
+  dotColor,
   label,
   textColor,
+  borderWidth = 1,
 }: {
   color: string;
   borderColor?: string;
+  dotColor?: string;
   label: string;
   textColor: string;
+  borderWidth?: number;
 }) {
   return (
     <View style={styles.legendItem}>
-      <View style={[styles.legendSquare, { backgroundColor: color, borderColor: borderColor ?? color }]} />
+      <View
+        style={[
+          styles.legendSquare,
+          {
+            backgroundColor: color,
+            borderColor: borderColor ?? color,
+            borderWidth,
+          },
+        ]}
+      >
+        {dotColor && <View style={[styles.legendDot, { backgroundColor: dotColor }]} />}
+      </View>
       <Text style={[styles.legendLabel, { color: textColor }]}>{label}</Text>
     </View>
   );
@@ -203,7 +282,10 @@ function Legend({
 export const QuestionNavigatorSheet = memo(QuestionNavigatorSheetComponent);
 
 const styles = StyleSheet.create({
-  overlay: { flex: 1, justifyContent: 'flex-end' },
+  overlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
   sheet: {
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
@@ -212,20 +294,29 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     paddingHorizontal: 16,
     paddingTop: 10,
-    paddingBottom: 20,
+    paddingBottom: 24,
   },
-  dragHandle: { width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 10 },
+  dragHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 10,
+  },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 14,
   },
-  sheetTitle: { fontSize: 18, fontWeight: '600' },
+  sheetTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
   closeBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -234,29 +325,91 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 14,
+    marginBottom: 16,
     paddingHorizontal: 2,
   },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  legendSquare: { width: 12, height: 12, borderRadius: 2, borderWidth: 1 },
-  legendLabel: { fontSize: 12, fontWeight: '500' },
-  gridScroll: { flexGrow: 0 },
-  gridContent: { paddingBottom: 8 },
-  categoryBlock: { marginBottom: 16 },
-  categoryTitle: { fontSize: 15, fontWeight: '600', marginBottom: 9 },
-  gridContainer: {
-    width: '100%',
+  legendItem: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    columnGap: 6,
-    rowGap: 8,
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    gap: 6,
   },
-  gridButton: {
-    height: 42,
-    borderRadius: 10,
+  legendSquare: {
+    width: 14,
+    height: 14,
+    borderRadius: 3,
+    position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  gridButtonText: { fontSize: 14, fontWeight: '600' },
+  legendDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+  },
+  legendLabel: {
+    fontSize: 11.5,
+    fontWeight: '600',
+  },
+  gridScroll: {
+    flexGrow: 0,
+  },
+  gridContent: {
+    paddingBottom: 36,
+  },
+  categoryBlock: {
+    marginBottom: 18,
+  },
+  categoryHeader: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+    marginBottom: 10,
+  },
+  categoryTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  categoryCount: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  categoryGrid: {
+    width: '100%',
+  },
+  gridRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    columnGap: 6,
+    marginBottom: 8,
+  },
+  gridButton: {
+    flex: 1,
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  gridButtonText: {
+    fontSize: 14,
+  },
+  gridPlaceholder: {
+    flex: 1,
+    height: 44,
+  },
+  flagBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 5,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  answeredPip: {
+    position: 'absolute',
+    bottom: 4,
+    width: 12,
+    height: 3,
+    borderRadius: 1.5,
+  },
 });

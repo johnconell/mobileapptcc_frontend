@@ -14,7 +14,7 @@ test.beforeEach(() => memory.delete(LOCAL_DATA_KEY));
 
 test('backend-contract: seeds 30 students and two Manila-day schedules across two proctors', async () => {
   // Proctor 1 Login (Assigned to Schedule 101, Room 201)
-  const login1 = await localApiRequest({ path: '/proctor/login', method: 'POST', body: { email: 'proctor1.local@tcc.test', username: 'proctor1.local@tcc.test', password: 'LocalTest123!' } });
+  const login1 = await localApiRequest({ path: '/proctor/login', method: 'POST', body: { username: 'proctor1.local', password: 'LocalTest123!' } });
   assert.equal(login1.status, 200);
   const token1 = login1.body.data.token;
   const schedules1 = await localApiRequest({ path: '/proctor/schedules', method: 'GET', token: token1 });
@@ -22,7 +22,7 @@ test('backend-contract: seeds 30 students and two Manila-day schedules across tw
   assert.equal(schedules1.body.data[0].id, 101);
 
   // Proctor 2 Login (Assigned to Schedule 102, Room 202)
-  const login2 = await localApiRequest({ path: '/proctor/login', method: 'POST', body: { email: 'proctor2.local@tcc.test', username: 'proctor2.local@tcc.test', password: 'LocalTest123!' } });
+  const login2 = await localApiRequest({ path: '/proctor/login', method: 'POST', body: { username: 'proctor2.local', password: 'LocalTest123!' } });
   assert.equal(login2.status, 200);
   const token2 = login2.body.data.token;
   const schedules2 = await localApiRequest({ path: '/proctor/schedules', method: 'GET', token: token2 });

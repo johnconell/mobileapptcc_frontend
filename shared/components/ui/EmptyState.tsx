@@ -3,6 +3,7 @@ import { Text, View, StyleSheet } from 'react-native';
 import { Inbox } from 'lucide-react-native';
 import { colors } from '@/shared/theme';
 import { Button } from './Button';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 interface EmptyStateProps {
   title: string;
@@ -19,13 +20,14 @@ export function EmptyState({
   onAction,
   icon,
 }: EmptyStateProps) {
+  const { colors: themeColors } = useAppTheme();
   return (
     <View style={styles.wrap}>
-      <View style={styles.icon}>
-        {icon ?? <Inbox size={28} color={colors.primary} />}
+      <View style={[styles.icon, { backgroundColor: themeColors.accentMuted }]}>
+        {icon ?? <Inbox size={28} color={themeColors.accent} />}
       </View>
-      <Text style={styles.title}>{title}</Text>
-      {description ? <Text style={styles.description}>{description}</Text> : null}
+      <Text style={[styles.title, { color: themeColors.textPrimary }]}>{title}</Text>
+      {description ? <Text style={[styles.description, { color: themeColors.textMuted }]}>{description}</Text> : null}
       {actionLabel && onAction ? (
         <Button title={actionLabel} onPress={onAction} style={styles.btn} />
       ) : null}
@@ -44,7 +46,6 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 20,
-    backgroundColor: '#F0D9DC',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,

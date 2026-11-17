@@ -32,7 +32,6 @@ import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
 import { userFacingError } from '@/shared/utils/userFacingError';
-import { releaseExamSessionRestrictions } from '@/features/examinations/services/examSessionRestrictions';
 
 export default function SubmittingScreen() {
   const router = useRouter();
@@ -84,7 +83,6 @@ export default function SubmittingScreen() {
         // If no submission is stored, check if already completed in store
         const store = useExamStore.getState();
         if (store.submittedAt) {
-          await releaseExamSessionRestrictions('submission_confirmed').catch(() => undefined);
           router.replace('/(student)/completed');
         }
         if (active && !store.submittedAt) {
@@ -158,6 +156,13 @@ export default function SubmittingScreen() {
         const pulse = await LobbyRepository.sendHeartbeat();
         if (active && pulse.submissionConfirmed && pulse.submittedAt) {
           await ExamSubmissionCoordinator.confirmFromPeerAcknowledgement(pulse.submittedAt);
+          return;
+        }
+        // Proctor server responded: LAN connection is confirmed available!
+        // If our submission is pending or retrying, immediately attempt delivery.
+        const currentSub = await ExamSubmissionCoordinator.getActiveSubmission();
+        if (active && currentSub && currentSub.status !== 'confirmed') {
+          void ExamSubmissionCoordinator.deliver();
         }
       } catch (error) {
         console.warn('[SUBMISSION] Proctor heartbeat failed:', {
@@ -171,7 +176,10 @@ export default function SubmittingScreen() {
     void heartbeat();
     const interval = setInterval(() => void heartbeat(), 10_000);
     const appStateSubscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void heartbeat();
+      if (state === 'active') {
+        void heartbeat();
+        void ExamSubmissionCoordinator.deliver();
+      }
     });
 
     return () => {
@@ -209,18 +217,8 @@ export default function SubmittingScreen() {
     }
   }, [isDelivering]);
 
-  const handleExit = useCallback(async () => {
+  const handleExit = useCallback(() => {
     setOperationError(null);
-    try {
-      await releaseExamSessionRestrictions('submission_confirmed');
-    } catch (error) {
-      setOperationError(
-        error instanceof Error
-          ? error.message
-          : 'Examination restrictions could not be released. Follow your device instructions and try again.',
-      );
-      return;
-    }
     useLobbyStore.getState().reset();
     router.replace('/(student)/completed');
   }, [router]);
@@ -259,7 +257,7 @@ export default function SubmittingScreen() {
             style={[
               styles.card,
               {
-                backgroundColor: isDark ? '#261C1C' : '#FEF2F2',
+                backgroundColor: isDark ? themeColors.dangerMuted : '#FEF2F2',
                 borderColor: themeColors.danger,
               },
             ]}
@@ -267,10 +265,10 @@ export default function SubmittingScreen() {
             <View style={styles.iconCircleError}>
               <AlertTriangle color={themeColors.danger} size={42} strokeWidth={2.2} />
             </View>
-            <Text style={[styles.title, { color: isDark ? '#FCA5A5' : '#991B1B' }]}>
+            <Text style={[styles.title, { color: themeColors.danger }]}>
               Submission recovery needed
             </Text>
-            <Text style={[styles.description, { color: isDark ? '#E5E7EB' : '#374151' }]}>
+            <Text style={[styles.description, { color: themeColors.textPrimary }]}>
               {operationError}
             </Text>
             <Pressable
@@ -278,7 +276,11 @@ export default function SubmittingScreen() {
               disabled={isDelivering}
               style={[styles.primaryButton, { backgroundColor: themeColors.accent, opacity: isDelivering ? 0.6 : 1 }]}
             >
-              {isDelivering ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.buttonText}>Retry recovery</Text>}
+              {isDelivering ? (
+                <ActivityIndicator color={isDark ? themeColors.card : '#FFFFFF'} size="small" />
+              ) : (
+                <Text style={[styles.buttonText, { color: isDark ? themeColors.card : '#FFFFFF' }]}>Retry recovery</Text>
+              )}
             </Pressable>
           </View>
         ) : submission?.status === 'confirmed' ? (
@@ -286,7 +288,7 @@ export default function SubmittingScreen() {
             style={[
               styles.card,
               {
-                backgroundColor: isDark ? '#18241C' : '#F0FDF4',
+                backgroundColor: isDark ? themeColors.successMuted : '#F0FDF4',
                 borderColor: themeColors.success,
               },
             ]}
@@ -295,11 +297,11 @@ export default function SubmittingScreen() {
               <CheckCircle2 color={themeColors.success} size={42} strokeWidth={2.5} />
             </View>
 
-            <Text style={[styles.title, { color: isDark ? '#E5E7EB' : '#111827' }]}>
+            <Text style={[styles.title, { color: themeColors.textPrimary }]}>
               Examination Submitted Successfully
             </Text>
 
-            <Text style={[styles.description, { color: isDark ? '#9CA3AF' : '#4B5563' }]}>
+            <Text style={[styles.description, { color: themeColors.textSecondary }]}>
               {submission.receipt?.destination === 'proctor_peer'
                 ? 'Your answers were received and graded by the proctor phone. They will sync to the central system.'
                 : submission.receipt?.destination === 'cloud'
@@ -311,31 +313,31 @@ export default function SubmittingScreen() {
               style={[
                 styles.receiptBox,
                 {
-                  backgroundColor: isDark ? '#1F2937' : '#FFFFFF',
-                  borderColor: isDark ? '#374151' : '#E5E7EB',
+                  backgroundColor: isDark ? themeColors.cardMuted : '#FFFFFF',
+                  borderColor: isDark ? themeColors.cardBorder : '#E5E7EB',
                 },
               ]}
             >
               <View style={styles.receiptRow}>
-                <Text style={styles.receiptLabel}>Status</Text>
+                <Text style={[styles.receiptLabel, { color: themeColors.textSecondary }]}>Status</Text>
                 <Text style={[styles.receiptValue, { color: themeColors.success }]}>
                   {submission.receipt?.alreadySubmitted ? 'Confirmed (Duplicate ACK)' : 'Confirmed'}
                 </Text>
               </View>
               <View style={styles.receiptRow}>
-                <Text style={styles.receiptLabel}>Destination</Text>
+                <Text style={[styles.receiptLabel, { color: themeColors.textSecondary }]}>Destination</Text>
                 <Text style={[styles.receiptValue, { color: themeColors.textPrimary }]}>
                   {destinationLabel}
                 </Text>
               </View>
               <View style={styles.receiptRow}>
-                <Text style={styles.receiptLabel}>Receipt Code</Text>
+                <Text style={[styles.receiptLabel, { color: themeColors.textSecondary }]}>Receipt Code</Text>
                 <Text style={[styles.receiptValueMono, { color: themeColors.accent }]}>
                   {verificationDigest}
                 </Text>
               </View>
               <View style={styles.receiptRow}>
-                <Text style={styles.receiptLabel}>Answers Saved</Text>
+                <Text style={[styles.receiptLabel, { color: themeColors.textSecondary }]}>Answers Saved</Text>
                 <Text style={[styles.receiptValue, { color: themeColors.textPrimary }]}>
                   {answeredCount} of {totalQuestions}
                 </Text>
@@ -346,7 +348,9 @@ export default function SubmittingScreen() {
               onPress={handleExit}
               style={[styles.primaryButton, { backgroundColor: themeColors.success }]}
             >
-              <Text style={styles.buttonText}>Complete & Finish</Text>
+              <Text style={[styles.buttonText, { color: isDark ? themeColors.card : '#FFFFFF' }]}>
+                Complete & Finish
+              </Text>
             </Pressable>
           </View>
         ) : submission?.status === 'action_required' ? (
@@ -355,7 +359,7 @@ export default function SubmittingScreen() {
             style={[
               styles.card,
               {
-                backgroundColor: isDark ? '#261C1C' : '#FEF2F2',
+                backgroundColor: isDark ? themeColors.dangerMuted : '#FEF2F2',
                 borderColor: themeColors.danger,
               },
             ]}
@@ -364,11 +368,11 @@ export default function SubmittingScreen() {
               <AlertTriangle color={themeColors.danger} size={42} strokeWidth={2.2} />
             </View>
 
-            <Text style={[styles.title, { color: isDark ? '#FCA5A5' : '#991B1B' }]}>
+            <Text style={[styles.title, { color: themeColors.danger }]}>
               Delivery Requires Attention
             </Text>
 
-            <Text style={[styles.description, { color: isDark ? '#E5E7EB' : '#374151' }]}>
+            <Text style={[styles.description, { color: themeColors.textPrimary }]}>
               {submission.lastError?.message ||
                 'Unable to confirm delivery to the examination server after multiple attempts.'}
             </Text>
@@ -377,13 +381,13 @@ export default function SubmittingScreen() {
               style={[
                 styles.noticeBanner,
                 {
-                  backgroundColor: isDark ? '#1F2937' : '#F3F4F6',
-                  borderColor: isDark ? '#374151' : '#E5E7EB',
+                  backgroundColor: isDark ? themeColors.cardMuted : '#F3F4F6',
+                  borderColor: isDark ? themeColors.cardBorder : '#E5E7EB',
                 },
               ]}
             >
               <ShieldCheck size={18} color={themeColors.success} style={{ marginRight: 8 }} />
-              <Text style={[styles.noticeText, { color: isDark ? '#D1D5DB' : '#4B5563' }]}>
+              <Text style={[styles.noticeText, { color: themeColors.textSecondary }]}>
                 Your examination answers are safely preserved on this device.
               </Text>
             </View>
@@ -401,11 +405,11 @@ export default function SubmittingScreen() {
                 ]}
               >
                 {isDelivering ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
+                  <ActivityIndicator color={isDark ? themeColors.card : '#FFFFFF'} size="small" />
                 ) : (
                   <>
-                    <RefreshCw size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
-                    <Text style={styles.buttonText}>Retry Delivery</Text>
+                    <RefreshCw size={16} color={isDark ? themeColors.card : '#FFFFFF'} style={{ marginRight: 6 }} />
+                    <Text style={[styles.buttonText, { color: isDark ? themeColors.card : '#FFFFFF' }]}>Retry Delivery</Text>
                   </>
                 )}
               </Pressable>
@@ -416,7 +420,7 @@ export default function SubmittingScreen() {
                   styles.secondaryButton,
                   {
                     borderColor: themeColors.cardBorder,
-                    backgroundColor: isDark ? '#1F2937' : '#FFFFFF',
+                    backgroundColor: isDark ? themeColors.cardMuted : '#FFFFFF',
                   },
                 ]}
               >
@@ -433,7 +437,7 @@ export default function SubmittingScreen() {
             style={[
               styles.card,
               {
-                backgroundColor: isDark ? '#1F2430' : '#FFFFFF',
+                backgroundColor: isDark ? themeColors.card : '#FFFFFF',
                 borderColor: themeColors.cardBorder,
               },
             ]}
@@ -458,8 +462,8 @@ export default function SubmittingScreen() {
               style={[
                 styles.noticeBanner,
                 {
-                  backgroundColor: isDark ? '#111827' : '#F9FAFB',
-                  borderColor: isDark ? '#374151' : '#E5E7EB',
+                  backgroundColor: isDark ? themeColors.cardMuted : '#F9FAFB',
+                  borderColor: isDark ? themeColors.cardBorder : '#E5E7EB',
                 },
               ]}
             >
@@ -482,11 +486,11 @@ export default function SubmittingScreen() {
                 ]}
               >
                 {isDelivering ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
+                  <ActivityIndicator color={isDark ? themeColors.card : '#FFFFFF'} size="small" />
                 ) : (
                   <>
-                    <RefreshCw size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
-                    <Text style={styles.buttonText}>Retry Now</Text>
+                    <RefreshCw size={16} color={isDark ? themeColors.card : '#FFFFFF'} style={{ marginRight: 6 }} />
+                    <Text style={[styles.buttonText, { color: isDark ? themeColors.card : '#FFFFFF' }]}>Retry Now</Text>
                   </>
                 )}
               </Pressable>
@@ -497,7 +501,7 @@ export default function SubmittingScreen() {
                   styles.secondaryButton,
                   {
                     borderColor: themeColors.cardBorder,
-                    backgroundColor: isDark ? '#1F2937' : '#FFFFFF',
+                    backgroundColor: isDark ? themeColors.cardMuted : '#FFFFFF',
                   },
                 ]}
               >
@@ -518,7 +522,7 @@ export default function SubmittingScreen() {
             style={[
               styles.modalCard,
               {
-                backgroundColor: isDark ? '#1E232A' : '#FFFFFF',
+                backgroundColor: isDark ? themeColors.modal : '#FFFFFF',
                 borderColor: themeColors.cardBorder,
               },
             ]}
@@ -545,37 +549,37 @@ export default function SubmittingScreen() {
                 style={[
                   styles.proofDetailsBox,
                   {
-                    backgroundColor: isDark ? '#111827' : '#F9FAFB',
-                    borderColor: isDark ? '#374151' : '#E5E7EB',
+                    backgroundColor: isDark ? themeColors.cardMuted : '#F9FAFB',
+                    borderColor: isDark ? themeColors.cardBorder : '#E5E7EB',
                   },
                 ]}
               >
                 <View style={styles.receiptRow}>
-                  <Text style={styles.receiptLabel}>Candidate</Text>
+                  <Text style={[styles.receiptLabel, { color: themeColors.textSecondary }]}>Candidate</Text>
                   <Text style={[styles.receiptValue, { color: themeColors.textPrimary }]}>
                     {submission?.studentName || submission?.applicantCode || 'Examinee'}
                   </Text>
                 </View>
                 <View style={styles.receiptRow}>
-                  <Text style={styles.receiptLabel}>Applicant Code</Text>
+                  <Text style={[styles.receiptLabel, { color: themeColors.textSecondary }]}>Applicant Code</Text>
                   <Text style={[styles.receiptValueMono, { color: themeColors.textPrimary }]}>
                     {submission?.applicantCode || '----'}
                   </Text>
                 </View>
                 <View style={styles.receiptRow}>
-                  <Text style={styles.receiptLabel}>Attempt ID</Text>
+                  <Text style={[styles.receiptLabel, { color: themeColors.textSecondary }]}>Attempt ID</Text>
                   <Text style={[styles.receiptValueMono, { color: themeColors.textSecondary }]}>
                     {submission?.attemptId || '----'}
                   </Text>
                 </View>
                 <View style={styles.receiptRow}>
-                  <Text style={styles.receiptLabel}>Answers Recorded</Text>
+                  <Text style={[styles.receiptLabel, { color: themeColors.textSecondary }]}>Answers Recorded</Text>
                   <Text style={[styles.receiptValue, { color: themeColors.success }]}>
                     {answeredCount} of {totalQuestions} answered
                   </Text>
                 </View>
                 <View style={styles.receiptRow}>
-                  <Text style={styles.receiptLabel}>Finalized At</Text>
+                  <Text style={[styles.receiptLabel, { color: themeColors.textSecondary }]}>Finalized At</Text>
                   <Text style={[styles.receiptValue, { color: themeColors.textPrimary }]}>
                     {submission?.createdAt
                       ? new Date(submission.createdAt).toLocaleTimeString([], {
@@ -587,8 +591,8 @@ export default function SubmittingScreen() {
                   </Text>
                 </View>
 
-                <View style={{ marginTop: 12, borderTopWidth: 1, borderColor: isDark ? '#374151' : '#E5E7EB', paddingTop: 8 }}>
-                  <Text style={[styles.receiptLabel, { marginBottom: 4 }]}>
+                <View style={{ marginTop: 12, borderTopWidth: 1, borderColor: isDark ? themeColors.cardBorder : '#E5E7EB', paddingTop: 8 }}>
+                  <Text style={[styles.receiptLabel, { color: themeColors.textSecondary, marginBottom: 4 }]}>
                     Verification Code (Checksum):
                   </Text>
                   <Text
@@ -611,7 +615,7 @@ export default function SubmittingScreen() {
               onPress={() => setShowProofModal(false)}
               style={[styles.primaryButton, { backgroundColor: themeColors.accent, marginTop: 8 }]}
             >
-              <Text style={styles.buttonText}>Dismiss</Text>
+              <Text style={[styles.buttonText, { color: isDark ? themeColors.card : '#FFFFFF' }]}>Dismiss</Text>
             </Pressable>
           </View>
         </View>

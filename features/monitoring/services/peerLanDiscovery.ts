@@ -20,6 +20,12 @@ function subnetPrefix(ip: string): string | null {
   return `${parts[0]}.${parts[1]}.${parts[2]}`;
 }
 
+function isOnCurrentSubnet(host: string, localIp: string): boolean {
+  const hostPrefix = subnetPrefix(host);
+  const localPrefix = subnetPrefix(localIp);
+  return Boolean(hostPrefix && localPrefix && hostPrefix === localPrefix);
+}
+
 async function discoverAtHost(host: string, code: string, timeoutMs = 850): Promise<PeerQrTarget | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -59,20 +65,30 @@ export async function discoverPeerExamHostByCode(
   onProgress?: (done: number, total: number) => void,
 ): Promise<PeerQrTarget | null> {
   const code = normalizeExaminationCode(rawCode);
+  // Resolve the current interface before consulting the persisted target. A
+  // target from Wi-Fi A can have the same exam code as the current room but be
+  // unreachable after the student follows the proctor to Wi-Fi B.
+  const resolved = await resolveWifiLanIp();
+  const ip = resolved.ip || await Network.getIpAddressAsync().catch(() => null);
+
   if (code) {
     const { PeerExamClient } = await import('@/features/examinations/services/peerExamClient');
     const target = await PeerExamClient.getTarget();
     if (
       target?.code.trim().toUpperCase() === code &&
-      /^[0-9a-f]{64}$/i.test(target.peerPublicKey)
+      /^[0-9a-f]{64}$/i.test(target.peerPublicKey) &&
+      // Reuse a pinned target only when it is on this interface and answers.
+      // Otherwise continue with a subnet scan so typed-code recovery works
+      // without internet or a second room.
+      ip &&
+      isOnCurrentSubnet(target.host, ip) &&
+      await PeerExamClient.ping(target)
     ) {
       onProgress?.(1, 1);
       return target;
     }
   }
 
-  const resolved = await resolveWifiLanIp();
-  const ip = resolved.ip || await Network.getIpAddressAsync().catch(() => null);
   if (!ip || !isPrivateLanIp(ip)) {
     onProgress?.(0, 0);
     return null;

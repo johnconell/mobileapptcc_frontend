@@ -69,6 +69,7 @@ export interface ExamSchedule {
   schoolYear: string;
   examinationDate: string;
   examinationDateIso: string;
+  dayLabel?: string;
   batchCount: number;
   description?: string;
   timeLabel?: string;

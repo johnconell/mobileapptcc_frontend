@@ -13,31 +13,39 @@ interface InputProps extends TextInputProps {
   label?: string;
   error?: string;
   hint?: string;
+  rightAccessory?: React.ReactNode;
 }
 
 export const Input = forwardRef<TextInput, InputProps>(
-  function Input({ label, error, hint, style, ...props }, ref) {
+  function Input({ label, error, hint, rightAccessory, style, ...props }, ref) {
     const { colors: themeColors } = useAppTheme();
 
     return (
       <View style={styles.wrap}>
         {label ? <Text style={[styles.label, { color: themeColors.textSecondary }]}>{label}</Text> : null}
-        <TextInput
-          ref={ref}
-          placeholderTextColor={themeColors.textMuted}
-          style={[
-            styles.input,
-            {
-              backgroundColor: themeColors.inputBg,
-              borderColor: themeColors.inputBorder,
-              color: themeColors.textPrimary,
-            },
-            error ? styles.inputError : null,
-            style,
-          ]}
-          {...props}
-        />
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+        <View style={styles.inputContainer}>
+          <TextInput
+            ref={ref}
+            placeholderTextColor={themeColors.textMuted}
+            style={[
+              styles.input,
+              {
+                backgroundColor: themeColors.inputBg,
+                borderColor: error ? themeColors.danger : themeColors.inputBorder,
+                color: themeColors.textPrimary,
+                paddingRight: rightAccessory ? 48 : 14,
+              },
+              style,
+            ]}
+            {...props}
+          />
+          {rightAccessory ? (
+            <View style={styles.rightAccessoryContainer}>
+              {rightAccessory}
+            </View>
+          ) : null}
+        </View>
+        {error ? <Text style={[styles.error, { color: themeColors.danger }]}>{error}</Text> : null}
         {!error && hint ? <Text style={[styles.hint, { color: themeColors.textMuted }]}>{hint}</Text> : null}
       </View>
     );
@@ -49,6 +57,19 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 13,
     fontWeight: '600',
+  },
+  inputContainer: {
+    position: 'relative',
+    width: '100%',
+    justifyContent: 'center',
+  },
+  rightAccessoryContainer: {
+    position: 'absolute',
+    right: 12,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   input: {
     minHeight: 52,

@@ -34,6 +34,34 @@ let channel: {
   sequence: number;
 } | null = null;
 let requestQueue: Promise<void> = Promise.resolve();
+const connectionListeners = new Set<(event: 'drop' | 'restored') => void>();
+
+function emitConnectionEvent(event: 'drop' | 'restored') {
+  connectionListeners.forEach((listener) => {
+    try {
+      listener(event);
+    } catch {
+      // Connection observers must never affect the LAN request.
+    }
+  });
+}
+
+function isTransportFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    error.name === 'AbortError' ||
+    error instanceof TypeError ||
+    message.includes('timed out') ||
+    message.includes('timeout') ||
+    message.includes('network request failed') ||
+    message.includes('failed to fetch')
+  );
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
 
 function baseUrl(target: PeerTarget): string {
   return `http://${target.host}:${target.port}${PEER_PATH_PREFIX}`;
@@ -55,7 +83,7 @@ async function randomHex(byteLength: number): Promise<string> {
   return bytesToHex(await Crypto.getRandomBytesAsync(byteLength));
 }
 
-async function secureChannelFor(target: PeerTarget) {
+async function secureChannelFor(target: PeerTarget, timeoutMs = 4000) {
   const endpoint = baseUrl(target);
   if (
     channel &&
@@ -79,7 +107,7 @@ async function secureChannelFor(target: PeerTarget) {
         }),
         signal,
       }),
-    4000,
+    timeoutMs,
   );
   const json = await response.json().catch(() => null);
   const handshake = json?.data ?? json;
@@ -121,20 +149,21 @@ async function performSecureRequest<T>(
       entry[1] != null && entry[1] !== '',
     ),
   );
-  const activeChannel = await secureChannelFor(target);
-  const sequence = activeChannel.sequence + 1;
-  activeChannel.sequence = sequence;
-  const message = encryptPeerPayload(
-    activeChannel.key,
-    activeChannel.sessionId,
-    sequence,
-    'POST',
-    `${PEER_PATH_PREFIX}/secure`,
-    { path: peerPath, method, query, body: options.body },
-    await randomHex(12),
-  );
+  let activeChannel: (typeof channel) = null;
 
   try {
+    activeChannel = await secureChannelFor(target, options.timeoutMs ?? 5000);
+    const sequence = activeChannel.sequence + 1;
+    activeChannel.sequence = sequence;
+    const message = encryptPeerPayload(
+      activeChannel.key,
+      activeChannel.sessionId,
+      sequence,
+      'POST',
+      `${PEER_PATH_PREFIX}/secure`,
+      { path: peerPath, method, query, body: options.body },
+      await randomHex(12),
+    );
     const response = await withTimeout(
       (signal) =>
         fetch(`${baseUrl(target)}/secure`, {
@@ -178,8 +207,10 @@ async function performSecureRequest<T>(
       (err as any).statusCode = result.status;
       throw err;
     }
+    emitConnectionEvent('restored');
     return (json?.data !== undefined ? json.data : json) as T;
   } catch (error) {
+    if (isTransportFailure(error)) emitConnectionEvent('drop');
     if (channel === activeChannel) channel = null;
     throw error;
   }
@@ -205,6 +236,11 @@ function queuedSecureRequest<T>(
  * over the local Wi‑Fi, so every request here goes to that phone, not Laravel.
  */
 export const PeerExamClient = {
+  subscribeConnection(listener: (event: 'drop' | 'restored') => void): () => void {
+    connectionListeners.add(listener);
+    return () => connectionListeners.delete(listener);
+  },
+
   async setTarget(target: PeerQrTarget): Promise<void> {
     if (!/^[0-9a-f]{64}$/i.test(target.peerPublicKey)) {
       throw new Error('This room QR has no secure proctor identity. Scan the current proctor QR code.');
@@ -278,11 +314,29 @@ export const PeerExamClient = {
       });
     }
 
+    // A proctor can move to another isolated Wi-Fi without internet. In
+    // that case the cloud resolver cannot help; discover the same pinned
+    // examination code on the student's current LAN instead.
+    const discoverLocally = async (): Promise<boolean> => {
+      try {
+        const { discoverPeerExamHostByCode } = await import(
+          '@/features/monitoring/services/peerLanDiscovery'
+        );
+        const discovered = await discoverPeerExamHostByCode(code);
+        if (!discovered || discovered.peerPublicKey !== current.peerPublicKey) return false;
+        await this.setTarget(discovered);
+        return true;
+      } catch (err) {
+        if (__DEV__) console.warn('[PeerExamClient] local host discovery failed:', err);
+        return false;
+      }
+    };
+
     try {
       const Network = await import('expo-network');
       const netState = await Network.getNetworkStateAsync().catch(() => null);
       if (netState?.isConnected === false || netState?.isInternetReachable === false) {
-        return false;
+        return discoverLocally();
       }
     } catch {
       // continue
@@ -316,7 +370,7 @@ export const PeerExamClient = {
           json.data?.session?.localServerIp ??
           '',
       ).trim();
-      if (!host || host === '0.0.0.0') return false;
+      if (!host || host === '0.0.0.0') return discoverLocally();
 
       const port =
         Number(json.peer_port ?? json.peerPort ?? current?.port) || PEER_PORT;
@@ -333,7 +387,9 @@ export const PeerExamClient = {
           '',
       ).trim().toLowerCase();
       const peerPublicKey = current?.peerPublicKey;
-      if (!peerPublicKey || (reportedIdentity && reportedIdentity !== peerPublicKey)) return false;
+      if (!peerPublicKey || (reportedIdentity && reportedIdentity !== peerPublicKey)) {
+        return discoverLocally();
+      }
 
       await this.setTarget({
         host,
@@ -347,7 +403,7 @@ export const PeerExamClient = {
       return true;
     } catch (err) {
       if (__DEV__) console.warn('[PeerExamClient] refreshHostFromCloud failed:', err);
-      return false;
+      return discoverLocally();
     }
   },
 
@@ -388,7 +444,7 @@ export const PeerExamClient = {
       const data = await this.request<Record<string, any>>('/status', {
         method: 'POST',
         body: token ? { participation_token: token } : {},
-        timeoutMs: 4000,
+        timeoutMs: 3000,
       });
       const parsed = normalize(data);
       if (parsed) return parsed;
@@ -440,12 +496,43 @@ export const PeerExamClient = {
       await queuedSecureRequest(resolved, '/health', {
         method: 'POST',
         body: {},
-        timeoutMs: 4000,
+        timeoutMs: 3000,
       });
       return true;
     } catch {
       return false;
     }
+  },
+
+  /** Reachability check with one automatic retry for QR/code entry. */
+  async ensureReachable(target?: PeerTarget | PeerQrTarget): Promise<boolean> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (await this.ping(target)) return true;
+      if (attempt === 0) await wait(150);
+    }
+    return false;
+  },
+
+  /** Retry a single LAN request after a transient route/host failure. */
+  async requestWithRetry<T>(
+    path: string,
+    options: {
+      method?: string;
+      body?: unknown;
+      query?: Record<string, string | undefined>;
+      timeoutMs?: number;
+    } = {},
+  ): Promise<T> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await this.request<T>(path, options);
+      } catch (error) {
+        lastError = error;
+        if (attempt === 0) await wait(150);
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('Peer request failed.');
   },
 
   /**
@@ -467,7 +554,7 @@ export const PeerExamClient = {
       const data = await queuedSecureRequest<Record<string, unknown>>(resolved, '/health', {
         method: 'POST',
         body: {},
-        timeoutMs: 4000,
+        timeoutMs: 3000,
       });
       if (__DEV__) {
         console.log('[PEER JOIN] health response', {

@@ -42,7 +42,7 @@ test('MOB-FLOW-001: Proctor 1 Login → Authorized Schedule & Room (Schedule 101
   const login = await localApiRequest({
     path: '/proctor/login',
     method: 'POST',
-    body: { email: 'proctor1.local@tcc.test', username: 'proctor1.local@tcc.test', password: 'LocalTest123!' },
+    body: { username: 'proctor1.local', password: 'LocalTest123!' },
   });
   assert.equal(login.status, 200);
   const token = login.body.data.token;
@@ -78,7 +78,7 @@ test('MOB-FLOW-002: Proctor 2 Login → Authorized Schedule & Room (Schedule 102
   const login = await localApiRequest({
     path: '/proctor/login',
     method: 'POST',
-    body: { email: 'proctor2.local@tcc.test', username: 'proctor2.local@tcc.test', password: 'LocalTest123!' },
+    body: { username: 'proctor2.local', password: 'LocalTest123!' },
   });
   assert.equal(login.status, 200);
   const token = login.body.data.token;
@@ -282,7 +282,7 @@ test('MOB-RECOVERY-002: Unauthorized Proctor Schedule & Room Access Rejection (4
   const login1 = await localApiRequest({
     path: '/proctor/login',
     method: 'POST',
-    body: { email: 'proctor1.local@tcc.test', username: 'proctor1.local@tcc.test', password: 'LocalTest123!' },
+    body: { username: 'proctor1.local', password: 'LocalTest123!' },
   });
   const token1 = login1.body.data.token;
 
@@ -308,7 +308,7 @@ test('MOB-RECOVERY-002: Unauthorized Proctor Schedule & Room Access Rejection (4
   const badLogin = await localApiRequest({
     path: '/proctor/login',
     method: 'POST',
-    body: { email: 'proctor1.local@tcc.test', username: 'proctor1.local@tcc.test', password: 'WrongPassword999' },
+    body: { username: 'proctor1.local', password: 'WrongPassword999' },
   });
   assert.equal(badLogin.status, 401);
 });

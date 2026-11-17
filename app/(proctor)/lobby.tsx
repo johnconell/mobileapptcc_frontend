@@ -257,6 +257,48 @@ function ProctorLobbyContent() {
   const [cloudQrValue, setCloudQrValue] = useState<string | null>(null);
   const [cloudSessionId, setCloudSessionId] = useState<number | null>(null);
   const [admissionRequest, setAdmissionRequest] = useState<LobbyStudent | null>(null);
+  const [pendingRequests, setPendingRequests] = useState<LobbyStudent[]>([]);
+  const pendingRequestsRef = useRef<LobbyStudent[]>([]);
+  const admissionRequestRef = useRef<LobbyStudent | null>(null);
+
+  const replacePendingRequests = (requests: LobbyStudent[]) => {
+    const unique = requests.filter(
+      (request, index, list) => list.findIndex((candidate) => candidate.id === request.id) === index,
+    );
+    const previous = pendingRequestsRef.current;
+    const unchanged =
+      previous.length === unique.length &&
+      previous.every(
+        (request, index) =>
+          request.id === unique[index]?.id &&
+          request.approvalStatus === unique[index]?.approvalStatus &&
+          request.status === unique[index]?.status &&
+          request.lastActivityAt === unique[index]?.lastActivityAt,
+      );
+
+    pendingRequestsRef.current = unique;
+    if (!unchanged) setPendingRequests(unique);
+
+    const activeId = admissionRequestRef.current?.id;
+    const nextActive =
+      (activeId ? unique.find((request) => request.id === activeId) : null) ?? unique[0] ?? null;
+    admissionRequestRef.current = nextActive;
+    if (admissionRequest?.id !== nextActive?.id) setAdmissionRequest(nextActive);
+  };
+
+  const queueAdmissionRequest = (student: LobbyStudent) => {
+    if (student.approvalStatus !== 'pending' || student.isConnected === false || student.status === 'not_arrived') {
+      return;
+    }
+    const current = pendingRequestsRef.current;
+    if (current.some((request) => request.id === student.id)) return;
+    replacePendingRequests([...current, student]);
+  };
+
+  const removePendingRequest = (studentId: string) => {
+    replacePendingRequests(pendingRequestsRef.current.filter((request) => request.id !== studentId));
+  };
+
   const updateApproval = async (
     student: LobbyStudent,
     approvalStatus: 'approved' | 'declined',
@@ -267,8 +309,10 @@ function ProctorLobbyContent() {
       if (updated) setSelected(updated);
       if (snapshot) {
         setSnapshot(snapshot);
-        if (admissionRequest?.id === student.id) setAdmissionRequest(updated ?? null);
       }
+      // Advance the queue immediately. The applicant receives the decision on
+      // its next LAN heartbeat while the next request is shown on this screen.
+      removePendingRequest(student.id);
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.lobby(sessionId, roomId) });
     } catch (error) {
       Alert.alert(
@@ -410,6 +454,15 @@ function ProctorLobbyContent() {
         );
         if (cancelled) return;
         if (!snapshot) {
+          const localRoom = PeerExamServer.info();
+          if (localRoom.code) {
+            setOpenError(
+              localRoom.status === 'ended'
+                ? 'This saved examination has ended. Return to the dashboard to review results; the room will not be reopened.'
+                : 'The saved local examination is still present, but its schedule or room identity did not match this link. The app will not create a replacement room. Return to the examination list and resume the saved room.',
+            );
+            return;
+          }
           const { OfflineStore } = await import('@/features/synchronization/services/offlineStore');
           if (await OfflineStore.hasPack()) {
             try {
@@ -429,6 +482,14 @@ function ProctorLobbyContent() {
         knownStudentMeta.current = new Map(snapshot.students.map((s) => [s.id, s]));
         knownStudentStatus.current = new Map(
           snapshot.students.map((s) => [s.id, s.status]),
+        );
+        replacePendingRequests(
+          snapshot.students.filter(
+            (student) =>
+              student.approvalStatus === 'pending' &&
+              student.isConnected !== false &&
+              student.status !== 'not_arrived',
+          ),
         );
         checkInReady.current = true;
         setSnapshot(snapshot);
@@ -504,23 +565,41 @@ function ProctorLobbyContent() {
     };
   }, []);
 
-  // Peer mode: push updates to UI, but throttled to prevent JS thread lockup during high-traffic heartbeats.
+  // Peer mode: push updates to UI, throttled with trailing execution so status transitions update immediately.
   useEffect(() => {
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     let lastRefresh = 0;
-    return PeerExamServer.subscribe(() => {
+    const unsub = PeerExamServer.subscribe(() => {
       const now = Date.now();
       setPeerHost(PeerExamServer.info().host);
       setHosting(PeerExamServer.info());
       setServerLastHeartbeat(now);
 
-      // Only trigger a full UI query invalidation at most once every 3 seconds.
-      if (now - lastRefresh > 3000) {
-        lastRefresh = now;
+      const triggerInvalidation = () => {
+        lastRefresh = Date.now();
         void queryClient.invalidateQueries({
           queryKey: QUERY_KEYS.lobby(sessionId, roomId),
         });
+      };
+
+      if (now - lastRefresh > 1200) {
+        if (refreshTimer) {
+          clearTimeout(refreshTimer);
+          refreshTimer = null;
+        }
+        triggerInvalidation();
+      } else if (!refreshTimer) {
+        refreshTimer = setTimeout(() => {
+          refreshTimer = null;
+          triggerInvalidation();
+        }, Math.max(200, 1200 - (now - lastRefresh)));
       }
     });
+
+    return () => {
+      unsub();
+      if (refreshTimer) clearTimeout(refreshTimer);
+    };
   }, [queryClient, sessionId, roomId]);
 
   useEffect(() => {
@@ -540,9 +619,36 @@ function ProctorLobbyContent() {
 
       // Real-time connect / disconnect notifications (LAN poll — no internet required).
       if (checkInReady.current) {
-        const currentIds = new Set(lobbyQuery.data.students.map((s) => s.id));
+        const currentStudents = lobbyQuery.data.students;
+        const currentIds = new Set(currentStudents.map((s) => s.id));
+        const eligibleRequests = currentStudents.filter(
+          (student) =>
+            student.approvalStatus === 'pending' &&
+            student.isConnected !== false &&
+            student.status !== 'not_arrived',
+        );
+        const eligibleRequestIds = new Set(eligibleRequests.map((student) => student.id));
 
-        const newcomers = lobbyQuery.data.students.filter(
+        // Assigned roster rows start as `not_arrived`. When the same student
+        // joins, the row changes to `waiting` instead of receiving a new ID.
+        // Detect that transition explicitly so the approval prompt cannot be
+        // missed, and keep the queue deduplicated for repeated polling.
+        eligibleRequests.forEach((student) => {
+          const previous = knownStudentMeta.current.get(student.id);
+          const becameEligible =
+            !previous ||
+            previous.status === 'not_arrived' ||
+            previous.isConnected === false ||
+            previous.approvalRequestedAt !== student.approvalRequestedAt;
+          if (becameEligible) queueAdmissionRequest(student);
+        });
+        replacePendingRequests(
+          pendingRequestsRef.current
+            .filter((request) => eligibleRequestIds.has(request.id))
+            .map((request) => currentStudents.find((student) => student.id === request.id) ?? request),
+        );
+
+        const newcomers = currentStudents.filter(
           (s) => !knownStudentIds.current.has(s.id),
         );
         newcomers.forEach((student) => {
@@ -562,9 +668,7 @@ function ProctorLobbyContent() {
                     : student.status === 'finished'
                       ? 'Done'
                       : student.status.replace(/_/g, ' ');
-          if (student.approvalStatus === 'pending' && student.isConnected !== false && student.status !== 'not_arrived') {
-            setAdmissionRequest(student);
-          } else {
+          if (!eligibleRequestIds.has(student.id)) {
             pushNotification(
               'connect',
               'Student Connected',
@@ -588,7 +692,7 @@ function ProctorLobbyContent() {
           );
         });
 
-        lobbyQuery.data.students.forEach((s) => {
+        currentStudents.forEach((s) => {
           const prevStatus = knownStudentStatus.current.get(s.id);
           if (
             prevStatus &&
@@ -659,7 +763,11 @@ function ProctorLobbyContent() {
     const cloudSessionId =
       lobby?.session?.examSessionId ??
       (examSessionId ? Number(examSessionId) : null);
-    if (!peerHost && !cloudSessionId) return;
+    // peerHost is expected to become null while DHCP moves between networks.
+    // Keep the monitor alive from the local session identity instead; offline
+    // rooms do not have a cloud session id to fall back to.
+    const hasLocalSession = Boolean(hosting.code) && lobby?.status !== 'ended';
+    if (!hasLocalSession && !cloudSessionId) return;
 
     return startProctorHostIpSync({
       examSessionId:
@@ -672,7 +780,8 @@ function ProctorLobbyContent() {
       },
     });
   }, [
-    peerHost,
+    hosting.code,
+    lobby?.status,
     lobby?.session?.examSessionId,
     examSessionId,
     queryClient,
@@ -1568,11 +1677,11 @@ function ProctorLobbyContent() {
             ) : null}
 
             {lobby.status === 'ended' ? (
-              <Card style={styles.endedBanner}>
-                <CheckCircle2 size={22} color={colors.success} />
+              <Card style={[styles.endedBanner, { backgroundColor: isDark ? themeColors.card : '#ECFDF5', borderColor: themeColors.success }]}>
+                <CheckCircle2 size={22} color={themeColors.success} />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.endedTitle}>Examination ended</Text>
-                  <Text style={styles.endedBody}>
+                  <Text style={[styles.endedTitle, { color: themeColors.success }]}>Examination ended</Text>
+                  <Text style={[styles.endedBody, { color: themeColors.textSecondary }]}>
                     This session is closed
                     {lobby.endedAt ? ` · ${formatTime(lobby.endedAt)}` : ''}
                     . Sync results to Admin when you are back online.
@@ -1582,23 +1691,23 @@ function ProctorLobbyContent() {
             ) : null}
 
             {lobby.status === 'in_progress' ? (
-              <Card style={styles.timerCard}>
-                <Text style={styles.timerCardTitle} maxFontSizeMultiplier={1.2}>
+              <Card style={[styles.timerCard, { backgroundColor: themeColors.card, borderColor: themeColors.cardBorder }]}>
+                <Text style={[styles.timerCardTitle, { color: themeColors.textMuted }]} maxFontSizeMultiplier={1.2}>
                   Time remaining
                 </Text>
-                <Text style={styles.timerCardValue} maxFontSizeMultiplier={1.2}>
+                <Text style={[styles.timerCardValue, { color: themeColors.accent }]} maxFontSizeMultiplier={1.2}>
                   {formatRemaining(remainingLive)}
                 </Text>
               </Card>
             ) : null}
 
             {/* D. MONITORING — equal-width 2×2 tiles + the selected status roster */}
-            <View style={styles.monitoringSection}>
+            <View style={[styles.monitoringSection, { backgroundColor: themeColors.card, borderColor: themeColors.cardBorder }]}>
               <View style={styles.monitoringHeaderRow}>
-                <Text style={styles.monitoringSectionTitle} maxFontSizeMultiplier={1.2}>
+                <Text style={[styles.monitoringSectionTitle, { color: themeColors.textPrimary }]} maxFontSizeMultiplier={1.2}>
                   Monitoring
                 </Text>
-                <Text style={styles.monitoringSectionSubtitle} maxFontSizeMultiplier={1.2}>
+                <Text style={[styles.monitoringSectionSubtitle, { color: themeColors.textMuted }]} maxFontSizeMultiplier={1.2}>
                   Tap a status to see students
                 </Text>
               </View>
@@ -1758,8 +1867,8 @@ function ProctorLobbyContent() {
                             <Text style={styles.statusRowId} maxFontSizeMultiplier={1.25}>
                               {item.studentId || item.applicantCode || 'No applicant number'}
                             </Text>
-                            <View style={styles.examSetChip}>
-                              <Text style={styles.examSetChipText}>{item.examSet || 'Set 1'}</Text>
+                            <View style={[styles.examSetChip, { backgroundColor: isDark ? themeColors.accentMuted : themeColors.accent }]}>
+                              <Text style={[styles.examSetChipText, { color: isDark ? themeColors.accent : '#FFFFFF' }]}>{item.examSet || 'Set 1'}</Text>
                             </View>
                           </View>
                         </View>
@@ -2027,42 +2136,39 @@ function ProctorLobbyContent() {
         visible={Boolean(admissionRequest)}
         animationType="fade"
         transparent
-        onRequestClose={() => setAdmissionRequest(null)}
+        accessibilityViewIsModal
+        onRequestClose={() => undefined}
       >
         <View style={styles.detailOverlay}>
-          <PressableBox style={StyleSheet.absoluteFill} onPress={() => setAdmissionRequest(null)} />
+          <PressableBox style={StyleSheet.absoluteFill} onPress={() => undefined} />
           {admissionRequest ? (
             <View style={[styles.detailSheet, { backgroundColor: themeColors.card }]}>
               <View style={styles.detailHeader}>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.detailTitle, { color: themeColors.textPrimary }]}>Student Joining Request</Text>
-                  <Text style={[styles.detailSubtitle, { color: themeColors.textSecondary }]}>Review this applicant before admitting them to the room.</Text>
+                  <Text style={[styles.detailSubtitle, { color: themeColors.textSecondary }]}>A new applicant is waiting for your decision.</Text>
                 </View>
-                <PressableBox onPress={() => setAdmissionRequest(null)} accessibilityLabel="Close joining request">
-                  <X size={22} color={themeColors.textSecondary} />
-                </PressableBox>
               </View>
               <DetailRow label="Name" value={admissionRequest.fullName} />
               <DetailRow label="Applicant" value={admissionRequest.studentId || admissionRequest.applicantCode || '—'} />
-              <DetailRow label="Room" value={lobby?.roomName || 'Assigned room'} />
+              <DetailRow label="Program/Course" value={admissionRequest.programName || admissionRequest.programCode || 'Not provided'} />
+              <DetailRow label="Room" value={lobby?.roomName || lobby?.session?.roomName || 'Assigned room'} />
               <DetailRow label="Examination Set" value={admissionRequest.examSet || 'Set 1'} />
-              <DetailRow label="Status" value="Pending approval" />
+              <DetailRow label="Status" value="Waiting for approval" />
               <View style={styles.detailActions}>
                 <Button
-                  title="Approve & Mark Present"
+                  title="Approve Student"
                   onPress={async () => {
                     const request = admissionRequest;
                     await updateApproval(request, 'approved');
-                    setAdmissionRequest(null);
                   }}
                 />
                 <Button
-                  title="Decline Entry"
+                  title="Decline"
                   variant="outline"
                   onPress={async () => {
                     const request = admissionRequest;
                     await updateApproval(request, 'declined');
-                    setAdmissionRequest(null);
                   }}
                 />
               </View>
@@ -2118,7 +2224,7 @@ function ProctorLobbyContent() {
                     : selected.status === 'disconnected'
                       ? 'Disconnected'
                       : selected.status === 'finished'
-                        ? 'Done'
+                        ? 'Submitted'
                         : selected.status.replace('_', ' ')
                 }
               />
@@ -2146,59 +2252,14 @@ function ProctorLobbyContent() {
               ) : null}
 
               <View style={styles.detailActions}>
-                {/* Attendance marker — kept reachable now that roster rows are compact */}
-                {/* <PressableBox
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: attendedIds.has(selected.id) }}
-                  accessibilityLabel="Toggle verified in room"
-                  onPress={() => toggleAttendance(selected.id)}
-                  style={[
-                    styles.attendanceToggle,
-                    {
-                      backgroundColor: attendedIds.has(selected.id)
-                        ? LOBBY_STATUS_TONES.submitted.bg
-                        : LOBBY.card,
-                      borderColor: attendedIds.has(selected.id)
-                        ? LOBBY_STATUS_TONES.submitted.text
-                        : LOBBY.border,
-                    },
-                  ]}
-                >
-                  <View style={styles.attendanceToggleInner}>
-                    {attendedIds.has(selected.id) ? (
-                      <Check size={16} color={LOBBY_STATUS_TONES.submitted.text} strokeWidth={2.6} />
-                    ) : (
-                      <UserCheck size={16} color={LOBBY.muted} strokeWidth={2.2} />
-                    )}
-                    <Text
-                      style={[
-                        styles.attendanceToggleText,
-                        {
-                          color: attendedIds.has(selected.id)
-                            ? LOBBY_STATUS_TONES.submitted.text
-                            : LOBBY.ink,
-                        },
-                      ]}
-                      maxFontSizeMultiplier={1.2}
-                    >
-                      {attendedIds.has(selected.id) ? 'Verified in room' : 'Mark as verified in room'}
-                    </Text>
-                  </View>
-                </PressableBox> */}
                 <DetailRow
-                  label="Admission"
-                  value={selected.approvalStatus === 'approved'
-                    ? 'Approved · Present'
-                    : selected.approvalStatus === 'declined'
-                      ? 'Declined · Blocked'
-                      : 'Pending approval'}
+                  label="Attendance"
+                  value={selected.attendanceStatus === 'present'
+                    ? 'Present'
+                    : selected.attendanceStatus === 'absent'
+                      ? 'Absent'
+                      : 'Not Arrived'}
                 />
-                {selected.approvalStatus !== 'approved' ? (
-                  <Button title="Approve & Mark Present" onPress={() => void updateApproval(selected, 'approved')} />
-                ) : null}
-                {selected.approvalStatus !== 'declined' ? (
-                  <Button title="Decline Entry" variant="outline" onPress={() => void updateApproval(selected, 'declined')} />
-                ) : null}
                 {selected.status === 'disconnected' ? (
                   <Button
                     title="Issue new reconnect PIN"
@@ -2362,11 +2423,16 @@ function ProctorLobbyContent() {
 
             <ScrollView style={styles.directoryList} contentContainerStyle={styles.directoryListContent}>
               {searchableExamSetStudents.length ? searchableExamSetStudents.map((student) => {
+                const attendance = student.attendanceStatus === 'present'
+                  ? 'Present'
+                  : student.attendanceStatus === 'absent'
+                    ? 'Absent'
+                    : 'Not Arrived';
                 const admission = student.approvalStatus === 'approved'
-                  ? (student.attendanceStatus === 'present' ? 'Present' : 'Approved')
+                  ? 'Admitted'
                   : student.approvalStatus === 'declined'
                     ? 'Declined'
-                    : 'Pending approval';
+                    : 'Awaiting approval';
                 const status = student.status === 'taking_exam'
                   ? 'Answering'
                   : student.status === 'finished'
@@ -2401,7 +2467,10 @@ function ProctorLobbyContent() {
                           {student.examSet || 'Set 1'}
                         </Text>
                       </View>
-                      <Text style={[styles.directoryAdmission, { color: student.approvalStatus === 'approved' ? themeColors.success : student.approvalStatus === 'declined' ? themeColors.danger : themeColors.warning }]}>
+                      <Text style={[styles.directoryAdmission, { color: student.attendanceStatus === 'present' ? themeColors.success : student.attendanceStatus === 'absent' ? themeColors.danger : themeColors.warning }]}>
+                        {attendance}
+                      </Text>
+                      <Text style={[styles.directoryStatus, { color: student.approvalStatus === 'approved' ? themeColors.success : student.approvalStatus === 'declined' ? themeColors.danger : themeColors.warning }]}>
                         {admission}
                       </Text>
                       <Text style={[styles.directoryStatus, { color: themeColors.textMuted }]}>
@@ -2430,47 +2499,47 @@ function ProctorLobbyContent() {
         animationType="slide"
         onRequestClose={() => setSwapModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: themeColors.overlay }]}>
           <PressableBox style={StyleSheet.absoluteFill} onPress={() => setSwapModalVisible(false)} />
-          <View style={styles.swapModalCard}>
+          <View style={[styles.swapModalCard, { backgroundColor: isDark ? themeColors.modal : '#FFFFFF', borderColor: themeColors.cardBorder }]}>
             <View style={styles.swapModalHeader}>
-              <Text style={styles.swapModalTitle}>Switch Active Room</Text>
+              <Text style={[styles.swapModalTitle, { color: themeColors.textPrimary }]}>Switch Active Room</Text>
               <PressableBox onPress={() => setSwapModalVisible(false)} hitSlop={8}>
-                <X size={20} color="#71717A" />
+                <X size={20} color={themeColors.textSecondary} />
               </PressableBox>
             </View>
-            <Text style={styles.swapModalSub}>
+            <Text style={[styles.swapModalSub, { color: themeColors.textMuted }]}>
               Migrate local Wi-Fi broadcasting and student check-ins to a different room session.
             </Text>
 
             {/* CARD 1: CURRENT ACTIVE ROOM */}
-            <View style={styles.swapCard}>
-              <Text style={styles.swapCardTag}>CURRENT ACTIVE ROOM</Text>
+            <View style={[styles.swapCard, { backgroundColor: isDark ? themeColors.cardMuted : '#F8F9FA', borderColor: themeColors.cardBorder }]}>
+              <Text style={[styles.swapCardTag, { color: themeColors.accent }]}>CURRENT ACTIVE ROOM</Text>
               <View style={styles.swapCardMain}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.swapCardTitle}>
+                  <Text style={[styles.swapCardTitle, { color: themeColors.textPrimary }]}>
                     {lobby.session?.roomName || lobby.roomName || 'Room 101'}
                   </Text>
-                  <Text style={styles.swapCardMeta}>
+                  <Text style={[styles.swapCardMeta, { color: themeColors.textMuted }]}>
                     {examDate} · {sessionTime} · {lobby.registeredCount || studentsList.length} Registered Candidates
                   </Text>
                 </View>
-                <View style={styles.swapActiveBadge}>
-                  <Text style={styles.swapActiveBadgeText}>Active</Text>
+                <View style={[styles.swapActiveBadge, { backgroundColor: themeColors.successMuted }]}>
+                  <Text style={[styles.swapActiveBadgeText, { color: themeColors.success }]}>Active</Text>
                 </View>
               </View>
             </View>
 
             {/* CIRCULAR SWAP ICON */}
             <View style={styles.swapCircleWrapper}>
-              <View style={styles.swapCircle}>
-                <ArrowDownUp size={18} color="#FFFFFF" />
+              <View style={[styles.swapCircle, { backgroundColor: themeColors.accent, borderColor: isDark ? themeColors.modal : '#FFFFFF' }]}>
+                <ArrowDownUp size={18} color={isDark ? themeColors.background : '#FFFFFF'} />
               </View>
             </View>
 
             {/* CARD 2: SWITCH TO ROOM */}
-            <View style={styles.swapCard}>
-              <Text style={styles.swapCardTag}>SWITCH TO ROOM</Text>
+            <View style={[styles.swapCard, { backgroundColor: isDark ? themeColors.cardMuted : '#F8F9FA', borderColor: themeColors.cardBorder }]}>
+              <Text style={[styles.swapCardTag, { color: themeColors.accent }]}>SWITCH TO ROOM</Text>
               <View style={styles.roomSelectGrid}>
                 {availableRooms.map((rm) => {
                   const isSelected = targetRoomId === rm.id;
@@ -2479,7 +2548,10 @@ function ProctorLobbyContent() {
                       key={rm.id}
                       style={[
                         styles.roomSelectOption,
-                        isSelected && styles.roomSelectOptionActive,
+                        {
+                          backgroundColor: isDark ? themeColors.modal : '#FFFFFF',
+                          borderColor: isSelected ? themeColors.accent : themeColors.cardBorder,
+                        },
                       ]}
                       onPress={() => setTargetRoomId(rm.id)}
                     >
@@ -2487,19 +2559,20 @@ function ProctorLobbyContent() {
                         <Text
                           style={[
                             styles.roomOptionName,
-                            isSelected && styles.roomOptionNameActive,
+                            { color: themeColors.textPrimary },
+                            isSelected && { color: themeColors.accent },
                           ]}
                           numberOfLines={1}
                         >
                           {rm.name}
                         </Text>
-                        <Text style={styles.roomOptionCap}>
+                        <Text style={[styles.roomOptionCap, { color: themeColors.textMuted }]}>
                           Capacity: {rm.capacity} Applicants
                         </Text>
                       </View>
                       {isSelected && (
-                        <View style={styles.roomCheckBadge}>
-                          <Check size={14} color="#FFFFFF" />
+                        <View style={[styles.roomCheckBadge, { backgroundColor: themeColors.accent }]}>
+                          <Check size={14} color={isDark ? themeColors.background : '#FFFFFF'} />
                         </View>
                       )}
                     </PressableBox>
@@ -2509,8 +2582,8 @@ function ProctorLobbyContent() {
             </View>
 
             {/* DETAIL ROW */}
-            <View style={styles.swapDetailNotice}>
-              <Text style={styles.swapNoticeText}>
+            <View style={[styles.swapDetailNotice, { backgroundColor: isDark ? themeColors.cardMuted : '#F4F5F7' }]}>
+              <Text style={[styles.swapNoticeText, { color: themeColors.textMuted }]}>
                 The local HTTP server and WebSocket beacon will immediately rebind to the selected room.
               </Text>
             </View>
@@ -2522,7 +2595,6 @@ function ProctorLobbyContent() {
               size="lg"
               fullWidth
               onPress={handleConfirmRoomSwitch}
-              style={{ backgroundColor: colors.primary }}
             />
           </View>
         </View>
@@ -2538,21 +2610,21 @@ function ProctorLobbyContent() {
         animationType="slide"
         onRequestClose={() => setCodeModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: themeColors.overlay }]}>
           <PressableBox style={StyleSheet.absoluteFill} onPress={() => setCodeModalVisible(false)} />
-          <View style={styles.codeModalCard}>
+          <View style={[styles.codeModalCard, { backgroundColor: isDark ? themeColors.modal : '#FFFFFF', borderColor: themeColors.cardBorder }]}>
             <View style={styles.swapModalHeader}>
-              <Text style={styles.swapModalTitle}>Room Access Code</Text>
+              <Text style={[styles.swapModalTitle, { color: themeColors.textPrimary }]}>Room Access Code</Text>
               <PressableBox onPress={() => setCodeModalVisible(false)} hitSlop={8}>
-                <X size={20} color="#71717A" />
+                <X size={20} color={themeColors.textSecondary} />
               </PressableBox>
             </View>
-            <Text style={styles.swapModalSub}>
+            <Text style={[styles.swapModalSub, { color: themeColors.textMuted }]}>
               Enter a custom numeric access code or generate a random passkey for examinees.
             </Text>
 
             {/* LARGE CODE DISPLAY AREA */}
-            <View style={styles.keypadDisplayContainer}>
+            <View style={[styles.keypadDisplayContainer, { backgroundColor: isDark ? themeColors.cardMuted : '#F8F9FA', borderColor: themeColors.cardBorder }]}>
               <View style={styles.keypadDigitsRow}>
                 {[0, 1, 2, 3].map((idx) => {
                   const char = keypadCode[idx];
@@ -2562,16 +2634,18 @@ function ProctorLobbyContent() {
                       key={idx}
                       style={[
                         styles.keypadDigitBox,
-                        isCurrent && styles.keypadDigitBoxActive,
-                        char && styles.keypadDigitBoxFilled,
+                        {
+                          backgroundColor: isDark ? themeColors.modal : '#FFFFFF',
+                          borderColor: isCurrent || char ? themeColors.accent : themeColors.cardBorder,
+                        },
                       ]}
                     >
-                      <Text style={styles.keypadDigitText}>{char || '—'}</Text>
+                      <Text style={[styles.keypadDigitText, { color: themeColors.textPrimary }]}>{char || '—'}</Text>
                     </View>
                   );
                 })}
               </View>
-              <Text style={styles.keypadDisplayHint}>
+              <Text style={[styles.keypadDisplayHint, { color: themeColors.textMuted }]}>
                 {keypadCode.length >= 4 ? 'Ready to Apply' : `Enter ${Math.max(0, 4 - keypadCode.length)} more digits`}
               </Text>
             </View>
@@ -2588,7 +2662,13 @@ function ProctorLobbyContent() {
                   {row.map((btn) => (
                     <PressableBox
                       key={btn}
-                      style={styles.keypadBtn}
+                      style={[
+                        styles.keypadBtn,
+                        {
+                          backgroundColor: isDark ? themeColors.cardMuted : '#F0F2F5',
+                          borderColor: themeColors.cardBorder,
+                        },
+                      ]}
                       onPress={() => {
                         if (btn === 'C') handleKeypadClear();
                         else if (btn === '⌫') handleKeypadBackspace();
@@ -2599,7 +2679,8 @@ function ProctorLobbyContent() {
                       <Text
                         style={[
                           styles.keypadBtnText,
-                          (btn === 'C' || btn === '⌫') && styles.keypadSpecialBtnText,
+                          { color: themeColors.textPrimary },
+                          (btn === 'C' || btn === '⌫') && [styles.keypadSpecialBtnText, { color: themeColors.accent }],
                         ]}
                       >
                         {btn}
@@ -2616,13 +2697,13 @@ function ProctorLobbyContent() {
                 title="Randomize"
                 variant="outline"
                 onPress={handleKeypadRandom}
-                style={{ flex: 1, borderColor: '#333333', backgroundColor: '#1E1E1E' }}
+                style={{ flex: 1, borderColor: themeColors.cardBorder, backgroundColor: isDark ? themeColors.cardMuted : '#FFFFFF' }}
               />
               <Button
                 title="Set Access Code"
                 variant="primary"
                 onPress={handleApplyCustomCode}
-                style={{ flex: 2, backgroundColor: '#7A1F2B' }}
+                style={{ flex: 2, backgroundColor: themeColors.accent }}
               />
             </View>
           </View>
@@ -3632,12 +3713,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 2,
     borderRadius: 6,
-    backgroundColor: '#8B0000',
   },
   examSetChipText: {
     fontSize: 10,
     fontWeight: '700',
-    color: '#FFFFFF',
     letterSpacing: 0.3,
   },
   statusRowPill: {
@@ -3749,21 +3828,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // Student detail sheet — attendance marker
-  attendanceToggle: {
-    minHeight: 46,
-    paddingHorizontal: 14,
-    justifyContent: 'center',
-    borderRadius: 14,
-    borderWidth: 1,
-  },
-  attendanceToggleInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  attendanceToggleText: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
 });

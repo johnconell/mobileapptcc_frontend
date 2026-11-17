@@ -14,6 +14,7 @@ import {
   Poppins_600SemiBold,
 } from '@expo-google-fonts/poppins';
 import { AppProviders } from '@/shared/providers/AppProviders';
+import { ThemeProvider, useThemeTokens } from '@/shared/contexts/ThemeContext';
 import { hydrateApiBaseUrl } from '@/shared/services/api';
 import { useSettingsStore } from '@/features/settings/stores/settingsStore';
 import { colors } from '@/shared/theme';
@@ -177,6 +178,31 @@ function AutomaticResultSync() {
   return null;
 }
 
+function ThemedAppContent() {
+  const { isDark, theme } = useThemeTokens();
+  return (
+    <>
+      <ExamFlowKeepAwake />
+      <AutomaticResultSync />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: theme.surface0 },
+          animation: 'fade',
+        }}
+      >
+        <Stack.Screen name="index" />
+        <Stack.Screen name="offline-prepare" />
+        <Stack.Screen name="(student)" />
+        <Stack.Screen name="(proctor)" />
+        <Stack.Screen name="practice" />
+      </Stack>
+      <LocalTestingBanner />
+    </>
+  );
+}
+
 export default function RootLayout() {
   const hydrate = useSettingsStore((s) => s.hydrate);
   const [startupError, setStartupError] = useState(false);
@@ -249,22 +275,9 @@ export default function RootLayout() {
     <ErrorBoundary fallbackTitle="The app needs to recover" fallbackMessage="An unexpected screen error occurred. Your examination data is kept locally; try again or reopen the app.">
       <GestureHandlerRootView style={{ flex: 1 }}>
         <AppProviders>
-          <ExamFlowKeepAwake />
-          <AutomaticResultSync />
-          <StatusBar style="dark" />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: colors.background },
-              animation: 'fade',
-            }}
-          >
-            <Stack.Screen name="index" />
-            <Stack.Screen name="offline-prepare" />
-            <Stack.Screen name="(student)" />
-            <Stack.Screen name="(proctor)" />
-          </Stack>
-          <LocalTestingBanner />
+          <ThemeProvider>
+            <ThemedAppContent />
+          </ThemeProvider>
         </AppProviders>
       </GestureHandlerRootView>
     </ErrorBoundary>

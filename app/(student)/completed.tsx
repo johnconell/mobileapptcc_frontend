@@ -1,22 +1,18 @@
 import React from 'react';
-import { Text, View, StyleSheet } from 'react-native';
+import { Pressable, Text, View, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import Animated, { FadeInDown } from 'react-native-reanimated';
-import { ShieldAlert, Mail } from 'lucide-react-native';
-import {
-  ExamProcessButton,
-  ExamProcessChrome,
-  ExamProcessOk,
-} from '@/features/examinations/components/ExamProcessChrome';
-import { SuccessIllustration } from '@/features/examinations/components/SuccessIllustration';
+import { Check, Mail, ShieldAlert } from 'lucide-react-native';
 import { clearApplicantExamMaterial } from '@/features/applicants/services/applicantExamCleanup';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore } from '@/features/examinations/stores/examStore';
 import { ExamSubmissionStore } from '@/features/examinations/services/examSubmissionStore';
-import { examProcess } from '@/shared/theme/examProcess';
 import { releaseExamSessionRestrictions } from '@/features/examinations/services/examSessionRestrictions';
-
-const AUTO_HOME_SECONDS = 12;
+import { ExamineeRedesignChrome } from '@/features/examinations/components/ExamineeRedesignChrome';
+import {
+  examineeRedesignLayout,
+  useExamineeRedesignTheme,
+} from '@/shared/theme/examineeRedesign';
 
 export default function CompletedScreen() {
   const router = useRouter();
@@ -24,6 +20,7 @@ export default function CompletedScreen() {
   const terminationReason = useExamStore((s) => s.terminationReason);
   const resetStudent = useStudentStore((s) => s.reset);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
+  const theme = useExamineeRedesignTheme();
 
   const terminated =
     terminationReason === 'policy_violation' || terminationReason === 'proctor_terminated';
@@ -36,84 +33,129 @@ export default function CompletedScreen() {
 
   const goHome = React.useCallback(() => {
     void (async () => {
-      await releaseExamSessionRestrictions('session_ended').catch(() => undefined);
-      await clearApplicantExamMaterial().catch(() => undefined);
-      const submission = await ExamSubmissionStore.load().catch((error) => {
-        console.warn('[SUBMISSION] Could not inspect the completed receipt before cleanup:', {
-          errorName: error instanceof Error ? error.name : 'StorageError',
-        });
-        return null;
-      });
-      if (submission?.status === 'confirmed') {
-        await ExamSubmissionStore.clear().catch((error) => {
-          console.warn('[SUBMISSION] Confirmed receipt could not be cleared after acknowledgement:', {
+      try {
+        await clearApplicantExamMaterial().catch(() => undefined);
+        const submission = await ExamSubmissionStore.load().catch((error) => {
+          console.warn('[SUBMISSION] Could not inspect the completed receipt before cleanup:', {
             errorName: error instanceof Error ? error.name : 'StorageError',
           });
+          return null;
         });
+        if (submission?.status === 'confirmed') {
+          await ExamSubmissionStore.clear().catch((error) => {
+            console.warn('[SUBMISSION] Confirmed receipt could not be cleared after acknowledgement:', {
+              errorName: error instanceof Error ? error.name : 'StorageError',
+            });
+          });
+        }
+        resetExam();
+        resetStudent();
+        router.replace('/');
+      } finally {
+        await releaseExamSessionRestrictions('session_ended').catch(() => undefined);
       }
-      resetExam();
-      resetStudent();
-      router.replace('/');
     })();
   }, [resetExam, resetStudent, router]);
 
-  const [countdown, setCountdown] = React.useState(AUTO_HOME_SECONDS);
+  const title = terminated
+    ? terminationReason === 'proctor_terminated'
+      ? 'Your Examination Was Ended by the Proctor'
+      : 'Your Examination Was Terminated'
+    : timeExpired
+      ? 'Time Is Up — Examination Submitted'
+      : 'Exam Submitted';
 
-  React.useEffect(() => {
-    // Policy violations require an explicit acknowledgement. Other endings
-    // display the result notice briefly, then return to the landing page.
-    if (mustAcknowledgeTermination) return undefined;
-    if (countdown <= 0) {
-      goHome();
-      return undefined;
-    }
-    const id = setTimeout(() => setCountdown((n) => n - 1), 1000);
-    return () => clearTimeout(id);
-  }, [mustAcknowledgeTermination, countdown, goHome]);
+  const subtitle = terminated
+    ? null
+    : timeExpired
+      ? 'Your answers were saved and submitted when the timer reached zero.'
+      : 'Your answers were saved and verified.';
+
+  const nextSteps = terminated
+    ? [
+        'The proctor reviews the saved answers',
+        'TCC emails your score if applicable',
+        'Follow any instructions in the email',
+      ]
+    : timeExpired
+      ? [
+          'Your answers were submitted automatically',
+          'The proctor syncs the results',
+          'TCC emails your score',
+        ]
+      : ['Proctor syncs the results', 'TCC emails your score', 'Follow the admission steps in the email'];
 
   return (
-    <ExamProcessChrome
+    <ExamineeRedesignChrome
       step={5}
-      title={terminated ? 'Examination ended' : 'Examination complete'}
+      title=""
       stepLabel="Step 6 of 6 · Done"
-    >
-      {terminated ? (
-        <View style={styles.termIconWrap}>
-          <ShieldAlert size={40} color={examProcess.error} />
+      footer={
+        <View style={styles.footer}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={terminated ? 'I Understand and Return Home' : 'Return Home'}
+            onPress={goHome}
+            style={[styles.primaryButton, { backgroundColor: theme.primary }]}
+          >
+            <Text style={[styles.primaryButtonText, { color: theme.white }]}>
+              {terminated ? 'I Understand — Return Home' : 'Return Home'}
+            </Text>
+          </Pressable>
         </View>
-      ) : (
-        <SuccessIllustration />
-      )}
+      }
+    >
+      <Animated.View entering={FadeInDown.delay(120).springify()} style={styles.content}>
+        <View
+          style={[
+            styles.resultIcon,
+            { backgroundColor: terminated ? theme.warningBackground : theme.primary },
+          ]}
+        >
+          {terminated ? (
+            <ShieldAlert size={46} color={theme.error} />
+          ) : (
+            <Check size={58} color={theme.gold} strokeWidth={3.2} />
+          )}
+        </View>
 
-      <Animated.View entering={FadeInDown.delay(120).springify()} style={styles.copy}>
-        <Text style={[styles.title, terminated && styles.titleDanger]}>
-          {terminated
-            ? terminationReason === 'proctor_terminated'
-              ? 'Your Examination Was Ended by the Proctor'
-              : 'Your Examination Was Terminated'
-            : timeExpired
-              ? 'Time Is Up — Examination Submitted'
-              : 'Examination Submitted Successfully'}
+        <Text style={[styles.title, { color: theme.text }, terminated && { color: theme.error }]}>
+          {title}
         </Text>
+        {subtitle ? (
+          <Text style={[styles.subtitle, { color: theme.secondaryText }]}>{subtitle}</Text>
+        ) : null}
 
         {terminated ? (
-          <View style={styles.noticeCard}>
-            <Text style={styles.noticeTitle}>Important notice</Text>
-            <Text style={styles.noticeBody}>
+          <View
+            style={[
+              styles.noticeCard,
+              { borderColor: theme.error, backgroundColor: theme.warningBackground },
+            ]}
+          >
+            <Text style={[styles.noticeTitle, { color: theme.error }]}>Important notice</Text>
+            <Text style={[styles.noticeBody, { color: theme.text }]}>
               The proctor ended your examination session. Your answers on this phone were saved for review.
             </Text>
-            <Text style={styles.noticeBody}>
+            <Text style={[styles.noticeBody, { color: theme.text }]}>
               Pakibasa nang mabuti: tapos na ang inyong pagsusulit sa device na ito. Hindi na kayo
               makakabalik sa exam.
             </Text>
           </View>
         ) : null}
 
-        <View style={styles.gmailCard}>
-          <Mail size={18} color={examProcess.accent} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.gmailTitle}>Hintayin ang resulta sa Gmail</Text>
-            <Text style={styles.gmailBody}>
+        <View
+          style={[
+            styles.gmailCard,
+            { borderColor: theme.cardBorder, backgroundColor: theme.secondaryCard },
+          ]}
+        >
+          <View style={[styles.gmailIcon, { backgroundColor: theme.primarySoft }]}>
+            <Mail size={22} color={theme.primary} />
+          </View>
+          <View style={styles.gmailCopy}>
+            <Text style={[styles.gmailTitle, { color: theme.text }]}>Hintayin ang resulta sa Gmail</Text>
+            <Text style={[styles.gmailBody, { color: theme.secondaryText }]}>
               Maghihintay lang kayo sa result sa inyong Gmail
               {verifiedStudent?.email?.includes('@') ? ` (${gmailHint})` : ''}. Please wait for
               the official examination result in your Gmail — do not leave until you have read this
@@ -122,83 +164,146 @@ export default function CompletedScreen() {
           </View>
         </View>
 
-        <ExamProcessOk visible={!mustAcknowledgeTermination}>
-          Returning to the start in {countdown}s…
-        </ExamProcessOk>
+        {!mustAcknowledgeTermination ? (
+          <View style={[styles.nextCard, { borderColor: theme.cardBorder, backgroundColor: theme.card }]}>
+            <Text style={[styles.nextTitle, { color: theme.text }]}>What happens next</Text>
+            {nextSteps.map((step, index) => (
+              <View key={step} style={styles.nextRow}>
+                <View style={[styles.nextNumber, { backgroundColor: theme.primarySoft }]}>
+                  <Text style={[styles.nextNumberText, { color: theme.primary }]}>{index + 1}</Text>
+                </View>
+                <Text style={[styles.nextText, { color: theme.text }]}>{step}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
       </Animated.View>
-
-      <ExamProcessButton
-        title={terminated ? 'I Understand — Return Home' : 'Return Home'}
-        variant="submit"
-        onPress={goHome}
-      />
-    </ExamProcessChrome>
+    </ExamineeRedesignChrome>
   );
 }
 
 const styles = StyleSheet.create({
-  copy: { alignItems: 'center', gap: 12, marginVertical: 12 },
-  termIconWrap: {
-    alignSelf: 'center',
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: examProcess.dangerSoft,
+  content: {
+    alignItems: 'center',
+    gap: examineeRedesignLayout.gap,
+    paddingTop: 14,
+  },
+  resultIcon: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   title: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: examProcess.ink,
+    width: '100%',
+    fontSize: 30,
+    lineHeight: 38,
+    fontFamily: 'Poppins_700Bold',
     textAlign: 'center',
-    lineHeight: 24,
   },
-  titleDanger: { color: examProcess.error, fontSize: 17 },
+  subtitle: {
+    width: '100%',
+    fontSize: 17,
+    lineHeight: 25,
+    fontFamily: 'Poppins_400Regular',
+    textAlign: 'center',
+  },
   noticeCard: {
     alignSelf: 'stretch',
-    borderRadius: 14,
+    borderRadius: examineeRedesignLayout.cardRadius,
     borderWidth: 1,
-    borderColor: '#FECACA',
-    backgroundColor: '#FEF2F2',
-    padding: 14,
-    gap: 8,
+    padding: examineeRedesignLayout.cardPadding,
+    gap: 9,
   },
   noticeTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: examProcess.error,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    fontSize: 17,
+    lineHeight: 24,
+    fontFamily: 'Poppins_700Bold',
   },
   noticeBody: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: examProcess.ink,
-    fontWeight: '500',
+    fontSize: 15,
+    lineHeight: 23,
+    fontFamily: 'Poppins_400Regular',
   },
   gmailCard: {
     alignSelf: 'stretch',
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 10,
-    borderRadius: 14,
+    gap: 12,
+    borderRadius: examineeRedesignLayout.cardRadius,
     borderWidth: 1,
-    borderColor: examProcess.cardBorder,
-    backgroundColor: examProcess.cardElevated,
-    padding: 14,
+    padding: examineeRedesignLayout.cardPadding,
+  },
+  gmailIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gmailCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
   },
   gmailTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: examProcess.ink,
-    marginBottom: 4,
+    fontSize: 17,
+    lineHeight: 24,
+    fontFamily: 'Poppins_700Bold',
   },
   gmailBody: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: examProcess.muted,
-    fontWeight: '500',
+    fontSize: 15,
+    lineHeight: 23,
+    fontFamily: 'Poppins_400Regular',
+  },
+  nextCard: {
+    alignSelf: 'stretch',
+    borderRadius: examineeRedesignLayout.cardRadius,
+    borderWidth: 1,
+    padding: examineeRedesignLayout.cardPadding,
+    gap: 14,
+  },
+  nextTitle: {
+    fontSize: 20,
+    lineHeight: 27,
+    fontFamily: 'Poppins_700Bold',
+  },
+  nextRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  nextNumber: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nextNumberText: {
+    fontSize: 17,
+    fontFamily: 'Poppins_700Bold',
+  },
+  nextText: {
+    flex: 1,
+    fontSize: 16,
+    lineHeight: 23,
+    fontFamily: 'Poppins_400Regular',
+  },
+  footer: {
+    paddingTop: 16,
+  },
+  primaryButton: {
+    minHeight: examineeRedesignLayout.buttonHeight,
+    borderRadius: examineeRedesignLayout.buttonRadius,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  primaryButtonText: {
+    fontSize: 18,
+    fontFamily: 'Poppins_700Bold',
   },
 });

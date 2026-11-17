@@ -309,6 +309,7 @@ export const ExamSubmissionCoordinator = {
         sessionId: current.sessionId,
         studentId: current.studentId,
         answers: current.answers,
+        choiceMaps: current.choiceMaps,
         idempotencyKey: current.idempotencyKey,
         attemptId: current.attemptId,
       });

@@ -5,9 +5,10 @@ import {
   TextInput,
   View,
   Pressable,
+  AppState,
+  Linking,
   KeyboardAvoidingView,
   Platform,
-  Dimensions,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -18,21 +19,30 @@ import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { ScheduleRepository } from '@/features/schedules/repositories/ScheduleRepository';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
-import {
-  ExamProcessActions,
-  ExamProcessButton,
-  ExamProcessChrome,
-} from '@/features/examinations/components/ExamProcessChrome';
+import { ExamineeRedesignChrome } from '@/features/examinations/components/ExamineeRedesignChrome';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { classifyPeerReconnectError } from '@/features/examinations/services/peerReconnectErrors';
-import { normalizeExaminationCode, parsePeerQr } from '@/features/examinations/services/peerExamServer';
+import {
+  normalizeExaminationCode,
+  parsePeerQr,
+  type PeerQrTarget,
+} from '@/features/examinations/services/peerExamServer';
 import { discoverPeerExamHostByCode } from '@/features/monitoring/services/peerLanDiscovery';
+import {
+  EXAM_WIFI_JOIN_MESSAGE,
+  getExamineeWifiState,
+  retainExamineeWifiUsage,
+  subscribeExamineeWifi,
+} from '@/features/monitoring/services/examineeWifiBinding';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import * as Network from 'expo-network';
 import { DeviceService } from '@/shared/services/DeviceService';
 import { appStorage } from '@/shared/services/storage';
 import { STORAGE_KEYS } from '@/shared/constants';
-import { examProcess } from '@/shared/theme/examProcess';
+import {
+  examineeRedesignLayout,
+  useExamineeRedesignTheme,
+} from '@/shared/theme/examineeRedesign';
 import { userFacingError } from '@/shared/utils/userFacingError';
 
 const codeSchema = z.object({
@@ -49,7 +59,24 @@ const codeSchema = z.object({
 type CodeForm = z.infer<typeof codeSchema>;
 type JoinMode = 'scan' | 'code';
 
-const FRAME = Math.min(Dimensions.get('window').width * 0.72, 280);
+const PROCTOR_UNREACHABLE = 'PROCTOR_UNREACHABLE';
+
+async function resolvePeerTarget(target: PeerQrTarget) {
+  await PeerExamClient.setTarget(target);
+  if (!(await PeerExamClient.ensureReachable(target))) {
+    throw new Error(PROCTOR_UNREACHABLE);
+  }
+  return PeerExamClient.requestWithRetry<{
+    schedule?: { id?: number; title?: string };
+    session?: { id?: number; roomId?: number };
+    examinationCode?: string;
+    status?: string;
+  }>('/resolve', {
+    method: 'POST',
+    body: { code: target.code },
+    timeoutMs: 3000,
+  });
+}
 
 export default function JoinExaminationScreen() {
   const router = useRouter();
@@ -57,13 +84,32 @@ export default function JoinExaminationScreen() {
   const reconnectMode = params.mode === 'reconnect';
   const initialMode: JoinMode = params.mode === 'code' ? 'code' : 'scan';
   const [mode, setMode] = useState<JoinMode>(initialMode);
+  const theme = useExamineeRedesignTheme();
   const [permission, requestPermission] = useCameraPermissions();
   const permissionRequestStarted = useRef(false);
   const [scanning, setScanning] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [wifiConnected, setWifiConnected] = useState<boolean | null>(null);
+  const [roomCodeFocused, setRoomCodeFocused] = useState(false);
   const setScannedSession = useStudentStore((s) => s.setScannedSession);
   const lastScanAt = useRef(0);
+
+  React.useEffect(() => {
+    let active = true;
+    void retainExamineeWifiUsage();
+    void getExamineeWifiState().then((state) => {
+      if (active) setWifiConnected(state.isWifi);
+    });
+    const unsubscribe = subscribeExamineeWifi((isWifi) => {
+      if (active) setWifiConnected(isWifi);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
 
   React.useEffect(() => {
     if (
@@ -76,8 +122,44 @@ export default function JoinExaminationScreen() {
       return;
     }
     permissionRequestStarted.current = true;
-    void requestPermission();
+    void requestPermission().then((result) => {
+      if (!result.granted) {
+        setCameraError(
+          result.canAskAgain
+            ? 'Camera access is needed to scan the proctor QR code.'
+            : 'Camera access is blocked for this app. Open Android settings and allow Camera, then return here.',
+        );
+      } else {
+        setCameraError(null);
+      }
+    });
   }, [mode, permission, requestPermission]);
+
+  React.useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active' || mode !== 'scan') return;
+      permissionRequestStarted.current = false;
+      setScanning(true);
+      if (permission?.granted) {
+        setCameraError(null);
+        return;
+      }
+      // A blocked permission can change while the applicant is in Android
+      // Settings. Re-query it on return so the camera remounts immediately.
+      if (permission?.canAskAgain === false) {
+        void requestPermission().then((result) => {
+          setCameraError(
+            result.granted
+              ? null
+              : 'Camera access is blocked for this app. Open Android settings and allow Camera, then return here.',
+          );
+        });
+      } else {
+        setCameraError(null);
+      }
+    });
+    return () => subscription.remove();
+  }, [mode, permission?.canAskAgain, permission?.granted, requestPermission]);
 
   const {
     control,
@@ -109,6 +191,13 @@ export default function JoinExaminationScreen() {
     setError(null);
 
     try {
+      await retainExamineeWifiUsage();
+      const wifiState = await getExamineeWifiState();
+      if (!wifiState.isWifi) {
+        setError('Connect to the exam WiFi.');
+        return;
+      }
+
       const rawInput = (input || '').trim();
       if (!rawInput) {
         throw new Error(type === 'code' ? 'Please enter an examination code.' : 'Invalid QR code.');
@@ -131,6 +220,9 @@ export default function JoinExaminationScreen() {
           }
 
           await PeerExamClient.setTarget(peerTarget);
+          if (!(await PeerExamClient.ensureReachable(peerTarget))) {
+            throw new Error(PROCTOR_UNREACHABLE);
+          }
           const pulse = await LobbyRepository.sendHeartbeat();
           if (pulse.removed || pulse.myStatus === 'terminated') {
             router.back();
@@ -152,40 +244,15 @@ export default function JoinExaminationScreen() {
           return;
         }
 
-        await PeerExamClient.setTarget(peerTarget);
-
+        const resolved = await resolvePeerTarget(peerTarget);
         let scheduleId = peerTarget.scheduleId;
         let roomId = peerTarget.roomId;
         let examCode = peerTarget.code;
-
-        try {
-          const resolved = await PeerExamClient.request<{
-            schedule?: { id?: number; title?: string };
-            session?: { id?: number; roomId?: number };
-            examinationCode?: string;
-            status?: string;
-          }>('/resolve', {
-            method: 'POST',
-            body: { code: peerTarget.code },
-            timeoutMs: 3500,
-          });
-          if (resolved.schedule?.id) scheduleId = Number(resolved.schedule.id);
-          if (resolved.session?.roomId || resolved.session?.id) {
-            roomId = Number(resolved.session.roomId || resolved.session.id);
-          }
-          if (resolved.examinationCode) examCode = resolved.examinationCode;
-        } catch (lanErr: any) {
-          const msg = lanErr instanceof Error ? lanErr.message : '';
-          if (msg.includes('ended') || msg.includes('not the one open')) {
-            throw lanErr;
-          }
-          const isAlive = await PeerExamClient.ping();
-          if (!isAlive) {
-            throw new Error(
-              `The proctor examination host at ${peerTarget.host} is not reachable on this local network. Check that the room is still open and scan the current QR code again.`,
-            );
-          }
+        if (resolved.schedule?.id) scheduleId = Number(resolved.schedule.id);
+        if (resolved.session?.roomId || resolved.session?.id) {
+          roomId = Number(resolved.session.roomId || resolved.session.id);
         }
+        if (resolved.examinationCode) examCode = resolved.examinationCode;
 
         await LobbyRepository.persistExaminationCode(examCode || trimmed.toUpperCase());
         await clearPriorSession();
@@ -256,20 +323,23 @@ export default function JoinExaminationScreen() {
       }
 
       if (cloudResolved?.peer_identity_public_key) {
-        await PeerExamClient.setTarget({
+        const cloudTarget: PeerQrTarget = {
           host: cloudResolved.proctor_local_ip,
           port: cloudResolved.proctor_local_port,
           code: cloudResolved.session_code,
           scheduleId: cloudResolved.schedule_id ?? null,
           roomId: cloudResolved.room_id ?? null,
           peerPublicKey: cloudResolved.peer_identity_public_key,
-        });
+        };
+        const resolved = await resolvePeerTarget(cloudTarget);
 
         if (cloudResolved.passkey) {
           useStudentStore.getState().setExamPasskey(cloudResolved.passkey);
         }
 
-        await LobbyRepository.persistExaminationCode(cloudResolved.session_code || code);
+        await LobbyRepository.persistExaminationCode(
+          resolved.examinationCode || cloudResolved.session_code || code,
+        );
 
         await clearPriorSession();
         setScannedSession(
@@ -284,30 +354,15 @@ export default function JoinExaminationScreen() {
       if (code) {
         const discovered = await discoverPeerExamHostByCode(code).catch(() => null);
         if (discovered) {
-          await PeerExamClient.setTarget(discovered);
-
+          const resolved = await resolvePeerTarget(discovered);
           let scheduleId = discovered.scheduleId;
           let roomId = discovered.roomId;
           let examCode = discovered.code || code;
-
-          try {
-            const resolved = await PeerExamClient.request<{
-              schedule?: { id?: number; title?: string };
-              session?: { id?: number; roomId?: number };
-              examinationCode?: string;
-            }>('/resolve', {
-              method: 'POST',
-              body: { code: discovered.code || code },
-              timeoutMs: 3500,
-            });
-            if (resolved.schedule?.id) scheduleId = Number(resolved.schedule.id);
-            if (resolved.session?.roomId || resolved.session?.id) {
-              roomId = Number(resolved.session.roomId || resolved.session.id);
-            }
-            if (resolved.examinationCode) examCode = resolved.examinationCode;
-          } catch {
-            // keep discovered
+          if (resolved.schedule?.id) scheduleId = Number(resolved.schedule.id);
+          if (resolved.session?.roomId || resolved.session?.id) {
+            roomId = Number(resolved.session.roomId || resolved.session.id);
           }
+          if (resolved.examinationCode) examCode = resolved.examinationCode;
 
           await LobbyRepository.persistExaminationCode(examCode || code);
 
@@ -323,21 +378,18 @@ export default function JoinExaminationScreen() {
       }
 
       await LobbyRepository.persistExaminationCode(code);
-      throw new Error(
-        'No active proctor room with this examination code was found on the current Wi-Fi. Check the code, join the proctor\'s exam network, and try again.',
-      );
+      throw new Error(PROCTOR_UNREACHABLE);
     } catch (err: any) {
       if (err?.status === 409) {
         setError('This student account has already joined this examination session from another device.');
       } else if (err?.status === 404) {
         setError('This code is no longer valid, ask your proctor for a new one.');
       } else {
-        const peerError = classifyPeerReconnectError(
-          err instanceof Error ? err.message : '',
-        );
+        const rawMessage = err instanceof Error ? err.message : '';
+        const peerError = classifyPeerReconnectError(rawMessage);
         setError(
-          peerError === 'Cannot reach the proctor'
-            ? "Cannot connect to the proctor's device. Check your local network connection and scan the current room QR code again."
+          rawMessage === PROCTOR_UNREACHABLE || peerError === 'Cannot reach the proctor'
+            ? 'Cannot reach the proctor. Make sure you are on the same WiFi as the proctor and try again.'
             : userFacingError(
                 err,
                 "Cannot connect to the proctor's device. Check your local network connection and scan the current room QR code again.",
@@ -381,63 +433,177 @@ export default function JoinExaminationScreen() {
   const close = () =>
     reconnectMode ? router.back() : router.replace('/');
 
-  const modeToggle = (
-    <View style={styles.modeToggle}>
-      <Pressable
-        style={[styles.modeSeg, mode === 'scan' && styles.modeSegOn]}
-        onPress={() => {
-          setMode('scan');
-          setError(null);
-          setScanning(true);
-        }}
-      >
-        <Text style={[styles.modeText, mode === 'scan' && styles.modeTextOn]}>Scan QR</Text>
-      </Pressable>
-      <Pressable
-        style={[styles.modeSeg, mode === 'code' && styles.modeSegOn]}
-        onPress={() => {
-          setMode('code');
-          setError(null);
-        }}
-      >
-        <Text style={[styles.modeText, mode === 'code' && styles.modeTextOn]}>Enter code</Text>
-      </Pressable>
-    </View>
-  );
-
   const cameraReady = Boolean(permission?.granted);
-  const title = mode === 'code' ? 'Enter Examination Code' : 'Scan QR Code';
-  const intro =
-    mode === 'code'
-      ? 'Type the room code from your proctor if the camera is unavailable.'
-      : 'Scan the proctor QR code shown in the examination room.';
-
   return (
     <KeyboardAvoidingView
-      style={styles.root}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={[styles.root, { backgroundColor: theme.background }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
     >
-      <ExamProcessChrome
+      <ExamineeRedesignChrome
         step={0}
-        title={title}
+        title="Join the Examination"
         stepLabel="Step 1 of 6 · Join"
         onBack={close}
         backLabel="Cancel"
+        footer={
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Continue"
+            disabled={isSubmitting || busy}
+            onPress={onVerifyCode}
+            style={[
+              styles.primaryButton,
+              { backgroundColor: theme.primary },
+              (isSubmitting || busy) && styles.buttonDisabled,
+            ]}
+          >
+            <Text style={[styles.primaryButtonText, { color: theme.white }]}>
+              {isSubmitting || busy ? (mode === 'scan' ? 'Scanning…' : 'Verifying…') : 'Continue'}
+            </Text>
+          </Pressable>
+        }
       >
-        <Text style={styles.intro}>{intro}</Text>
-        {modeToggle}
+        <Text style={[styles.intro, { color: theme.secondaryText }]}>
+          Scan the proctor&apos;s QR code, or type the room code below.
+        </Text>
+        {wifiConnected === false ? (
+          <View
+            style={[
+              styles.warningChip,
+              { backgroundColor: theme.warningBackground, borderColor: theme.warningBorder },
+            ]}
+          >
+            <Text style={[styles.warningText, { color: theme.error }]}>{EXAM_WIFI_JOIN_MESSAGE}</Text>
+          </View>
+        ) : null}
 
-        {mode === 'code' ? (
+        <View style={[styles.cameraBox, { backgroundColor: theme.cameraBackground }]}>
+          <View style={[styles.cameraFrame, { backgroundColor: theme.cameraBackground }]}>
+            {cameraReady ? (
+              <CameraView
+                style={StyleSheet.absoluteFill}
+                facing="back"
+                active={mode === 'scan' && scanning && !busy}
+                autofocus="on"
+                barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                onMountError={({ message }) => {
+                  setCameraError(
+                    message ||
+                      'The camera could not start. Allow camera access and try again, or enter the examination code manually.',
+                  );
+                }}
+                onBarcodeScanned={
+                  scanning && !busy
+                    ? ({ data, type }) => {
+                        if (type !== 'qr' || typeof data !== 'string' || !data.trim()) return;
+                        void handlePayload(data);
+                      }
+                    : undefined
+                }
+              />
+            ) : (
+              <View style={[StyleSheet.absoluteFill, styles.cameraFallback, { backgroundColor: theme.cameraBackground }]}>
+                <Text style={[styles.cameraFallbackTitle, { color: theme.white }]}>Camera access needed</Text>
+                <Text style={[styles.cameraFallbackText, { color: theme.white }]}>
+                  Allow camera access to scan the proctor QR code.
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Allow Camera"
+                  onPress={() => {
+                    if (permission?.canAskAgain === false) {
+                      void Linking.openSettings();
+                      return;
+                    }
+                    permissionRequestStarted.current = true;
+                    void requestPermission().then((result) => {
+                      setCameraError(
+                        result.granted
+                          ? null
+                          : result.canAskAgain
+                            ? 'Camera access is needed to scan the proctor QR code.'
+                            : 'Camera access is blocked for this app. Open Android settings and allow Camera, then return here.',
+                      );
+                    });
+                  }}
+                  style={[styles.cameraButton, { backgroundColor: theme.gold }]}
+                >
+                  <Text style={[styles.cameraButtonText, { color: theme.text }]}>
+                    {permission?.canAskAgain === false ? 'Open Camera Settings' : 'Allow Camera'}
+                  </Text>
+                </Pressable>
+              </View>
+            )}
+            {cameraReady ? <View style={styles.viewfinderRing} pointerEvents="none" /> : null}
+          </View>
+        </View>
+
+        {cameraError ? (
+          <View style={[styles.warningChip, { backgroundColor: theme.warningBackground, borderColor: theme.warningBorder }]}>
+            <View style={[styles.warningDot, { backgroundColor: theme.warningBorder }]} />
+            <Text style={[styles.warningText, { color: theme.text }]}>{cameraError}</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.dividerRow}>
+          <View style={[styles.divider, { backgroundColor: theme.cardBorder }]} />
+          <Text style={[styles.dividerText, { color: theme.secondaryText }]}>or enter room code</Text>
+          <View style={[styles.divider, { backgroundColor: theme.cardBorder }]} />
+        </View>
+
+        <Text style={[styles.fieldLabel, { color: theme.text }]}>Room code</Text>
+        <Controller
+          control={control}
+          name="code"
+          render={({ field: { onChange, onBlur, value } }) => (
+            <TextInput
+              style={[
+                styles.codeInput,
+                {
+                  backgroundColor: theme.card,
+                  borderColor: theme.cardBorder,
+                  color: theme.text,
+                },
+                Boolean(errors.code || error) && { borderColor: theme.error },
+              ]}
+              placeholder={roomCodeFocused ? '' : 'K7M2P9QX'}
+              placeholderTextColor={theme.secondaryText}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              value={value}
+              onChangeText={(text) => onChange(text.toUpperCase())}
+              onFocus={() => setRoomCodeFocused(true)}
+              onBlur={() => {
+                onBlur();
+                setRoomCodeFocused(false);
+              }}
+              onSubmitEditing={onVerifyCode}
+            />
+          )}
+        />
+        {errors.code?.message ? <Text style={[styles.error, { color: theme.error }]}>{errors.code.message}</Text> : null}
+        {error ? <Text style={[styles.error, { color: theme.error }]}>{error}</Text> : null}
+
+        {/*
           <>
-            <Text style={styles.fieldLabel}>Examination Code</Text>
+            <Text style={[styles.fieldLabel, { color: tokens.ink }]}>Examination Code</Text>
             <Controller
               control={control}
               name="code"
               render={({ field: { onChange, onBlur, value } }) => (
                 <TextInput
-                  style={[styles.codeInput, Boolean(errors.code) && styles.inputInvalid]}
+                  style={[
+                    styles.codeInput,
+                    {
+                      backgroundColor: tokens.inputBg,
+                      borderColor: tokens.inputBorder,
+                      color: tokens.ink,
+                    },
+                    Boolean(errors.code) && { borderColor: tokens.error },
+                  ]}
                   placeholder="K7M2P9QX"
-                  placeholderTextColor={examProcess.muted}
+                  placeholderTextColor={tokens.muted}
                   autoCapitalize="characters"
                   autoCorrect={false}
                   value={value}
@@ -447,8 +613,8 @@ export default function JoinExaminationScreen() {
                 />
               )}
             />
-            {errors.code?.message ? <Text style={styles.error}>{errors.code.message}</Text> : null}
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {errors.code?.message ? <Text style={[styles.error, { color: tokens.error }]}>{errors.code.message}</Text> : null}
+            {error ? <Text style={[styles.error, { color: tokens.error }]}>{error}</Text> : null}
             <ExamProcessActions>
               <ExamProcessButton
                 title={isSubmitting || busy ? 'Verifying…' : 'Continue'}
@@ -459,16 +625,25 @@ export default function JoinExaminationScreen() {
           </>
         ) : (
           <>
-            <View style={styles.qrCard}>
+            <View style={[styles.qrCard, { backgroundColor: tokens.inputBg, borderColor: tokens.inputBorder }]}>
               <View style={styles.cameraFrame}>
                 {cameraReady ? (
                   <CameraView
                     style={StyleSheet.absoluteFill}
                     facing="back"
+                    active={mode === 'scan' && scanning && !busy}
+                    autofocus="on"
                     barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                    onMountError={({ message }) => {
+                      setCameraError(
+                        message ||
+                          'The camera could not start. Allow camera access and try again, or enter the examination code manually.',
+                      );
+                    }}
                     onBarcodeScanned={
                       scanning && !busy
-                        ? ({ data }) => {
+                        ? ({ data, type }) => {
+                            if (type !== 'qr' || typeof data !== 'string' || !data.trim()) return;
                             void handlePayload(data);
                           }
                         : undefined
@@ -492,17 +667,39 @@ export default function JoinExaminationScreen() {
               </View>
             </View>
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {cameraError ? <Text style={[styles.error, { color: tokens.error }]}>{cameraError}</Text> : null}
+            {error ? <Text style={[styles.error, { color: tokens.error }]}>{error}</Text> : null}
 
             {__DEV__ ? (
-              <Pressable style={styles.devBtn} onPress={() => void simulateScan()}>
-                <Text style={styles.devBtnText}>{busy ? '…' : 'Simulate scan'}</Text>
+              <Pressable
+                style={[styles.devBtn, { backgroundColor: tokens.cardElevated }]}
+                onPress={() => void simulateScan()}
+              >
+                <Text style={[styles.devBtnText, { color: tokens.ink }]}>{busy ? '…' : 'Simulate scan'}</Text>
               </Pressable>
             ) : null}
 
             {!permission?.granted ? (
               <ExamProcessActions>
-                <ExamProcessButton title="Allow Camera" onPress={requestPermission} />
+                <ExamProcessButton
+                  title={permission?.canAskAgain === false ? 'Open Camera Settings' : 'Allow Camera'}
+                  onPress={() => {
+                    if (permission?.canAskAgain === false) {
+                      void Linking.openSettings();
+                      return;
+                    }
+                    permissionRequestStarted.current = true;
+                    void requestPermission().then((result) => {
+                      setCameraError(
+                        result.granted
+                          ? null
+                          : result.canAskAgain
+                            ? 'Camera access is needed to scan the proctor QR code.'
+                            : 'Camera access is blocked for this app. Open Android settings and allow Camera, then return here.',
+                      );
+                    });
+                  }}
+                />
               </ExamProcessActions>
             ) : busy ? (
               <ExamProcessActions>
@@ -511,107 +708,57 @@ export default function JoinExaminationScreen() {
             ) : null}
           </>
         )}
-      </ExamProcessChrome>
+        */}
+      </ExamineeRedesignChrome>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: examProcess.pageBg },
+  root: { flex: 1 },
   intro: {
-    fontSize: 14,
-    lineHeight: 21,
-    color: examProcess.muted,
-    marginBottom: 12,
-    fontFamily: examProcess.fontRegular,
-  },
-  modeToggle: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 16,
-    backgroundColor: examProcess.cardElevated,
-    borderRadius: examProcess.radiusControl,
-    padding: 4,
-  },
-  modeSeg: {
-    flex: 1,
-    minHeight: 40,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modeSegOn: {
-    backgroundColor: examProcess.accent,
-  },
-  modeText: {
-    fontSize: 13,
-    fontFamily: examProcess.fontMedium,
-    color: examProcess.ink,
-  },
-  modeTextOn: {
-    color: examProcess.white,
-  },
-  fieldLabel: {
-    fontSize: 14,
-    fontFamily: examProcess.fontMedium,
-    color: examProcess.ink,
-    marginBottom: 6,
-  },
-  codeInput: {
-    backgroundColor: examProcess.inputBg,
-    borderWidth: 1,
-    borderColor: examProcess.inputBorder,
-    borderRadius: examProcess.radiusControl,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
     fontSize: 16,
-    fontFamily: examProcess.fontRegular,
-    color: examProcess.ink,
-    letterSpacing: 1,
+    lineHeight: 23,
+    fontFamily: 'Poppins_400Regular',
   },
-  inputInvalid: { borderColor: examProcess.error },
-  error: {
-    color: examProcess.error,
-    fontSize: 13,
-    fontFamily: examProcess.fontMedium,
-    marginTop: 6,
-    lineHeight: 18,
-  },
-  qrCard: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: examProcess.inputBg,
-    borderWidth: 1,
-    borderColor: examProcess.inputBorder,
-    borderRadius: examProcess.radiusControl,
-    padding: 12,
+  cameraBox: {
+    height: 240,
+    borderRadius: 20,
+    overflow: 'hidden',
   },
   cameraFrame: {
-    width: FRAME,
-    height: FRAME,
-    borderRadius: 16,
+    flex: 1,
     overflow: 'hidden',
-    backgroundColor: '#1A1410',
   },
   cameraFallback: {
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 20,
-    gap: 8,
-    backgroundColor: '#2C241C',
+    gap: 10,
   },
   cameraFallbackTitle: {
-    color: examProcess.white,
-    fontSize: 16,
-    fontFamily: examProcess.fontSemiBold,
+    fontSize: 20,
+    lineHeight: 26,
+    fontFamily: 'Poppins_600SemiBold',
     textAlign: 'center',
   },
   cameraFallbackText: {
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 13,
-    lineHeight: 19,
+    maxWidth: 260,
+    fontSize: 14,
+    lineHeight: 20,
     textAlign: 'center',
-    fontFamily: examProcess.fontRegular,
+    fontFamily: 'Poppins_400Regular',
+  },
+  cameraButton: {
+    minHeight: 48,
+    paddingHorizontal: 26,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cameraButtonText: {
+    fontSize: 16,
+    fontFamily: 'Poppins_600SemiBold',
   },
   viewfinderRing: {
     ...StyleSheet.absoluteFillObject,
@@ -620,17 +767,74 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'rgba(255,255,255,0.85)',
   },
-  devBtn: {
-    marginTop: 12,
-    alignSelf: 'center',
-    paddingVertical: 8,
+  warningChip: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 14,
     paddingHorizontal: 14,
-    borderRadius: 10,
-    backgroundColor: examProcess.cardElevated,
+    paddingVertical: 10,
   },
-  devBtnText: {
-    color: examProcess.ink,
-    fontSize: 12,
-    fontFamily: examProcess.fontMedium,
+  warningDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+  },
+  warningText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'Poppins_500Medium',
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginVertical: 2,
+  },
+  divider: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+  },
+  dividerText: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontFamily: 'Poppins_400Regular',
+  },
+  fieldLabel: {
+    fontSize: 14,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  codeInput: {
+    height: 56,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    fontSize: 22,
+    fontFamily: 'Poppins_600SemiBold',
+    letterSpacing: 3,
+    textAlign: 'center',
+  },
+  error: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'Poppins_500Medium',
+    marginTop: -6,
+  },
+  primaryButton: {
+    minHeight: examineeRedesignLayout.buttonHeight,
+    borderRadius: examineeRedesignLayout.buttonRadius,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: examineeRedesignLayout.gap,
+  },
+  primaryButtonText: {
+    fontSize: 16,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  buttonDisabled: {
+    opacity: 0.55,
   },
 });

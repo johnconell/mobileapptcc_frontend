@@ -390,3 +390,32 @@ test('scenario: restart while pending - resumes directly to submitting screen wi
   assert.deepEqual(reloaded.answers, dummySubmission.answers);
 });
 
+test('scenario: confirmed submission on restart resumes directly to completed screen and never active exam', async () => {
+  const { tryResumeStudentExam } = await import('./resumeExamSession');
+  await ExamSubmissionStore.save({ ...dummySubmission, status: 'confirmed' });
+
+  const resumeResult = await tryResumeStudentExam();
+  assert.equal(resumeResult.ok, true);
+  if (resumeResult.ok) {
+    assert.equal(resumeResult.route, '/(student)/completed');
+  }
+});
+
+test('scenario: recoverOrphanedStudentKioskAtStartup preserves kiosk lock during pending submission', async () => {
+  const { recoverOrphanedStudentKioskAtStartup } = await import('./resumeExamSession');
+  await ExamSubmissionStore.save({ ...dummySubmission, status: 'pending' });
+
+  // Running startup recovery should not crash or throw
+  await recoverOrphanedStudentKioskAtStartup();
+
+  // Submission should remain pending and preserved
+  const loaded = await ExamSubmissionStore.load();
+  assert.equal(loaded?.status, 'pending');
+});
+
+test('scenario: STATUS_LABELS correctly maps finished to Submitted', async () => {
+  const { STATUS_LABELS } = await import('@/shared/constants');
+  assert.equal(STATUS_LABELS.finished, 'Submitted');
+});
+
+

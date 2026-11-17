@@ -101,23 +101,27 @@ describe('Examination Set Assignment & Deterministic Paper Generation', () => {
     assert.equal(paper1.questions[0].correctAnswer, 'B');
   });
 
-  it('Set 2, Set 3, Set 4 are deterministic and reproducible on reload', () => {
-    const paper2a = buildStudentExamPaper(pack, 'Set 2');
-    const paper2b = buildStudentExamPaper(pack, 'Set 2');
-    assert.equal(paper2a.examSet, 'Set 2');
-    assert.equal(paper2b.examSet, 'Set 2');
+  it('Set 2 through Set 30 are deterministic and reproducible on reload', () => {
+    for (let setNum = 2; setNum <= 30; setNum++) {
+      const setName = `Set ${setNum}`;
+      const paperA = buildStudentExamPaper(pack, setName);
+      const paperB = buildStudentExamPaper(pack, setName);
+      assert.equal(paperA.examSet, setName);
+      assert.equal(paperB.examSet, setName);
 
-    // Exactly same question order on reload
-    assert.deepEqual(
-      paper2a.questions.map((q) => q.id),
-      paper2b.questions.map((q) => q.id),
-    );
-    // Exactly same choice mapping on reload
-    assert.deepEqual(paper2a.choiceMaps, paper2b.choiceMaps);
+      // Exactly same question order on reload
+      assert.deepEqual(
+        paperA.questions.map((q) => q.id),
+        paperB.questions.map((q) => q.id),
+      );
+      // Exactly same choice mapping on reload
+      assert.deepEqual(paperA.choiceMaps, paperB.choiceMaps);
+    }
   });
 
-  it('All sets contain the exact same questions and can be graded accurately', () => {
-    for (const setName of ['Set 1', 'Set 2', 'Set 3', 'Set 4']) {
+  it('All 30 sets contain the exact same questions and can be graded accurately', () => {
+    for (let setNum = 1; setNum <= 30; setNum++) {
+      const setName = `Set ${setNum}`;
       const paper = buildStudentExamPaper(pack, setName);
       assert.equal(paper.questions.length, 4);
 

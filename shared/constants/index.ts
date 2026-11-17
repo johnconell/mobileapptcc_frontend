@@ -66,7 +66,7 @@ export const STATUS_LABELS = {
   taking_exam: 'Taking',
   disconnected: 'Disconnected',
   not_arrived: 'Not Arrived',
-  finished: 'Done',
+  finished: 'Submitted',
   warning: 'Warning',
   terminated: 'Terminated',
   scheduled: 'Scheduled',

@@ -21,11 +21,11 @@ export async function localApiRequest(request: LocalTransportRequest): Promise<L
     : [state.proctor];
 
   if (path === '/proctor/login' && method === 'POST') {
-    const login = typeof body.email === 'string' && body.email.trim() ? body.email : body.username;
-    if (typeof login !== 'string' || !login.trim() || typeof body.password !== 'string') return fail(422, 'Email or username is required.');
+    const login = body.username;
+    if (typeof login !== 'string' || !login.trim() || typeof body.password !== 'string') return fail(422, 'Username is required.');
     const cleanLogin = login.trim().toLowerCase();
     const foundProctor = proctorList.find((p) =>
-      (p.email.toLowerCase() === cleanLogin || (cleanLogin === 'proctor.local@tcc.test' && p.id === 901)) &&
+      ((p.username || p.email.split('@')[0]).toLowerCase() === cleanLogin || (cleanLogin === 'proctor.local' && p.id === 901)) &&
       body.password === p.password,
     );
     if (!foundProctor) return fail(401, 'Invalid credentials.');
@@ -36,7 +36,7 @@ export async function localApiRequest(request: LocalTransportRequest): Promise<L
         token: foundProctor.token,
         profile: {
           id: String(foundProctor.id),
-          username: foundProctor.email,
+          username: foundProctor.username || foundProctor.email.split('@')[0],
           displayName: foundProctor.name,
           roleLabel: 'Proctor',
         },
@@ -59,7 +59,7 @@ export async function localApiRequest(request: LocalTransportRequest): Promise<L
     authorizedScheduleIds.has(Number(schedule.id)),
   );
 
-  if (path === '/proctor/me' && method === 'GET') return ok({ success: true, data: { profile: { id: String(currentProctor!.id), username: currentProctor!.email, displayName: currentProctor!.name, roleLabel: 'Proctor' } } });
+  if (path === '/proctor/me' && method === 'GET') return ok({ success: true, data: { profile: { id: String(currentProctor!.id), username: currentProctor!.username || currentProctor!.email.split('@')[0], displayName: currentProctor!.name, roleLabel: 'Proctor' } } });
   if (path === '/proctor/logout' && method === 'POST') return ok({ success: true, message: 'Logged out.' });
   if (path === '/proctor/schedules' && method === 'GET') return ok({ success: true, data: authorizedSchedules, meta: { server_now: new Date().toISOString(), academic_year: state.academicYear } });
   if (path === '/proctor/exam-day-pack' && method === 'GET') {

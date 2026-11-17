@@ -53,3 +53,10 @@ Module._resolveFilename = function (request, parent, isMain, options) {
   return origResolve.call(this, request, parent, isMain, options);
 };
 
+['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].forEach((ext) => {
+  require.extensions[ext] = function (module, filename) {
+    module.exports = filename;
+  };
+});
+
+

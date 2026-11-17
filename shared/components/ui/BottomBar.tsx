@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LayoutGrid, Send } from 'lucide-react-native';
 import { useThemeTokens } from '@/shared/contexts/ThemeContext';
 import { AppButton, Row } from './primitives';
+import { PracticePointerArrow } from '@/features/practice/components/PracticePointerArrow';
 
 export interface BottomBarProps {
   answeredCount: number;
@@ -18,6 +19,9 @@ export interface BottomBarProps {
   onOpenQuestions: () => void;
   onSubmit: () => void;
   disabled?: boolean;
+  onQuestionsButtonLayout?: (rect: { x: number; y: number; width: number; height: number; borderRadius?: number }) => void;
+  onSubmitButtonLayout?: (rect: { x: number; y: number; width: number; height: number; borderRadius?: number }) => void;
+  tutorialPointer?: 'questions' | 'submit' | null;
 }
 
 function BottomBarComponent({
@@ -27,6 +31,9 @@ function BottomBarComponent({
   onOpenQuestions,
   onSubmit,
   disabled = false,
+  onQuestionsButtonLayout,
+  onSubmitButtonLayout,
+  tutorialPointer,
 }: BottomBarProps) {
   const { theme, isDark } = useThemeTokens();
   const insets = useSafeAreaInsets();
@@ -89,35 +96,70 @@ function BottomBarComponent({
       {/* Row 2: Action Buttons */}
       <View style={styles.actionsRow}>
         {/* Left: Questions Button */}
-        <AppButton
-          onPress={onOpenQuestions}
-          disabled={disabled}
-          accessibilityLabel={`Questions navigator, ${flaggedCount} flagged`}
-          style={styles.questionsBtn}
+        <View
+          onLayout={(e) => {
+            const { x, y, width, height } = e.nativeEvent.layout;
+            if (width > 0 && height > 0) {
+              onQuestionsButtonLayout?.({ x, y, width, height, borderRadius: 12 });
+            }
+          }}
+          style={{ flex: 1, position: 'relative' }}
         >
-          <Row style={styles.questionsTopRow}>
-            <LayoutGrid size={18} color={theme.accentText} strokeWidth={2} />
-            <Text numberOfLines={1} style={[styles.questionsText, { color: theme.accentText }]}>
-              Questions
+          {tutorialPointer === 'questions' && (
+            <View style={styles.pointerAnchor} pointerEvents="none">
+              <PracticePointerArrow
+                direction="down"
+                label="TAP 'QUESTIONS'"
+              />
+            </View>
+          )}
+          <AppButton
+            onPress={onOpenQuestions}
+            disabled={disabled}
+            accessibilityLabel={`Questions navigator, ${flaggedCount} flagged`}
+            style={[styles.questionsBtn, { width: '100%' }]}
+          >
+            <Row style={styles.questionsTopRow}>
+              <LayoutGrid size={18} color={theme.accentText} strokeWidth={2} />
+              <Text numberOfLines={1} style={[styles.questionsText, { color: theme.accentText }]}>
+                Questions
+              </Text>
+            </Row>
+            <Text style={[styles.flaggedSubtext, { color: theme.textMuted }]}>
+              {`${flaggedCount} flagged`}
             </Text>
-          </Row>
-          <Text style={[styles.flaggedSubtext, { color: theme.textMuted }]}>
-            {`${flaggedCount} flagged`}
-          </Text>
-        </AppButton>
+          </AppButton>
+        </View>
 
         {/* Right: Submit Exam Button (only filled button) */}
-        <AppButton
-          onPress={onSubmit}
-          disabled={disabled}
-          accessibilityLabel="Submit exam"
-          variant="filled"
-          label="Submit exam"
-          labelStyle={styles.submitText}
-          icon={(color) => <Send size={18} color={color} strokeWidth={2.2} />}
-          style={[styles.submitBtn, compact && styles.submitBtnCompact]}
+        <View
+          onLayout={(e) => {
+            const { x, y, width, height } = e.nativeEvent.layout;
+            if (width > 0 && height > 0) {
+              onSubmitButtonLayout?.({ x, y, width, height, borderRadius: 12 });
+            }
+          }}
+          style={{ flex: 1, position: 'relative' }}
         >
-        </AppButton>
+          {tutorialPointer === 'submit' && (
+            <View style={styles.pointerAnchor} pointerEvents="none">
+              <PracticePointerArrow
+                direction="down"
+                label="TAP 'SUBMIT EXAM'"
+              />
+            </View>
+          )}
+          <AppButton
+            onPress={onSubmit}
+            disabled={disabled}
+            accessibilityLabel="Submit exam"
+            variant="filled"
+            label="Submit exam"
+            labelStyle={styles.submitText}
+            icon={(color) => <Send size={18} color={color} strokeWidth={2.2} />}
+            style={[styles.submitBtn, { width: '100%' }, compact && styles.submitBtnCompact]}
+          />
+        </View>
       </View>
     </View>
   );
@@ -195,5 +237,13 @@ const styles = StyleSheet.create({
   submitText: {
     fontSize: 15,
     fontWeight: '500',
+  },
+  pointerAnchor: {
+    position: 'absolute',
+    top: -46,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 999999,
   },
 });

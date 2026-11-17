@@ -1,10 +1,11 @@
 import React, { PropsWithChildren } from 'react';
-import { View, StyleSheet, ViewStyle } from 'react-native';
+import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { colors, radii, shadows } from '@/shared/theme';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 interface CardProps extends PropsWithChildren {
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
   padded?: boolean;
   animated?: boolean;
   delay?: number;
@@ -17,8 +18,23 @@ export function Card({
   animated = true,
   delay = 0,
 }: CardProps) {
+  const { colors: themeColors, isDark } = useAppTheme();
+
   const content = (
-    <View style={[styles.card, padded && styles.padded, style]}>{children}</View>
+    <View
+      style={[
+        styles.card,
+        {
+          backgroundColor: themeColors.card,
+          borderColor: themeColors.cardBorder,
+        },
+        isDark && styles.cardDark,
+        padded && styles.padded,
+        style,
+      ]}
+    >
+      {children}
+    </View>
   );
 
   if (!animated) return content;
@@ -37,6 +53,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(231, 229, 228, 0.9)',
     ...shadows.card,
+  },
+  cardDark: {
+    shadowColor: 'transparent',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   padded: {
     padding: 18,

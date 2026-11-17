@@ -5,7 +5,7 @@ import { useProctorStore } from '@/features/proctors/stores/proctorStore';
 export default function ProctorIndex() {
   const profile = useProctorStore((s) => s.profile);
   if (!profile) {
-    return <Redirect href="/(proctor)/login" />;
+    return <Redirect href={{ pathname: '/', params: { stay: '1', from: 'logout' } }} />;
   }
   return <Redirect href="/(proctor)/(tabs)/dashboard" />;
 }

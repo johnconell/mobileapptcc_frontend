@@ -249,7 +249,7 @@ class ExamKioskModule(private val reactContext: ReactApplicationContext) :
                     if (address is Inet4Address && !address.isLoopbackAddress && !address.isLinkLocalAddress) {
                         val ip = address.hostAddress ?: continue
                         if (ip.startsWith("10.") || ip.startsWith("192.168.") ||
-                            Regex("^172\\.(1[6-9]|2[0-9]|3[01])\\.").containsMatchIn(ip)) {
+                            Regex("^172\\\\.(1[6-9]|2[0-9]|3[01])\\\\.").containsMatchIn(ip)) {
                             promise.resolve(ip)
                             return
                         }

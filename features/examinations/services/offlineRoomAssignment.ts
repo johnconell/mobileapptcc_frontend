@@ -12,13 +12,14 @@ export type OfflineRoomSchedule = {
     examination_schedule_id?: number;
     room_name?: string;
     proctor_id?: number | null;
+    student_count?: number;
     emergency_suspended?: boolean;
   }>;
 };
 
 export type OfflinePackAuthorization = {
   actor_id: number | null;
-  scope: 'assigned_rooms' | 'administrator';
+  scope: 'assigned_rooms' | 'schedule_preview' | 'administrator';
   schedule_ids: number[];
 };
 
@@ -37,6 +38,7 @@ export type OfflineRoomDecision =
         | 'room_suspended'
         | 'schedule_cancelled'
         | 'wrong_room'
+        | 'empty_room'
         | 'assignment_data_unavailable'
         | 'unauthorized_proctor'
         | 'online_claim_required'
@@ -165,9 +167,16 @@ export function validateOfflineProctorRoom(input: {
   locallyClaimed?: boolean;
   hasOtherActiveRoom?: boolean;
   claimConfirmed?: boolean;
+  assignedStudentCount?: number;
+  hasExistingActiveSession?: boolean;
 }): OfflineRoomDecision {
   const { authorization, schedule, authority } = input;
-  const hostRoom = validateOfflineHostRoom({ schedule, authority });
+  const hostRoom = validateOfflineHostRoom({
+    schedule,
+    authority,
+    assignedStudentCount: input.assignedStudentCount,
+    hasExistingActiveSession: input.hasExistingActiveSession,
+  });
   if (!hostRoom.ok) return hostRoom;
 
   const actorId = positiveInteger(authorization?.actor_id);
@@ -252,6 +261,8 @@ export function validateOfflineProctorRoom(input: {
 export function validateOfflineHostRoom(input: {
   schedule: OfflineRoomSchedule | undefined;
   authority: OfflineRoomAuthority;
+  assignedStudentCount?: number;
+  hasExistingActiveSession?: boolean;
 }): OfflineRoomDecision {
   const { schedule, authority } = input;
   const scheduleId = positiveInteger(authority.scheduleId);
@@ -279,6 +290,19 @@ export function validateOfflineHostRoom(input: {
           Number(candidate.id) === roomId &&
           Number(candidate.examination_schedule_id) === scheduleId,
       );
+  if (
+    room &&
+    input.assignedStudentCount !== undefined &&
+    (!Number.isFinite(input.assignedStudentCount) || input.assignedStudentCount < 1) &&
+    !input.hasExistingActiveSession
+  ) {
+    return {
+      ok: false,
+      code: 'empty_room',
+      message: 'This room has no assigned students for the selected examination batch.',
+      recoveryRequired: false,
+    };
+  }
   return room
     ? room.emergency_suspended
       ? {
@@ -289,6 +313,35 @@ export function validateOfflineHostRoom(input: {
         }
       : { ok: true }
     : { ok: false, code: 'assignment_data_unavailable', message: RECOVERY_MESSAGE, recoveryRequired: true };
+}
+
+export function countOfflineAssignedStudents(
+  registrations: readonly OfflineRoomRegistration[],
+  scheduleId: unknown,
+  roomId: unknown,
+): number {
+  const targetScheduleId = positiveInteger(scheduleId);
+  const targetRoomId = positiveInteger(roomId);
+  if (!targetScheduleId || !targetRoomId) return 0;
+
+  return registrations.filter(
+    (registration) =>
+      positiveInteger(registration.examination_schedule_id) === targetScheduleId &&
+      positiveInteger(registration.assigned_room_id) === targetRoomId,
+  ).length;
+}
+
+export function filterOfflineRoomsWithAssignedStudents<T extends { id: number }>(input: {
+  rooms: readonly T[];
+  registrations: readonly OfflineRoomRegistration[];
+  scheduleId: unknown;
+  preserveRoom?: (room: T) => boolean;
+}): T[] {
+  return input.rooms.filter(
+    (room) =>
+      countOfflineAssignedStudents(input.registrations, input.scheduleId, room.id) > 0 ||
+      input.preserveRoom?.(room) === true,
+  );
 }
 
 function unavailableScheduleDecision(status: 'suspended' | 'cancelled'): OfflineRoomDecision {

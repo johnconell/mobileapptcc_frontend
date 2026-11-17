@@ -47,7 +47,7 @@ export type OfflinePack = {
   downloaded_at?: string;
   authorization?: {
     actor_id: number | null;
-    scope: 'assigned_rooms' | 'administrator';
+    scope: 'assigned_rooms' | 'schedule_preview' | 'administrator';
     schedule_ids: number[];
   };
   active_question_bank_id?: number | null;
@@ -65,7 +65,9 @@ export type OfflinePack = {
     time_slot?: string;
     venue?: string;
     batch_code?: string;
+    day_label?: string;
     course?: string;
+    proctor_id?: number | null;
     status?: string;
     session_type?: 'regular' | 'rescheduled';
     reschedule_state?: 'proposed' | 'confirmed' | 'review_required' | null;
@@ -155,6 +157,7 @@ export type OfflinePack = {
     shuffle_questions?: boolean;
     shuffle_categories?: boolean;
     shuffle_both?: boolean;
+    shuffle_answers?: boolean;
     exam_set_definitions?: string[];
   };
   /** Present only when pack downloaded with include_auth=1; stripped before disk save. */

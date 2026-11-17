@@ -28,20 +28,12 @@ export function StatisticCard({
   const { colors: themeColors, isDark } = useAppTheme();
   const isCompact = explicitCompact ?? width < 420;
 
-  const toneBg = isDark
-    ? tone === 'success'
-      ? '#142918'
-      : tone === 'warning'
-      ? '#291E0A'
-      : tone === 'info'
-      ? '#1A2035'
-      : '#2A1818'
-    : tone === 'success'
+  const toneBg = tone === 'success'
     ? themeColors.successMuted
     : tone === 'warning'
     ? themeColors.warningMuted
     : tone === 'info'
-    ? '#E0EDFE'
+    ? (isDark ? 'rgba(138, 184, 230, 0.15)' : '#E0EDFE')
     : themeColors.accentMuted;
 
   return (
@@ -51,6 +43,7 @@ export function StatisticCard({
         ...styles.card,
         backgroundColor: themeColors.card,
         borderColor: themeColors.cardBorder,
+        ...(isDark ? { elevation: 0, shadowColor: 'transparent' } : null),
         ...(isCompact ? styles.cardCompact : null),
         ...(style as object),
       }}

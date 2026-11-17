@@ -5,22 +5,23 @@ import {
   Text,
   TextInput,
   View,
+  Pressable,
   StyleSheet,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { AlertCircle, Mail } from 'lucide-react-native';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import {
-  ExamProcessActions,
-  ExamProcessButton,
-  ExamProcessChrome,
-} from '@/features/examinations/components/ExamProcessChrome';
+import { ExamineeRedesignChrome } from '@/features/examinations/components/ExamineeRedesignChrome';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { appStorage } from '@/shared/services/storage';
-import { examProcess } from '@/shared/theme/examProcess';
+import {
+  examineeRedesignLayout,
+  useExamineeRedesignTheme,
+} from '@/shared/theme/examineeRedesign';
 import { userFacingError } from '@/shared/utils/userFacingError';
 import { formatPasskey, isValidPasskey, normalizePasskey } from '@/features/examinations/services/passkeyFormat';
 
@@ -73,11 +74,13 @@ export default function StudentPasskeyScreen() {
     }
   }, [verifiedStudent, scannedSessionId, agreedAt, router]);
 
+  const theme = useExamineeRedesignTheme();
+
   if (!scannedSessionId) {
     return (
-      <ExamProcessChrome step={1} title="Examination Key" stepLabel="Step 2 of 6 · Key">
-        <Text style={styles.hint}>Loading session…</Text>
-      </ExamProcessChrome>
+      <ExamineeRedesignChrome step={1} title="Examination Key" stepLabel="Step 2 of 6 · Key">
+        <Text style={[styles.hint, { color: theme.secondaryText }]}>Loading session…</Text>
+      </ExamineeRedesignChrome>
     );
   }
 
@@ -170,29 +173,59 @@ export default function StudentPasskeyScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.flex}
+      style={[styles.flex, { backgroundColor: theme.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ExamProcessChrome
+      <ExamineeRedesignChrome
         step={1}
         title="Examination Key"
         stepLabel="Step 2 of 6 · Key"
         onBack={() => router.replace('/(student)/scan')}
+        footer={
+          <View style={styles.actions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back"
+              onPress={() => router.replace('/(student)/scan')}
+              style={[styles.secondaryButton, { backgroundColor: theme.secondaryCard }]}
+            >
+              <Text style={[styles.secondaryButtonText, { color: theme.text }]}>Back</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Next"
+              disabled={isSubmitting}
+              onPress={onContinue}
+              style={[
+                styles.primaryButton,
+                { backgroundColor: theme.primary },
+                isSubmitting && styles.buttonDisabled,
+              ]}
+            >
+              <Text style={[styles.primaryButtonText, { color: theme.white }]}>
+                {isSubmitting ? 'Please wait…' : 'Next'}
+              </Text>
+            </Pressable>
+          </View>
+        }
       >
-        <Text style={styles.intro}>
-          Use the unique examination key sent to your Gmail. Do not use another student&apos;s
-          key.
-        </Text>
-
-        <Text style={styles.label}>Examination Key</Text>
+        <Text style={[styles.intro, { color: theme.secondaryText }]}>Type the unique key sent to your Gmail.</Text>
         <Controller
           control={control}
           name="passkey"
           render={({ field: { onChange, onBlur, value } }) => (
             <TextInput
-              style={[styles.input, Boolean(errors.passkey || error) && styles.inputInvalid]}
+              style={[
+                styles.input,
+                {
+                  backgroundColor: theme.card,
+                  borderColor: theme.cardBorder,
+                  color: theme.text,
+                },
+                Boolean(errors.passkey || error) && { borderColor: theme.error },
+              ]}
               placeholder="e.g. K7M2-P9QX"
-              placeholderTextColor={examProcess.muted}
+              placeholderTextColor={theme.secondaryText}
               autoCapitalize="characters"
               autoCorrect={false}
               autoComplete="off"
@@ -204,61 +237,124 @@ export default function StudentPasskeyScreen() {
             />
           )}
         />
-        {errors.passkey?.message ? <Text style={styles.error}>{errors.passkey.message}</Text> : null}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+        {errors.passkey?.message ? <Text style={[styles.error, { color: theme.error }]}>{errors.passkey.message}</Text> : null}
+        {error ? <Text style={[styles.error, { color: theme.error }]}>{error}</Text> : null}
 
-        <ExamProcessActions>
-          <ExamProcessButton
-            title="Back"
-            variant="back"
-            onPress={() => router.replace('/(student)/scan')}
-          />
-          <ExamProcessButton title="Next" loading={isSubmitting} onPress={onContinue} />
-        </ExamProcessActions>
-      </ExamProcessChrome>
+        <View style={[styles.helpCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+          <View style={styles.helpRow}>
+            <View style={[styles.helpIcon, { backgroundColor: theme.primarySoft }]}>
+              <Mail size={22} color={theme.primary} />
+            </View>
+            <View style={styles.helpCopy}>
+              <Text style={[styles.helpTitle, { color: theme.text }]}>Where is my key?</Text>
+              <Text style={[styles.helpBody, { color: theme.secondaryText }]}>Open the email from TCC in your Gmail inbox.</Text>
+            </View>
+          </View>
+          <View style={styles.helpRow}>
+            <View style={[styles.helpIcon, { backgroundColor: theme.primarySoft }]}>
+              <AlertCircle size={22} color={theme.primary} />
+            </View>
+            <View style={styles.helpCopy}>
+              <Text style={[styles.helpTitle, { color: theme.text }]}>One key per student</Text>
+              <Text style={[styles.helpBody, { color: theme.secondaryText }]}>Never use or share another student&apos;s key.</Text>
+            </View>
+          </View>
+        </View>
+      </ExamineeRedesignChrome>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: examProcess.pageBg },
+  flex: { flex: 1 },
   hint: {
-    color: examProcess.muted,
     fontSize: 14,
-    fontFamily: examProcess.fontRegular,
+    fontFamily: 'Poppins_400Regular',
   },
   intro: {
-    fontSize: 14,
-    lineHeight: 22,
-    color: examProcess.muted,
-    marginBottom: 14,
-    fontFamily: examProcess.fontRegular,
-  },
-  label: {
-    fontSize: 14,
-    fontFamily: examProcess.fontMedium,
-    color: examProcess.ink,
-    marginBottom: 6,
+    fontSize: 16,
+    lineHeight: 23,
+    fontFamily: 'Poppins_400Regular',
   },
   input: {
-    backgroundColor: examProcess.inputBg,
+    height: 68,
     borderWidth: 1,
-    borderColor: examProcess.inputBorder,
-    borderRadius: examProcess.radiusControl,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-    fontFamily: examProcess.fontRegular,
-    color: examProcess.ink,
+    borderRadius: examineeRedesignLayout.cardRadius,
+    paddingHorizontal: 16,
+    fontSize: 26,
+    fontFamily: 'Poppins_600SemiBold',
     width: '100%',
-    letterSpacing: 1,
+    letterSpacing: 5,
+    textAlign: 'center',
   },
-  inputInvalid: { borderColor: examProcess.error },
   error: {
-    color: examProcess.error,
     fontSize: 13,
-    marginTop: 6,
-    fontFamily: examProcess.fontMedium,
+    marginTop: -6,
+    fontFamily: 'Poppins_500Medium',
     lineHeight: 18,
+  },
+  helpCard: {
+    borderWidth: 1,
+    borderRadius: examineeRedesignLayout.cardRadius,
+    padding: examineeRedesignLayout.cardPadding,
+    gap: 18,
+  },
+  helpRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  helpIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  helpTitle: {
+    fontSize: 17,
+    lineHeight: 23,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  helpBody: {
+    fontSize: 15,
+    lineHeight: 21,
+    fontFamily: 'Poppins_400Regular',
+  },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 12,
+    marginTop: examineeRedesignLayout.gap,
+  },
+  secondaryButton: {
+    flex: 0.9,
+    minHeight: examineeRedesignLayout.buttonHeight,
+    borderRadius: examineeRedesignLayout.buttonRadius,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryButton: {
+    flex: 1.8,
+    minHeight: examineeRedesignLayout.buttonHeight,
+    borderRadius: examineeRedesignLayout.buttonRadius,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  secondaryButtonText: {
+    fontSize: 16,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  primaryButtonText: {
+    fontSize: 16,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  buttonDisabled: {
+    opacity: 0.55,
   },
 });

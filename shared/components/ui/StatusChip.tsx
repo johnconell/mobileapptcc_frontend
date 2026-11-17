@@ -1,7 +1,8 @@
 import React from 'react';
 import { Text, View, StyleSheet } from 'react-native';
-import { colors, radii } from '@/shared/theme';
+import { radii } from '@/shared/theme';
 import { STATUS_LABELS } from '@/shared/constants';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 type ChipTone = 'default' | 'success' | 'warning' | 'danger' | 'info' | 'primary';
 
@@ -27,14 +28,35 @@ const statusToneMap: Record<string, ChipTone> = {
 };
 
 export function StatusChip({ label, status, tone }: StatusChipProps) {
+  const { colors: themeColors, isDark } = useAppTheme();
   const resolvedTone = tone ?? (status ? statusToneMap[status] ?? 'default' : 'default');
   const text = label ?? (status ? STATUS_LABELS[status] : '');
 
+  const chipPalette = isDark
+    ? {
+        default: { bg: themeColors.cardMuted, text: themeColors.textSecondary },
+        success: { bg: themeColors.successMuted, text: themeColors.success },
+        warning: { bg: themeColors.warningMuted, text: themeColors.warning },
+        danger: { bg: themeColors.dangerMuted, text: themeColors.danger },
+        info: { bg: 'rgba(138, 184, 230, 0.15)', text: '#8AB8E6' },
+        primary: { bg: themeColors.accentMuted, text: themeColors.accent },
+      }
+    : {
+        default: { bg: '#EFEAE1', text: '#786B59' },
+        success: { bg: themeColors.successMuted, text: themeColors.success },
+        warning: { bg: themeColors.warningMuted, text: themeColors.warning },
+        danger: { bg: themeColors.dangerMuted, text: themeColors.danger },
+        info: { bg: '#E0EDFE', text: '#0055A4' },
+        primary: { bg: themeColors.accentMuted, text: themeColors.accent },
+      };
+
+  const currentColors = chipPalette[resolvedTone];
+
   return (
-    <View style={[styles.chip, toneStyles[resolvedTone]]}>
-      <View style={[styles.dot, { backgroundColor: textColors[resolvedTone] }]} />
+    <View style={[styles.chip, { backgroundColor: currentColors.bg }]}>
+      <View style={[styles.dot, { backgroundColor: currentColors.text }]} />
       <Text
-        style={[styles.text, { color: textColors[resolvedTone] }]}
+        style={[styles.text, { color: currentColors.text }]}
         numberOfLines={1}
         maxFontSizeMultiplier={1.2}
       >
@@ -57,21 +79,3 @@ const styles = StyleSheet.create({
   dot: { width: 6, height: 6, borderRadius: 3 },
   text: { fontSize: 12, fontWeight: '700' },
 });
-
-const toneStyles = StyleSheet.create({
-  default: { backgroundColor: '#1A1A1A' },
-  success: { backgroundColor: '#142918' },
-  warning: { backgroundColor: '#291E0A' },
-  danger: { backgroundColor: '#2A1414' },
-  info: { backgroundColor: '#162238' },
-  primary: { backgroundColor: '#2A1414' },
-});
-
-const textColors: Record<ChipTone, string> = {
-  default: '#A1A1AA',
-  success: '#22C55E',
-  warning: '#F59E0B',
-  danger: '#7A1F2B',
-  info: '#38BDF8',
-  primary: '#7A1F2B',
-};

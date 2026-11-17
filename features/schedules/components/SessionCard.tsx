@@ -4,6 +4,7 @@ import { ChevronRight, MapPin, Users } from 'lucide-react-native';
 import type { ExamSession } from '@/shared/types';
 import { colors } from '@/shared/theme';
 import { Card } from '@/shared/components/ui';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 interface SessionCardProps {
   session: ExamSession;
@@ -12,23 +13,24 @@ interface SessionCardProps {
 }
 
 export function SessionCard({ session, onPress, delay = 0 }: SessionCardProps) {
+  const { colors: themeColors } = useAppTheme();
   return (
     <Pressable onPress={onPress}>
       <Card delay={delay}>
         <View style={styles.row}>
           <View style={styles.meta}>
-            <Text style={styles.time}>{session.timeLabel}</Text>
-            <Text style={styles.batch}>{session.batchNumber}</Text>
+            <Text style={[styles.time, { color: themeColors.textPrimary }]}>{session.timeLabel}</Text>
+            <Text style={[styles.batch, { color: themeColors.accent }]}>{session.batchNumber}</Text>
             <View style={styles.line}>
-              <MapPin size={14} color={colors.primary} />
-              <Text style={styles.lineText}>{session.venue}</Text>
+              <MapPin size={14} color={themeColors.accent} />
+              <Text style={[styles.lineText, { color: themeColors.textSecondary }]}>{session.venue}</Text>
             </View>
             <View style={styles.line}>
-              <Users size={14} color={colors.primary} />
-              <Text style={styles.lineText}>{session.registeredStudents} Registered Students</Text>
+              <Users size={14} color={themeColors.accent} />
+              <Text style={[styles.lineText, { color: themeColors.textSecondary }]}>{session.registeredStudents} Registered Students</Text>
             </View>
           </View>
-          <ChevronRight size={22} color={colors.inkMuted} />
+          <ChevronRight size={22} color={themeColors.textMuted} />
         </View>
       </Card>
     </Pressable>

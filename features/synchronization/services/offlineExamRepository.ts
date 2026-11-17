@@ -411,61 +411,111 @@ function shuffleQuestionChoicesDeterministically(
   };
 }
 
-/**
- * Build the paper for the set assigned by the authorized examination package.
- * Set labels and their order come from backend examination settings. The
- * legacy list is only used for packs created before set definitions existed.
- */
-export function buildStudentExamPaper(
-  pack: OfflinePack,
-  examSet?: string,
+export interface BuildPaperOptions {
+  studentIdentifier?: string;
+  examSet?: string;
+  settings?: {
+    duration_minutes?: number;
+    allow_late_entry?: false;
+    disconnect_grace_seconds?: number;
+    room_student_limit?: number;
+    shuffle_questions?: boolean;
+    shuffle_categories?: boolean;
+    shuffle_both?: boolean;
+    shuffle_answers?: boolean;
+    exam_set_definitions?: string[];
+  };
+}
+
+export function buildStudentExamPaperFromQuestions(
+  baseQuestions: Question[],
+  options?: BuildPaperOptions | string,
 ): StudentExamPaper & { examSet: string } {
-  const configuredSets = (pack.examination_settings?.exam_set_definitions ?? [])
+  const opts: BuildPaperOptions =
+    typeof options === 'string' ? { examSet: options } : options ?? {};
+  const settings = opts.settings ?? {};
+
+  const defaultThirtySets = Array.from({ length: 30 }, (_, i) => `Set ${i + 1}`);
+  const configuredSets = (settings.exam_set_definitions ?? [])
     .map((label) => String(label).trim())
     .filter(Boolean);
-  const availableSets = configuredSets.length > 0 ? configuredSets : ['Set 1', 'Set 2', 'Set 3', 'Set 4'];
-  const requested = String(examSet ?? availableSets[0]).trim();
+  const availableSets = configuredSets.length > 0 ? configuredSets : defaultThirtySets;
+  const requested = String(opts.examSet ?? availableSets[0]).trim();
   const requestedIndex = availableSets.findIndex((label) => label.toLowerCase() === requested.toLowerCase());
-  const numericIndex = Number.parseInt(requested.match(/\d+/)?.[0] ?? '', 10) - 1;
+  const numericMatch = requested.match(/\d+/)?.[0];
+  const numericIndex = numericMatch ? Number.parseInt(numericMatch, 10) - 1 : -1;
   const setIndex = requestedIndex >= 0
     ? requestedIndex
     : Number.isFinite(numericIndex) && numericIndex >= 0 && numericIndex < availableSets.length
       ? numericIndex
-      : 0;
-  const normalizedSetName = availableSets[setIndex];
+      : Number.isFinite(numericIndex) && numericIndex >= 0 && numericIndex < 30
+        ? numericIndex
+        : 0;
+  const normalizedSetName = availableSets[setIndex] ?? (requested || 'Set 1');
 
-  const baseQuestions = buildExamQuestions(pack);
+  const shuffleQuestions = Boolean(settings.shuffle_questions || settings.shuffle_both);
+  const shuffleCategories = Boolean(settings.shuffle_categories || settings.shuffle_both);
+  const shuffleAnswers = Boolean(settings.shuffle_answers);
+
+  const studentIdentifier = (opts.studentIdentifier ?? '').trim();
+  const hasIdentifier = studentIdentifier.length > 0;
+
+  const explicitQuestionSetting = settings.shuffle_questions !== undefined || settings.shuffle_both !== undefined;
+  const shouldShuffleQuestions = explicitQuestionSetting
+    ? shuffleQuestions
+    : (shuffleQuestions || (setIndex > 0 && !hasIdentifier));
+
+  const explicitCategorySetting = settings.shuffle_categories !== undefined || settings.shuffle_both !== undefined;
+  const shouldShuffleCategories = explicitCategorySetting
+    ? shuffleCategories
+    : (shuffleCategories || (setIndex > 0 && !hasIdentifier));
+
+  const explicitAnswerSetting = settings.shuffle_answers !== undefined;
+  const shouldShuffleAnswers = explicitAnswerSetting
+    ? shuffleAnswers
+    : (shuffleAnswers || (setIndex > 0 && !hasIdentifier));
+
+  const seed = hasIdentifier
+    ? (hashStringToInt(studentIdentifier) || 1)
+    : (setIndex > 0 ? setIndex * 10007 : 42);
 
   // Group by category to preserve category ordering
   const categoryGroups = new Map<string, Question[]>();
   for (const q of baseQuestions) {
-    const cat = q.category || 'general';
+    const cat = (q.category || q.subjectId || 'general').trim() || 'general';
     const group = categoryGroups.get(cat);
     if (group) group.push(q);
     else categoryGroups.set(cat, [q]);
+  }
+
+  // Shuffle categories if enabled
+  let categoryKeys = Array.from(categoryGroups.keys());
+  if (shouldShuffleCategories) {
+    const catRng = seededRandom((seed ^ 0x1a2b3c4d) >>> 0);
+    categoryKeys = seededShuffle(categoryKeys, catRng);
   }
 
   const choiceMaps: Record<string, ChoiceDisplayMap> = {};
   const orderedQuestions: Question[] = [];
 
   let catIdx = 0;
-  for (const [, catQuestions] of categoryGroups.entries()) {
+  for (const catKey of categoryKeys) {
+    const catQuestions = categoryGroups.get(catKey) ?? [];
     let questionsInCat = [...catQuestions];
 
-    if (setIndex > 0) {
-      const qRng = seededRandom(setIndex * 10007 + catIdx * 37 + 12345);
+    // Shuffle questions within each category if enabled
+    if (shouldShuffleQuestions) {
+      const qRng = seededRandom(((seed + catIdx * 10007) ^ 0x5e6f7a8b) >>> 0);
       questionsInCat = seededShuffle(questionsInCat, qRng);
     }
 
     for (const q of questionsInCat) {
-      if (setIndex === 0) {
-        // Set 1: Canonical choices A, B, C, D
+      if (!shouldShuffleAnswers) {
         const displayToOriginal: ChoiceDisplayMap = { A: 'A', B: 'B', C: 'C', D: 'D' };
         choiceMaps[q.id] = displayToOriginal;
         orderedQuestions.push(q);
       } else {
-        // Set 2, 3, 4: Deterministic choice shuffle
-        const choiceRng = seededRandom(setIndex * 100003 + hashStringToInt(q.id) + 67891);
+        const choiceRng = seededRandom(((seed + hashStringToInt(q.id) * 37) ^ 0x9c8d7e6f) >>> 0);
         const { question, displayToOriginal } = shuffleQuestionChoicesDeterministically(q, choiceRng);
         choiceMaps[question.id] = displayToOriginal;
         orderedQuestions.push(question);
@@ -485,6 +535,26 @@ export function buildStudentExamPaper(
     choiceMaps,
     examSet: normalizedSetName,
   };
+}
+
+/**
+ * Build the paper for the student attempt based on administrator shuffle
+ * settings and assigned examination set.
+ */
+export function buildStudentExamPaper(
+  pack: OfflinePack,
+  optionsOrExamSet?: string | BuildPaperOptions,
+): StudentExamPaper & { examSet: string } {
+  const opts: BuildPaperOptions =
+    typeof optionsOrExamSet === 'string'
+      ? { examSet: optionsOrExamSet, settings: pack.examination_settings }
+      : {
+          ...optionsOrExamSet,
+          settings: optionsOrExamSet?.settings ?? pack.examination_settings,
+        };
+
+  const baseQuestions = buildExamQuestions(pack);
+  return buildStudentExamPaperFromQuestions(baseQuestions, opts);
 }
 
 /** Map a student's display-letter answer back to the pack's original letter. */
@@ -580,8 +650,9 @@ export const OfflineExamRepository = {
 
     report(5, 'Connecting…');
 
-    // The authenticated proctor endpoint returns only this account's assigned
-    // schedules, rooms, registrations, and applicants.
+    // The authenticated proctor endpoint returns the official schedule
+    // calendar and room metadata. Student roster rows remain restricted by
+    // the server to this account's rooms and open rooms.
     const currentYear = new Date().getFullYear();
     if (examDate) {
       const dateYear = parseInt(examDate.slice(0, 4), 10);
@@ -822,9 +893,15 @@ export const OfflineExamRepository = {
     const pack = await OfflineStore.getPack();
     if (!pack) return [];
     const downloadedAt = pack.downloaded_at ?? (await OfflineStore.getPackMeta()).at ?? undefined;
+    const actorId = Number(pack.authorization?.actor_id ?? 0);
     // Group by date + title so different exams on the same day are distinct.
     const map = new Map<string, any>();
     for (const s of pack.schedules) {
+      const assignedToActor =
+        actorId > 0 &&
+        (Number(s.proctor_id) === actorId ||
+          (s.rooms ?? []).some((room) => Number(room.proctor_id) === actorId));
+      if (pack.authorization?.scope === 'assigned_rooms' && !assignedToActor) continue;
       const date = s.exam_date || 'unknown';
       const title = s.title || 'Entrance Examination';
       const key = `date-${date}-${title.replace(/\s+/g, '-')}`;
@@ -835,6 +912,7 @@ export const OfflineExamRepository = {
           schoolYear: s.academic_year || date.slice(0, 4) || String(new Date().getFullYear()),
           examinationDate: date,
           examinationDateIso: date,
+          dayLabel: s.day_label,
           batchCount: 0,
           description: s.venue,
           timeLabel: s.time_slot,

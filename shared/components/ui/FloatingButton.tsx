@@ -6,6 +6,7 @@ import Animated, {
   withSpring,
 } from 'react-native-reanimated';
 import { colors, shadows } from '@/shared/theme';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 interface FloatingButtonProps {
   onPress: () => void;
@@ -17,10 +18,13 @@ interface FloatingButtonProps {
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export function FloatingButton({ onPress, label, icon, style }: FloatingButtonProps) {
+  const { isDark, colors: themeColors } = useAppTheme();
   const scale = useSharedValue(1);
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
   }));
+
+  const labelColor = isDark ? themeColors.card : colors.white;
 
   return (
     <AnimatedPressable
@@ -32,10 +36,22 @@ export function FloatingButton({ onPress, label, icon, style }: FloatingButtonPr
       onPressOut={() => {
         scale.value = withSpring(1);
       }}
-      style={[styles.fab, !label && styles.iconOnly, animatedStyle, style]}
+      style={[
+        styles.fab,
+        isDark && {
+          backgroundColor: themeColors.accent,
+          shadowColor: 'transparent',
+          elevation: 0,
+        },
+        !label && styles.iconOnly,
+        animatedStyle,
+        style,
+      ]}
     >
       {icon}
-      {label ? <Text style={styles.label}>{label}</Text> : null}
+      {label ? (
+        <Text style={[styles.label, { color: labelColor }]}>{label}</Text>
+      ) : null}
     </AnimatedPressable>
   );
 }

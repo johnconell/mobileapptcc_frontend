@@ -11,10 +11,10 @@ import {
   Pressable,
   Alert,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ArrowLeft } from 'lucide-react-native';
+import { ArrowLeft, Eye, EyeOff } from 'lucide-react-native';
 import { Button } from '@/shared/components/ui/Button';
 import { Input } from '@/shared/components/ui/Input';
 import {
@@ -30,13 +30,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { userFacingError } from '@/shared/utils/userFacingError';
 
 export default function ProctorLoginScreen() {
-  const { colors: themeColors } = useAppTheme();
+  const { colors: themeColors, isDark } = useAppTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const profile = useProctorStore((s) => s.profile);
   const setProfile = useProctorStore((s) => s.setProfile);
-  const emailInput = useRef<TextInput>(null);
+  const usernameInput = useRef<TextInput>(null);
   const passwordInput = useRef<TextInput>(null);
+  const submittingRef = useRef(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     if (profile) {
@@ -63,14 +66,16 @@ export default function ProctorLoginScreen() {
       })();
     }
   }, [profile, router]);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [googleLoading, setGoogleLoading] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      setShowPassword(false);
+    }, []),
+  );
 
   const goToLanding = useCallback(() => {
-    if (router.canGoBack()) {
-      router.back();
-      return;
-    }
+    // Replace the nested proctor route instead of popping history. A previous
+    // schedule screen can still be underneath the login screen after logout.
     router.replace({ pathname: '/', params: { stay: '1', from: 'login' } });
   }, [router]);
 
@@ -96,26 +101,29 @@ export default function ProctorLoginScreen() {
   );
 
   const onSubmit = handleSubmit(async (values) => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setFormError(null);
-    const result = await AuthRepository.login(values.username, values.password);
-    if (!result.success || !result.profile) {
-      setFormError(result.message ?? 'Login failed');
-      return;
+    try {
+      const result = await AuthRepository.login(values.username, values.password);
+      if (!result.success || !result.profile) {
+        setFormError(result.message ?? 'Login failed');
+        return;
+      }
+      completeLogin(result.profile);
+    } finally {
+      submittingRef.current = false;
     }
-    completeLogin(result.profile);
   });
 
-  const onGoogle = useCallback(async () => {
-    setFormError(null);
-    setGoogleLoading(false);
-    setFormError(
-      'Google sign-in is temporarily unavailable in this app build. Use your assigned email and password.',
-    );
+  const togglePasswordVisibility = useCallback(() => {
+    setShowPassword((current) => !current);
+    requestAnimationFrame(() => passwordInput.current?.focus());
   }, []);
 
   return (
     <KeyboardAvoidingView
-      style={[styles.screen, { backgroundColor: themeColors.card }]}
+      style={[styles.screen, { backgroundColor: themeColors.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
     >
@@ -132,22 +140,36 @@ export default function ProctorLoginScreen() {
           accessibilityRole="button"
           accessibilityLabel="Back to home"
           onPress={goToLanding}
-          style={styles.backButton}
+          style={[
+            styles.backButton,
+            {
+              backgroundColor: themeColors.card,
+              borderColor: themeColors.cardBorder,
+            },
+          ]}
           hitSlop={10}
         >
-          <ArrowLeft size={21} color={colors.ink} />
+          <ArrowLeft size={21} color={themeColors.textPrimary} />
         </Pressable>
 
         <View style={styles.form}>
-          <View style={styles.logoFrame}>
+          <View
+            style={[
+              styles.logoFrame,
+              {
+                backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#FBF7F1',
+                borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : '#7B102033',
+              },
+            ]}
+          >
             <Image
               source={require('../../assets/tcc-logo.png')}
-              style={styles.logo}
+              style={[styles.logo, isDark && { opacity: 0.9 }]}
               accessibilityLabel="Tagoloan Community College seal"
               resizeMode="contain"
             />
           </View>
-          <Text style={[styles.title, { color: colors.primary }]}>Proctor Sign In</Text>
+          <Text style={[styles.title, { color: themeColors.accent }]}>Proctor Sign In</Text>
           <Text style={[styles.sub, { color: themeColors.textSecondary }]}>
             Authorized proctor access only. Sign in with your assigned account.
           </Text>
@@ -157,12 +179,11 @@ export default function ProctorLoginScreen() {
             name="username"
             render={({ field: { onChange, onBlur, value } }) => (
               <Input
-                label="Email"
-                placeholder="proctor@example.com"
-                ref={emailInput}
+                label="Username"
+                placeholder="Enter your username"
+                ref={usernameInput}
                 autoCapitalize="none"
-                autoComplete="email"
-                keyboardType="email-address"
+                autoComplete="username"
                 returnKeyType="next"
                 blurOnSubmit={false}
                 onSubmitEditing={() => passwordInput.current?.focus()}
@@ -170,7 +191,14 @@ export default function ProctorLoginScreen() {
                 onChangeText={onChange}
                 onBlur={onBlur}
                 error={errors.username?.message}
-                style={styles.input}
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: themeColors.cardMuted,
+                    borderColor: themeColors.cardBorder,
+                    color: themeColors.textPrimary,
+                  },
+                ]}
               />
             )}
           />
@@ -183,7 +211,7 @@ export default function ProctorLoginScreen() {
                 label="Password"
                 placeholder="••••••••"
                 ref={passwordInput}
-                secureTextEntry
+                secureTextEntry={!showPassword}
                 autoComplete="current-password"
                 returnKeyType="done"
                 value={value}
@@ -191,42 +219,49 @@ export default function ProctorLoginScreen() {
                 onBlur={onBlur}
                 error={errors.password?.message}
                 onSubmitEditing={onSubmit}
-                style={styles.input}
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: themeColors.cardMuted,
+                    borderColor: themeColors.cardBorder,
+                    color: themeColors.textPrimary,
+                  },
+                ]}
+                rightAccessory={
+                  <Pressable
+                    onPress={togglePasswordVisibility}
+                    accessibilityRole="button"
+                    accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                    accessibilityState={{ selected: showPassword }}
+                    hitSlop={10}
+                    style={styles.eyeButton}
+                  >
+                    {showPassword ? (
+                      <EyeOff size={20} color={themeColors.textSecondary} />
+                    ) : (
+                      <Eye size={20} color={themeColors.textSecondary} />
+                    )}
+                  </Pressable>
+                }
               />
             )}
           />
 
           {formError ? (
-            <Text accessibilityRole="alert" style={styles.error}>{formError}</Text>
+            <Text accessibilityRole="alert" style={[styles.error, { color: themeColors.danger }]}>
+              {formError}
+            </Text>
           ) : null}
 
           <Button
             title="Sign In"
             size="lg"
             fullWidth
-            disabled={googleLoading}
             loading={isSubmitting}
             onPress={onSubmit}
             style={{ marginTop: 18 }}
           />
 
-          <View style={styles.divider}>
-            <View style={[styles.dividerLine, { backgroundColor: themeColors.cardBorder }]} />
-            <Text style={[styles.dividerText, { color: themeColors.textMuted }]}>OR</Text>
-            <View style={[styles.dividerLine, { backgroundColor: themeColors.cardBorder }]} />
-          </View>
-
-          <Button
-            title="Continue with Google"
-            variant="outline"
-            size="lg"
-            fullWidth
-            disabled={isSubmitting}
-            loading={googleLoading}
-            onPress={() => void onGoogle()}
-            style={{ marginTop: 14 }}
-            icon={<Text style={styles.googleMark}>G</Text>}
-          />
         </View>
 
         <View style={styles.footer}>
@@ -238,7 +273,9 @@ export default function ProctorLoginScreen() {
             onPress={goToLanding}
             hitSlop={8}
           >
-            <Text style={styles.footerLink}>Return to the public portal</Text>
+            <Text style={[styles.footerLink, { color: themeColors.accent }]}>
+              Return to the public portal
+            </Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -304,21 +341,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     fontSize: 14,
   },
-  error: { marginTop: 10, color: colors.danger, fontWeight: '600', fontSize: 13 },
-  googleMark: {
-    color: '#4285F4',
-    fontSize: 18,
-    fontWeight: '700',
-    marginRight: 2,
-  },
-  divider: {
-    flexDirection: 'row',
+  eyeButton: {
+    width: 36,
+    height: 36,
     alignItems: 'center',
-    gap: 12,
-    marginTop: 20,
+    justifyContent: 'center',
   },
-  dividerLine: { height: 1, flex: 1 },
-  dividerText: { fontSize: 11, fontWeight: '600', letterSpacing: 1 },
+  error: { marginTop: 10, color: colors.danger, fontWeight: '600', fontSize: 13 },
   footer: { alignItems: 'center', paddingTop: 12 },
   footerText: { fontSize: 12, textAlign: 'center' },
   footerLink: {

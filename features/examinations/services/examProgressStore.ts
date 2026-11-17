@@ -2,6 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { STORAGE_KEYS } from '@/shared/constants';
 import type { ChoiceKey, ExamAnswer } from '@/shared/types';
 import type { TimeSyncMetadata } from '@/features/examinations/services/examTimerCoordinator';
+import type { ChoiceDisplayMap } from '@/features/synchronization/services/offlineExamRepository';
 import {
   writeEncryptedFile,
   readEncryptedFile,
@@ -23,6 +24,10 @@ export type ExamCheckpoint = {
   deadline?: string | null;
   scheduleClosingTime?: string | null;
   timeSync?: TimeSyncMetadata;
+  /** Stable question IDs sequence for this student attempt. */
+  questionOrder?: string[];
+  /** Display choice letter to original option letter mapping. */
+  choiceMaps?: Record<string, ChoiceDisplayMap>;
   /** Monotonic checkpoint revision shared with the proctor LAN session. */
   revision?: number;
   savedAt: string;

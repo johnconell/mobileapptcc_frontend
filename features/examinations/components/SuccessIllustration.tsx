@@ -8,10 +8,12 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { colors } from '@/shared/theme';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 export function SuccessIllustration() {
   const scale = useSharedValue(0.6);
   const opacity = useSharedValue(0);
+  const { colors: themeColors, isDark } = useAppTheme();
 
   useEffect(() => {
     opacity.value = withTimingSafe(1);
@@ -25,12 +27,17 @@ export function SuccessIllustration() {
 
   return (
     <Animated.View style={[styles.wrap, style]}>
-      <View style={styles.circle}>
+      <View
+        style={[
+          styles.circle,
+          { backgroundColor: isDark ? 'rgba(210, 137, 148, 0.15)' : '#F0D9DC' },
+        ]}
+      >
         <Svg width={72} height={72} viewBox="0 0 72 72">
-          <Circle cx="36" cy="36" r="34" fill={colors.primary} />
+          <Circle cx="36" cy="36" r="34" fill={themeColors.accent} />
           <Path
             d="M22 37.5 L31 46.5 L50 27"
-            stroke={colors.secondary}
+            stroke={isDark ? themeColors.card : colors.secondary}
             strokeWidth={4.5}
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -38,7 +45,7 @@ export function SuccessIllustration() {
           />
         </Svg>
       </View>
-      <Text style={styles.caption}>Submission confirmed</Text>
+      <Text style={[styles.caption, { color: themeColors.accent }]}>Submission confirmed</Text>
     </Animated.View>
   );
 }
@@ -53,14 +60,12 @@ const styles = StyleSheet.create({
     width: 120,
     height: 120,
     borderRadius: 40,
-    backgroundColor: '#F0D9DC',
     alignItems: 'center',
     justifyContent: 'center',
   },
   caption: {
     fontSize: 13,
     fontWeight: '700',
-    color: colors.primary,
     letterSpacing: 0.4,
     textTransform: 'uppercase',
   },

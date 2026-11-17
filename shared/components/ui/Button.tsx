@@ -13,6 +13,7 @@ import Animated, {
   withSpring,
 } from 'react-native-reanimated';
 import { colors, radii } from '@/shared/theme';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger';
 type ButtonSize = 'sm' | 'md' | 'lg';
@@ -43,12 +44,39 @@ export function Button({
   fullWidth = false,
   style,
 }: ButtonProps) {
+  const { isDark, colors: themeColors } = useAppTheme();
   const scale = useSharedValue(1);
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
   }));
 
   const isDisabled = disabled || loading;
+
+  const dynamicVariantStyle = isDark ? {
+    primary: { backgroundColor: themeColors.accent },
+    secondary: { backgroundColor: themeColors.accentGold },
+    outline: {
+      backgroundColor: 'transparent',
+      borderWidth: 1.5,
+      borderColor: themeColors.accent,
+    },
+    ghost: { backgroundColor: 'transparent' },
+    danger: { backgroundColor: themeColors.danger },
+  }[variant] : variantStyles[variant];
+
+  const dynamicLabelColor = isDark ? {
+    primary: themeColors.card, // contrast ratio 6.84:1 >= 4.5:1
+    secondary: themeColors.card, // contrast ratio 9.6:1 >= 4.5:1
+    outline: themeColors.accent,
+    ghost: themeColors.accent,
+    danger: themeColors.card,
+  }[variant] : {
+    primary: colors.white,
+    secondary: colors.ink,
+    outline: colors.primary,
+    ghost: colors.primary,
+    danger: colors.white,
+  }[variant];
 
   return (
     <AnimatedPressable
@@ -65,21 +93,23 @@ export function Button({
         styles.base,
         fullWidth && styles.fullWidth,
         sizeStyles[size],
-        variantStyles[variant],
+        dynamicVariantStyle,
         isDisabled && styles.disabled,
         animatedStyle,
         style,
       ]}
     >
       {loading ? (
-        <ActivityIndicator
-          color={variant === 'outline' || variant === 'ghost' ? colors.primary : colors.white}
-        />
+        <ActivityIndicator color={dynamicLabelColor} />
       ) : (
         <>
           {icon}
           <Text
-            style={[styles.label, labelStyles[variant], size === 'sm' && styles.labelSm]}
+            style={[
+              styles.label,
+              { color: dynamicLabelColor },
+              size === 'sm' && styles.labelSm,
+            ]}
             numberOfLines={1}
             maxFontSizeMultiplier={1.15}
           >
@@ -125,12 +155,4 @@ const variantStyles = StyleSheet.create({
   },
   ghost: { backgroundColor: 'transparent' },
   danger: { backgroundColor: colors.danger },
-});
-
-const labelStyles = StyleSheet.create({
-  primary: { color: colors.white },
-  secondary: { color: colors.ink },
-  outline: { color: colors.primary },
-  ghost: { color: colors.primary },
-  danger: { color: colors.white },
 });

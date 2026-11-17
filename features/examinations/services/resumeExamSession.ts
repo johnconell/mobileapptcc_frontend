@@ -1,6 +1,10 @@
 import { STORAGE_KEYS } from '@/shared/constants';
 import { appStorage } from '@/shared/services/storage';
-import type { StudentRecord } from '@/shared/types';
+import type { Question, StudentRecord } from '@/shared/types';
+import {
+  buildStudentExamPaperFromQuestions,
+  type ChoiceDisplayMap,
+} from '@/features/synchronization/services/offlineExamRepository';
 import { ExamLifecycle } from '@/features/examinations/services/examLifecycle';
 import { ExamProgressStore } from '@/features/examinations/services/examProgressStore';
 import { ExamPreloader } from '@/features/examinations/services/examPreloader';
@@ -106,7 +110,7 @@ export async function recoverOrphanedStudentKioskAtStartup(): Promise<void> {
     return null;
   });
   if (finalizedSubmission && finalizedSubmission.status !== 'confirmed') {
-    await stopExamLock().catch(() => undefined);
+    // Keep kiosk active so the app smoothly resumes into /(student)/submitting without locking the phone
     return;
   }
 
@@ -287,7 +291,46 @@ export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
 
     const exam = useExamStore.getState();
     exam.setSessionId(sessionId);
-    exam.setQuestions(questions);
+
+    let questionsToUse: Question[] = questions;
+    let choiceMapsToUse: Record<string, ChoiceDisplayMap> = {};
+
+    if (
+      checkpoint &&
+      checkpoint.sessionId === sessionId &&
+      Array.isArray(checkpoint.questionOrder) &&
+      checkpoint.questionOrder.length === questions.length
+    ) {
+      const byId = new Map(questions.map((q) => [q.id, q]));
+      const ordered = checkpoint.questionOrder
+        .map((id) => byId.get(id))
+        .filter((q): q is Question => Boolean(q));
+      if (ordered.length === questions.length) {
+        questionsToUse = ordered.map((q, index) => {
+          const map = checkpoint.choiceMaps?.[q.id];
+          if (!map) return { ...q, number: index + 1 };
+          const keys = ['A', 'B', 'C', 'D'] as const;
+          const choices = { A: '', B: '', C: '', D: '' } as Question['choices'];
+          for (const display of keys) {
+            const original = map[display] ?? display;
+            choices[display] = q.choices[original] ?? '';
+          }
+          return { ...q, number: index + 1, choices };
+        });
+        choiceMapsToUse = checkpoint.choiceMaps ?? {};
+      }
+    } else {
+      const settings = await ExamPreloader.getCachedSettings();
+      const studentIdentifier = (student.studentId || String(student.id || '')).trim();
+      const paper = buildStudentExamPaperFromQuestions(questions, {
+        studentIdentifier,
+        settings: settings ?? undefined,
+      });
+      questionsToUse = paper.questions;
+      choiceMapsToUse = paper.choiceMaps;
+    }
+
+    exam.setQuestions(questionsToUse, choiceMapsToUse);
     const authoritativeDuration = heartbeat?.durationMinutes || duration;
     exam.startExam({
       durationMinutes: authoritativeDuration,
@@ -315,6 +358,7 @@ export async function tryResumeStudentExam(): Promise<ResumeExamResult> {
           scheduleClosingTime: checkpoint.scheduleClosingTime,
           attemptId: checkpoint.attemptId || token,
           timeSync: checkpoint.timeSync,
+          choiceMaps: choiceMapsToUse,
         });
         exam.markAutoSaved(checkpoint.savedAt);
       }

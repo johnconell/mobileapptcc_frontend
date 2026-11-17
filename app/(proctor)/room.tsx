@@ -21,6 +21,7 @@ import { userFacingError } from '@/shared/utils/userFacingError';
 import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { sortStudentsAlphabetical } from '@/features/synchronization/utils/studentNameOrder';
+import { type AppThemeColors, useAppTheme } from '@/shared/hooks/useAppTheme';
 
 function statusLabel(status: string) {
   if (status === 'idle') return 'Closed';
@@ -34,14 +35,15 @@ function statusTone(status: string): 'default' | 'success' | 'warning' | 'danger
   return 'default';
 }
 
-function roomAccent(status: string) {
-  if (status === 'lobby_open') return colors.warning;
-  if (status === 'in_progress') return colors.success;
-  if (status === 'ended') return colors.danger;
-  return colors.inkMuted;
+function roomAccent(status: string, theme: AppThemeColors) {
+  if (status === 'lobby_open') return theme.warning;
+  if (status === 'in_progress') return theme.success;
+  if (status === 'ended') return theme.danger;
+  return theme.textMuted;
 }
 
 export default function RoomDetailScreen() {
+  const { colors: themeColors, isDark } = useAppTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { sessionId, roomId, scheduleId } = useLocalSearchParams<{
@@ -133,7 +135,7 @@ export default function RoomDetailScreen() {
 
   if (roomsQuery.isLoading && !room && !roomLoadingTimedOut) {
     return (
-      <View style={styles.screen}>
+      <View style={[styles.screen, { backgroundColor: themeColors.background }]}>
         <Header
           title="Room"
           subtitle={session?.timeLabel ?? 'Loading…'}
@@ -151,7 +153,7 @@ export default function RoomDetailScreen() {
 
   if ((roomsQuery.isError || roomLoadingTimedOut) && !room) {
     return (
-      <View style={styles.screen}>
+      <View style={[styles.screen, { backgroundColor: themeColors.background }]}>
         <Header
           title="Room"
           subtitle={session?.timeLabel ?? 'Available Room'}
@@ -163,7 +165,7 @@ export default function RoomDetailScreen() {
           }
         />
         <View style={styles.empty}>
-          <Text style={styles.emptyTitle}>
+          <Text style={[styles.emptyTitle, { color: themeColors.textPrimary }]}>
             {roomLoadingTimedOut
               ? 'Loading this room took too long.'
               : 'Unable to load this room.'}
@@ -182,7 +184,7 @@ export default function RoomDetailScreen() {
 
   if (!room) {
     return (
-      <View style={styles.screen}>
+      <View style={[styles.screen, { backgroundColor: themeColors.background }]}>
         <Header
           title="Room"
           onBack={() =>
@@ -193,7 +195,7 @@ export default function RoomDetailScreen() {
           }
         />
         <View style={styles.empty}>
-          <Text style={styles.emptyTitle}>Room not found</Text>
+          <Text style={[styles.emptyTitle, { color: themeColors.textPrimary }]}>Room not found</Text>
           <Button
             title="Back to rooms"
             onPress={() =>
@@ -208,7 +210,7 @@ export default function RoomDetailScreen() {
     );
   }
 
-  const accent = roomAccent(room.status);
+  const accent = roomAccent(room.status, themeColors);
   const isOpen = room.status === 'lobby_open' || room.status === 'in_progress';
   // Only truly ended sessions show "View results & sync".
   // Do not treat canReopen===false alone as ended (idle rooms must stay openable).
@@ -334,7 +336,7 @@ export default function RoomDetailScreen() {
   };
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { backgroundColor: themeColors.background }]}>
       <Header
         title={room.roomName}
         subtitle={session?.timeLabel ?? 'Room details'}
@@ -370,19 +372,19 @@ export default function RoomDetailScreen() {
       />
 
       <ScrollView contentContainerStyle={styles.content}>
-        <Card style={{ ...styles.hero, borderColor: accent }}>
+        <Card style={{ ...styles.hero, backgroundColor: themeColors.card, borderColor: accent }}>
           <View style={[styles.accentBar, { backgroundColor: accent }]} />
           <View style={styles.heroBody}>
             <View style={styles.titleRow}>
               <DoorOpen size={22} color={accent} />
-              <Text style={styles.roomName}>{room.roomName}</Text>
+              <Text style={[styles.roomName, { color: themeColors.textPrimary }]}>{room.roomName}</Text>
             </View>
             <StatusChip label={statusLabel(room.status)} tone={statusTone(room.status)} />
 
             <View style={styles.metaBlock}>
               <View style={styles.line}>
-                <Users size={15} color={colors.primary} />
-                <Text style={styles.lineText}>
+                <Users size={15} color={themeColors.accent} />
+                <Text style={[styles.lineText, { color: themeColors.textSecondary }]}>
                   Capacity {room.capacity}
                   {room.connectedCount > 0
                     ? ` · ${room.connectedCount} student${room.connectedCount === 1 ? '' : 's'} connected`
@@ -392,11 +394,11 @@ export default function RoomDetailScreen() {
 
               {room.proctorName ? (
                 <View style={styles.line}>
-                  <UserRound size={15} color={colors.primary} />
-                  <Text style={styles.lineText}>Proctored by: {room.proctorName}</Text>
+                  <UserRound size={15} color={themeColors.accent} />
+                  <Text style={[styles.lineText, { color: themeColors.textSecondary }]}>Proctored by: {room.proctorName}</Text>
                 </View>
               ) : (
-                <Text style={styles.hint}>
+                <Text style={[styles.hint, { color: themeColors.textMuted }]}>
                   {isEnded && !isOpen
                     ? 'Examination ended. You can still view the student list and sync results to Admin.'
                     : isOpen
@@ -408,13 +410,13 @@ export default function RoomDetailScreen() {
               )}
 
               {room.examinationCode ? (
-                <Text style={styles.code}>Code: {room.examinationCode}</Text>
+                <Text style={[styles.code, { color: themeColors.textPrimary }]}>Code: {room.examinationCode}</Text>
               ) : null}
             </View>
           </View>
         </Card>
 
-        <Text style={styles.help}>
+        <Text style={[styles.help, { color: themeColors.textSecondary }]}>
           {isEnded && !isOpen
             ? 'This room cannot start a new lobby. Open results to review who took the exam and sync to Admin if you have not yet.'
             : 'Students assigned to this time slot may scan this room’s QR code. Opening the lobby marks the room as open for all connected proctors.'}
@@ -435,55 +437,55 @@ export default function RoomDetailScreen() {
         />
 
         {room.status === 'in_progress' ? (
-          <Text style={styles.examLive}>Examination in progress in this room.</Text>
+          <Text style={[styles.examLive, { color: themeColors.success }]}>Examination in progress in this room.</Text>
         ) : null}
         {isEnded && !isOpen ? (
-          <Text style={styles.examLive}>
+          <Text style={[styles.examLive, { color: themeColors.success }]}>
             Session closed — view students anytime and sync when you have internet.
           </Text>
         ) : null}
 
         {/* Assigned Examinees Roster Card */}
-        <Card style={styles.rosterCard}>
+        <Card style={[styles.rosterCard, { backgroundColor: themeColors.card, borderColor: themeColors.cardBorder }]}>
           <View style={styles.rosterHeader}>
             <View style={styles.rosterTitleRow}>
-              <Users size={18} color={colors.primary} />
-              <Text style={styles.rosterTitle}>Assigned Examinees</Text>
+              <Users size={18} color={themeColors.accent} />
+              <Text style={[styles.rosterTitle, { color: themeColors.textPrimary }]}>Assigned Examinees</Text>
             </View>
-            <View style={styles.rosterCountBadge}>
-              <Text style={styles.rosterCountText}>
+            <View style={[styles.rosterCountBadge, { backgroundColor: themeColors.cardMuted }]}>
+              <Text style={[styles.rosterCountText, { color: themeColors.textSecondary }]}>
                 {examinees.length} Examinee{examinees.length === 1 ? '' : 's'}
               </Text>
             </View>
           </View>
-          <Text style={styles.rosterSubtitle}>
+          <Text style={[styles.rosterSubtitle, { color: themeColors.textMuted }]}>
             Alphabetical roster (surname-first). Examination sets are pre-assigned and locked.
           </Text>
 
           {examinees.length === 0 ? (
-            <Text style={styles.rosterEmptyText}>
+            <Text style={[styles.rosterEmptyText, { color: themeColors.textMuted }]}>
               No examinees currently cached in offline examination pack for this room.
             </Text>
           ) : (
             <View style={styles.rosterList}>
               {examinees.map((st, index) => (
-                <View key={st.id} style={styles.rosterRow}>
-                  <View style={styles.rosterIndexBox}>
-                    <Text style={styles.rosterIndexText}>{index + 1}</Text>
+                <View key={st.id} style={[styles.rosterRow, { backgroundColor: isDark ? themeColors.cardMuted : themeColors.card, borderColor: themeColors.cardBorder }]}>
+                  <View style={[styles.rosterIndexBox, { backgroundColor: isDark ? themeColors.background : themeColors.cardMuted }]}>
+                    <Text style={[styles.rosterIndexText, { color: themeColors.textSecondary }]}>{index + 1}</Text>
                   </View>
                   <View style={styles.rosterInfo}>
-                    <Text style={styles.rosterName} numberOfLines={1}>
+                    <Text style={[styles.rosterName, { color: themeColors.textPrimary }]} numberOfLines={1}>
                       {st.name}
                     </Text>
-                    <Text style={styles.rosterMeta}>
+                    <Text style={[styles.rosterMeta, { color: themeColors.textMuted }]}>
                       ID: {st.applicantId} · Room: {st.roomName}
                     </Text>
                   </View>
                   <View style={styles.rosterRight}>
-                    <View style={styles.examSetBadge}>
-                      <Text style={styles.examSetBadgeText}>{st.examSet || 'Set 1'}</Text>
+                    <View style={[styles.examSetBadge, { backgroundColor: themeColors.accent }]}>
+                      <Text style={[styles.examSetBadgeText, { color: isDark ? themeColors.card : '#FFFFFF' }]}>{st.examSet || 'Set 1'}</Text>
                     </View>
-                    <Text style={styles.rosterStatus}>{st.status}</Text>
+                    <Text style={[styles.rosterStatus, { color: themeColors.textSecondary }]}>{st.status}</Text>
                   </View>
                 </View>
               ))}
@@ -620,12 +622,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 6,
-    backgroundColor: '#8B0000',
   },
   examSetBadgeText: {
     fontSize: 10,
     fontWeight: '800',
-    color: '#FFFFFF',
     letterSpacing: 0.4,
   },
   rosterStatus: {

@@ -15,7 +15,9 @@ import { useExamStore } from '@/features/examinations/stores/examStore';
 import { releaseExamSessionRestrictions } from '@/features/examinations/services/examSessionRestrictions';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
 import { colors } from '@/shared/theme';
-import { examProcess } from '@/shared/theme/examProcess';
+import type { Question } from '@/shared/types';
+import { useExamProcess, examProcess } from '@/shared/theme/examProcess';
+import { useThemeTokens } from '@/shared/contexts/ThemeContext';
 import { ExamProcessStepper } from '@/features/examinations/components/ExamProcessStepper';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { ExamPreloader } from '@/features/examinations/services/examPreloader';
@@ -37,6 +39,17 @@ import {
   validateExamStartup,
   type ExamPackProgress,
 } from '@/features/examinations/services/examReadiness';
+import {
+  buildStudentExamPaperFromQuestions,
+  type ChoiceDisplayMap,
+} from '@/features/synchronization/services/offlineExamRepository';
+import { ExamProgressStore } from '@/features/examinations/services/examProgressStore';
+import {
+  examineeRedesignLayout,
+  useExamineeRedesignTheme,
+} from '@/shared/theme/examineeRedesign';
+import { ExamineeRedesignChrome } from '@/features/examinations/components/ExamineeRedesignChrome';
+import { usePeerAutoReconnect } from '@/features/monitoring/hooks/usePeerAutoReconnect';
 
 /**
  * DETERMINISTIC LOBBY STATES
@@ -169,6 +182,20 @@ function useLobbyController() {
     setAuthority(record.status);
     return record.status;
   }, [scannedSessionId]);
+
+  const handleAutoReconnected = useCallback(async (pulse: Awaited<ReturnType<typeof LobbyRepository.sendHeartbeat>>) => {
+    if (pulse.approvalStatus) setApprovalStatus(pulse.approvalStatus);
+    setPulseOk(true);
+    setLastPulseAt(Date.now());
+    setLastSeen(Date.now());
+    const parsed = parseStartPulse(pulse);
+    if (parsed) await applyLiveStatus(parsed.roomStatus, parsed.startSeq);
+  }, [applyLiveStatus]);
+
+  const { networkBanner } = usePeerAutoReconnect({
+    enabled: Boolean(scannedSessionId),
+    onReconnected: handleAutoReconnected,
+  });
 
   useEffect(() => {
     const status = storedSnapshot?.status;
@@ -330,8 +357,8 @@ function useLobbyController() {
     setState('STARTING');
     try {
       console.log('[STUDENT] Loading Exam Module');
-      const questions = await ExamPreloader.getPreloadedQuestions();
-      if (!questions?.length) {
+      const canonicalQuestions = await ExamPreloader.getPreloadedQuestions();
+      if (!canonicalQuestions?.length) {
         throw new Error(
           userFacingStartupError(
             progress.percent > 0 ? 'DOWNLOAD_INCOMPLETE' : 'PACK_MISSING',
@@ -353,12 +380,12 @@ function useLobbyController() {
       const gate = validateExamStartup({
         sessionId: scannedSessionId,
         examId,
-        questions,
+        questions: canonicalQuestions,
         durationMinutes: duration,
         hasSettings: Boolean(settings) || progress.configurationComplete,
         sessionStatus: 'in_progress',
         authorityStatus: 'ACTIVE',
-        progress: { ...progress, questionsDownloaded: questions.length },
+        progress: { ...progress, questionsDownloaded: canonicalQuestions.length },
       });
       if (!gate.ok) {
         throw new Error(userFacingStartupError(gate.code, gate.detail));
@@ -366,11 +393,53 @@ function useLobbyController() {
 
       requireGuidedAccess();
       console.log('[STUDENT] Navigation Triggered');
-      // The exam screen reads questions from Zustand on its first render. The
-      // pack was already verified above, but the previous flow navigated
-      // before copying it into the store, so exam.tsx saw an empty list and
-      // redirected to the landing page while kiosk mode stayed enabled.
-      setQuestions(questions);
+
+      // Check if this attempt already has a stable saved sequence in the local checkpoint
+      const checkpoint = await ExamProgressStore.load().catch(() => null);
+      let questionsToUse: Question[] = canonicalQuestions;
+      let choiceMapsToUse: Record<string, ChoiceDisplayMap> = {};
+
+      if (
+        checkpoint &&
+        checkpoint.sessionId === scannedSessionId &&
+        Array.isArray(checkpoint.questionOrder) &&
+        checkpoint.questionOrder.length === canonicalQuestions.length
+      ) {
+        const byId = new Map(canonicalQuestions.map((q) => [q.id, q]));
+        const ordered = checkpoint.questionOrder
+          .map((id) => byId.get(id))
+          .filter((q): q is Question => Boolean(q));
+        if (ordered.length === canonicalQuestions.length) {
+          questionsToUse = ordered.map((q, index) => {
+            const map = checkpoint.choiceMaps?.[q.id];
+            if (!map) return { ...q, number: index + 1 };
+            const keys = ['A', 'B', 'C', 'D'] as const;
+            const choices = { A: '', B: '', C: '', D: '' } as Question['choices'];
+            for (const display of keys) {
+              const original = map[display] ?? display;
+              choices[display] = q.choices[original] ?? '';
+            }
+            return { ...q, number: index + 1, choices };
+          });
+          choiceMapsToUse = checkpoint.choiceMaps ?? {};
+        }
+      } else {
+        const studentIdentifier = (
+          verifiedStudent?.studentId ||
+          verifiedStudent?.id ||
+          String(verifiedStudent?.registration_id ?? '')
+        ).trim();
+        const assignedExamSet = verifiedStudent?.examSet?.trim() || undefined;
+        const paper = buildStudentExamPaperFromQuestions(canonicalQuestions, {
+          studentIdentifier,
+          examSet: assignedExamSet,
+          settings: settings ?? undefined,
+        });
+        questionsToUse = paper.questions;
+        choiceMapsToUse = paper.choiceMaps;
+      }
+
+      setQuestions(questionsToUse, choiceMapsToUse);
       setSessionId(scannedSessionId);
       const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
       const authoritativeStartedAt = lobbyData?.session?.startedAt || new Date().toISOString();
@@ -458,11 +527,14 @@ function useLobbyController() {
     authority,
     pulseOk,
     approvalStatus,
+    networkBanner,
   };
 }
 
 export default function StudentLobbyScreen() {
   useKeepAwake();
+  const tokens = useExamProcess();
+  const { isDark } = useThemeTokens();
   const router = useRouter();
   const navigation = useNavigation();
   const controller = useLobbyController();
@@ -557,11 +629,21 @@ export default function StudentLobbyScreen() {
     router.replace('/');
   };
 
+  if (!hasError) {
+    return (
+      <LobbyRedesign
+        controller={controller}
+        onExit={handleExit}
+        onDeclinedAdmission={handleDeclinedAdmission}
+      />
+    );
+  }
+
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { backgroundColor: tokens.pageBg }]}>
       <View style={styles.processHeader}>
         <ExamProcessStepper step={3} />
-        <Text style={styles.stepLabel}>Step 4 of 6 · Lobby</Text>
+        <Text style={[styles.stepLabel, { color: tokens.muted }]}>Step 4 of 6 · Lobby</Text>
       </View>
       <Header
         title={lobbyData?.schedule?.name || "Entrance Examination"}
@@ -573,12 +655,12 @@ export default function StudentLobbyScreen() {
         {/* SECTION 1: IDENTITY */}
         <Card style={styles.mainCard}>
            <View style={styles.studentSection}>
-              <View style={styles.avatarCircle}>
-                 <User size={24} color={colors.white} />
+              <View style={[styles.avatarCircle, { backgroundColor: tokens.accent }]}>
+                 <User size={24} color={isDark ? tokens.cardBg : '#FFFFFF'} />
               </View>
               <View style={{ flex: 1, marginLeft: 12 }}>
-                 <Text style={styles.welcomeText} numberOfLines={1}>Hello, {currentStudent?.fullName || 'Student'}</Text>
-                 <Text style={styles.programText}>{currentStudent?.programName || 'Candidate'}</Text>
+                 <Text style={[styles.welcomeText, { color: tokens.ink }]} numberOfLines={1}>Hello, {currentStudent?.fullName || 'Student'}</Text>
+                 <Text style={[styles.programText, { color: tokens.muted }]}>{currentStudent?.programName || 'Candidate'}</Text>
               </View>
            </View>
 
@@ -594,7 +676,7 @@ export default function StudentLobbyScreen() {
               </View>
            ) : (
               <View style={{ padding: 16 }}>
-                 <Text style={styles.loadingInfo}>Room details loaded from the join snapshot.</Text>
+                 <Text style={[styles.loadingInfo, { color: tokens.muted }]}>Room details loaded from the join snapshot.</Text>
               </View>
            )}
         </Card>
@@ -602,15 +684,15 @@ export default function StudentLobbyScreen() {
         {/* SECTION 3: WAITING STATUS BANNER */}
         <Card style={styles.waitingCard}>
           <View style={styles.waitingBannerRow}>
-            <View style={styles.waitingAnimWrap}>
+            <View style={[styles.waitingAnimWrap, { backgroundColor: tokens.accentSoft }]}>
               {packDownloadError ? (
-                <AlertTriangle size={18} color={colors.danger} />
+                <AlertTriangle size={18} color={tokens.error} />
               ) : (
-                <ActivityIndicator size="small" color={examProcess.accent} />
+                <ActivityIndicator size="small" color={tokens.accent} />
               )}
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.waitingBannerTitle}>
+              <Text style={[styles.waitingBannerTitle, { color: tokens.ink }]}>
                 {authority === 'ENDED'
                   ? 'Examination Ended'
                   : proctorReconnecting
@@ -627,7 +709,7 @@ export default function StudentLobbyScreen() {
                       ? 'Finishing Download...'
                       : 'Waiting for Proctor to Start...'}
               </Text>
-              <Text style={styles.waitingBannerSub}>
+              <Text style={[styles.waitingBannerSub, { color: tokens.muted }]}>
                 {authority === 'ENDED'
                   ? 'This examination has ended. Tap Return Home to leave.'
                   : proctorReconnecting
@@ -661,8 +743,8 @@ export default function StudentLobbyScreen() {
 
           {(controller.state === 'STARTING' || (controller.state === 'FINISHING_DOWNLOAD' && !packDownloadError)) && (
             <View style={styles.startingBox}>
-              <ActivityIndicator size="small" color={examProcess.accent} />
-              <Text style={styles.startingText}>
+              <ActivityIndicator size="small" color={tokens.accent} />
+              <Text style={[styles.startingText, { color: tokens.accent }]}>
                 {controller.state === 'FINISHING_DOWNLOAD'
                   ? `Finishing Download... ${Math.round(progress.percent)}%`
                   : 'Launching Exam Browser...'}
@@ -671,7 +753,7 @@ export default function StudentLobbyScreen() {
           )}
           {controller.state === 'FINISHING_DOWNLOAD' && packDownloadError ? (
             <View style={styles.startingBox}>
-              <Text style={styles.startingText}>{packDownloadError}</Text>
+              <Text style={[styles.startingText, { color: tokens.error }]}>{packDownloadError}</Text>
               <Button title="Retry download" onPress={() => void controller.retryPackDownload()} />
             </View>
           ) : null}
@@ -680,12 +762,12 @@ export default function StudentLobbyScreen() {
         {/* SECTION 4: RULES & REGULATIONS (Exactly matches Proctor Dashboard) */}
         <Card style={styles.rulesCard}>
           <View style={styles.rulesHeader}>
-            <View style={styles.rulesIconWrap}>
-              <ShieldCheck size={20} color={examProcess.accent} />
+            <View style={[styles.rulesIconWrap, { backgroundColor: tokens.accentSoft }]}>
+              <ShieldCheck size={20} color={tokens.accent} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rulesTitle}>Rules & Regulations</Text>
-              <Text style={styles.rulesSubtitle}>
+              <Text style={[styles.rulesTitle, { color: tokens.ink }]}>Rules & Regulations</Text>
+              <Text style={[styles.rulesSubtitle, { color: tokens.muted }]}>
                 Proctoring Standards & Examinee Guidelines
               </Text>
             </View>
@@ -693,49 +775,49 @@ export default function StudentLobbyScreen() {
 
           <View style={styles.rulesList}>
             <View style={styles.ruleRow}>
-              <Text style={styles.ruleBullet}>•</Text>
-              <Text style={styles.ruleText}>
-                <Text style={styles.ruleBold}>Verification: </Text>
+              <Text style={[styles.ruleBullet, { color: tokens.accent }]}>•</Text>
+              <Text style={[styles.ruleText, { color: tokens.muted }]}>
+                <Text style={[styles.ruleBold, { color: tokens.ink }]}>Verification: </Text>
                 Examinees must join with the proctor QR code or room code on the same Join screen.
               </Text>
             </View>
 
             <View style={styles.ruleRow}>
-              <Text style={styles.ruleBullet}>•</Text>
-              <Text style={styles.ruleText}>
-                <Text style={styles.ruleBold}>Screen Pinning (BYOD): </Text>
+              <Text style={[styles.ruleBullet, { color: tokens.accent }]}>•</Text>
+              <Text style={[styles.ruleText, { color: tokens.muted }]}>
+                <Text style={[styles.ruleBold, { color: tokens.ink }]}>Screen Pinning (BYOD): </Text>
                 When prompted by Android to &quot;Pin this screen?&quot;, tap &quot;GOT IT&quot;. Do not unpin, minimize, or switch apps during the examination.
               </Text>
             </View>
 
             <View style={styles.ruleRow}>
-              <Text style={styles.ruleBullet}>•</Text>
-              <Text style={styles.ruleText}>
-                <Text style={styles.ruleBold}>Unauthorized Devices: </Text>
+              <Text style={[styles.ruleBullet, { color: tokens.accent }]}>•</Text>
+              <Text style={[styles.ruleText, { color: tokens.muted }]}>
+                <Text style={[styles.ruleBold, { color: tokens.ink }]}>Unauthorized Devices: </Text>
                 Secondary phones, smartwatches, and external electronic aids are strictly prohibited.
               </Text>
             </View>
 
             <View style={styles.ruleRow}>
-              <Text style={styles.ruleBullet}>•</Text>
-              <Text style={styles.ruleText}>
-                <Text style={styles.ruleBold}>Duration & Timer: </Text>
+              <Text style={[styles.ruleBullet, { color: tokens.accent }]}>•</Text>
+              <Text style={[styles.ruleText, { color: tokens.muted }]}>
+                <Text style={[styles.ruleBold, { color: tokens.ink }]}>Duration & Timer: </Text>
                 Session is strictly timed; auto-submits when countdown reaches 00:00.
               </Text>
             </View>
 
             <View style={styles.ruleRow}>
-              <Text style={styles.ruleBullet}>•</Text>
-              <Text style={styles.ruleText}>
-                <Text style={styles.ruleBold}>Passing Standard: </Text>
+              <Text style={[styles.ruleBullet, { color: tokens.accent }]}>•</Text>
+              <Text style={[styles.ruleText, { color: tokens.muted }]}>
+                <Text style={[styles.ruleBold, { color: tokens.ink }]}>Passing Standard: </Text>
                 Minimum qualifying score is 75.0%.
               </Text>
             </View>
 
             <View style={styles.ruleRow}>
-              <Text style={styles.ruleBullet}>•</Text>
-              <Text style={styles.ruleText}>
-                <Text style={styles.ruleBold}>Disconnection: </Text>
+              <Text style={[styles.ruleBullet, { color: tokens.accent }]}>•</Text>
+              <Text style={[styles.ruleText, { color: tokens.muted }]}>
+                <Text style={[styles.ruleBold, { color: tokens.ink }]}>Disconnection: </Text>
                 Examinees can resume disconnected sessions via Proctor PIN without data loss.
               </Text>
             </View>
@@ -743,13 +825,13 @@ export default function StudentLobbyScreen() {
         </Card>
 
         {/* SECTION 4: NETWORK HEALTH */}
-        <View style={styles.networkBox}>
-           <View style={[styles.pulse, { backgroundColor: (controller.lobbyQuery.isError || isStale) ? colors.danger : colors.success }]} />
-           <Text style={styles.networkText}>
+        <View style={[styles.networkBox, { backgroundColor: tokens.cardElevated, borderColor: tokens.cardBorder }]}>
+           <View style={[styles.pulse, { backgroundColor: (controller.lobbyQuery.isError || isStale) ? tokens.danger : tokens.okText }]} />
+           <Text style={[styles.networkText, { color: tokens.muted }]}>
               {proctorReconnecting ? "PROCTOR RECONNECTING · SAVED PROGRESS PRESERVED" : `LOCAL LINK ACTIVE · PULSE ${new Date(controller.lastSeen).toLocaleTimeString()}`}
            </Text>
            <Pressable onPress={() => void controller.lobbyQuery.refetch()} style={styles.refreshBtn}>
-              <RefreshCw size={14} color={examProcess.accent} />
+              <RefreshCw size={14} color={tokens.accent} />
            </Pressable>
         </View>
 
@@ -766,12 +848,13 @@ export default function StudentLobbyScreen() {
 }
 
 function InfoItem({ label, value }: { label: string; value: string }) {
-    return (
-        <View style={styles.infoItem}>
-            <Text style={styles.infoLabel}>{label}</Text>
-            <Text style={styles.infoValue}>{value}</Text>
-        </View>
-    );
+  const tokens = useExamProcess();
+  return (
+    <View style={styles.infoItem}>
+      <Text style={[styles.infoLabel, { color: tokens.muted }]}>{label}</Text>
+      <Text style={[styles.infoValue, { color: tokens.ink }]}>{value}</Text>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -983,5 +1066,480 @@ const styles = StyleSheet.create({
   ruleBold: {
     fontFamily: examProcess.fontSemiBold,
     color: examProcess.ink,
+  },
+});
+
+type LobbyControllerSnapshot = ReturnType<typeof useLobbyController>;
+
+function LobbyRedesign({
+  controller,
+  onExit,
+  onDeclinedAdmission,
+}: {
+  controller: LobbyControllerSnapshot;
+  onExit: () => void;
+  onDeclinedAdmission: () => Promise<void>;
+}) {
+  const theme = useExamineeRedesignTheme();
+  const {
+    lobbyData,
+    currentStudent,
+    isStale,
+    progress,
+    packDownloadError,
+    authority,
+    pulseOk,
+    approvalStatus,
+    lastSeen,
+    networkBanner,
+  } = controller;
+  const proctorReconnecting = controller.lobbyQuery.isError || isStale || !pulseOk;
+  const examReady = Boolean(progress.moduleReady && progress.hashVerified && progress.percent >= 100);
+  const isTerminal = authority === 'ENDED';
+  const isDeclined = approvalStatus === 'declined';
+  const showWhileWaiting = !isTerminal && !isDeclined;
+
+  let statusTitle = 'Please wait for the proctor to start';
+  let statusBody =
+    'The exam begins automatically. Your answers stay saved on this phone, and it reconnects on its own if the Wi-Fi drops.\n\nThe test opens automatically after the pack is verified and the proctor starts.';
+
+  if (isTerminal) {
+    statusTitle = 'Examination Ended';
+    statusBody = controller.error || 'This examination has ended. Tap Return Home to leave.';
+  } else if (proctorReconnecting) {
+    statusTitle = 'Waiting for Proctor Connection';
+    statusBody =
+      'Your identity, answers, and examination progress remain saved on this phone. Reconnecting automatically over the exam Wi-Fi.';
+  } else if (packDownloadError) {
+    statusTitle = 'Examination pack unavailable';
+    statusBody = packDownloadError;
+  } else if (isDeclined) {
+    statusTitle = 'Admission Declined';
+    statusBody = 'The proctor declined this admission request. You cannot enter this examination room.';
+  } else if (approvalStatus !== 'approved') {
+    statusTitle = 'Waiting for Proctor Approval';
+    statusBody = 'Your request was sent. You will be admitted automatically after the proctor approves it.';
+  } else if (controller.state === 'STARTING' || authority === 'ACTIVE') {
+    statusTitle = 'Entry Authorized!';
+    statusBody = 'Launching examination browser. Please hold on.';
+  } else if (controller.state === 'FINISHING_DOWNLOAD') {
+    statusTitle = 'Finishing Download...';
+    statusBody = `The proctor has started the exam. Completing download at ${Math.round(progress.percent)}%.`;
+  }
+
+  const connectionLabel = isTerminal
+    ? 'Examination ended'
+    : isDeclined
+      ? 'Admission declined'
+      : proctorReconnecting
+        ? 'Proctor reconnecting'
+        : 'Proctor connected';
+  const connectionColor = isTerminal || isDeclined || proctorReconnecting ? theme.warningBorder : theme.successText;
+  const connectionBackground = isTerminal || isDeclined || proctorReconnecting
+    ? theme.warningBackground
+    : theme.successBackground;
+  const progressPercent = Math.max(0, Math.min(100, Math.round(progress.percent)));
+
+  return (
+    <ExamineeRedesignChrome
+      step={3}
+      title="Waiting Room"
+      stepLabel="Step 4 of 6 · Lobby"
+      footer={
+        <View style={redesignStyles.footer}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Leave Waiting Room"
+            onPress={onExit}
+            style={[redesignStyles.secondaryButton, { backgroundColor: theme.secondaryCard }]}
+          >
+            <Text style={[redesignStyles.secondaryButtonText, { color: theme.text }]}>Leave Waiting Room</Text>
+          </Pressable>
+        </View>
+      }
+    >
+      <View
+        style={[
+          redesignStyles.connectionChip,
+          { backgroundColor: connectionBackground },
+        ]}
+      >
+        <View style={[redesignStyles.connectionDot, { backgroundColor: connectionColor }]} />
+        <Text style={[redesignStyles.connectionText, { color: connectionColor }]}>{connectionLabel}</Text>
+      </View>
+
+      {networkBanner ? (
+        <View
+          accessibilityRole="alert"
+          style={[redesignStyles.networkBanner, { backgroundColor: theme.warningBackground, borderColor: theme.warningBorder }]}
+        >
+          <Text style={[redesignStyles.networkBannerText, { color: theme.error }]}>{networkBanner}</Text>
+        </View>
+      ) : null}
+
+      <View style={[redesignStyles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+        <View style={redesignStyles.identityRow}>
+          <View style={[redesignStyles.avatar, { backgroundColor: theme.primary }]}>
+            <User size={25} color={theme.white} />
+          </View>
+          <View style={redesignStyles.identityCopy}>
+            <Text style={[redesignStyles.identityName, { color: theme.text }]} numberOfLines={1}>
+              {currentStudent?.fullName || 'Student'}
+            </Text>
+            <Text style={[redesignStyles.identityProgram, { color: theme.secondaryText }]} numberOfLines={2}>
+              {currentStudent?.programName || 'Candidate'}
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={[redesignStyles.card, redesignStyles.detailsCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+        <LobbyInfoItem label="BATCH" value={lobbyData?.session?.batchNumber || '—'} theme={theme} />
+        <LobbyInfoItem label="TIME" value={lobbyData?.session?.timeLabel || '—'} theme={theme} />
+        <LobbyInfoItem label="ROOM" value={lobbyData?.session?.roomName || lobbyData?.session?.venue || 'TBD'} theme={theme} />
+      </View>
+
+      <View
+        style={[
+          redesignStyles.statusCard,
+          {
+            backgroundColor: isTerminal || isDeclined || packDownloadError ? theme.card : theme.warningBackground,
+            borderColor: isTerminal || isDeclined || packDownloadError ? theme.cardBorder : theme.warningBorder,
+          },
+        ]}
+      >
+        <Text style={[redesignStyles.statusTitle, { color: theme.text }]}>{statusTitle}</Text>
+        <Text style={[redesignStyles.statusBody, { color: theme.secondaryText }]}>{statusBody}</Text>
+
+        {controller.state === 'FINISHING_DOWNLOAD' ? (
+          <View style={redesignStyles.downloadBlock}>
+            <View style={redesignStyles.downloadHeader}>
+              <Text style={[redesignStyles.downloadLabel, { color: theme.text }]}>Examination pack</Text>
+              <Text style={[redesignStyles.downloadPercent, { color: theme.primary }]}>{progressPercent}%</Text>
+            </View>
+            <View style={[redesignStyles.progressTrack, { backgroundColor: theme.cardBorder }]}>
+              <View style={[redesignStyles.progressFill, { width: `${progressPercent}%`, backgroundColor: theme.primary }]} />
+            </View>
+            <Text style={[redesignStyles.downloadDetail, { color: theme.secondaryText }]}>
+              {progress.questionsExpected > 0
+                ? `${progress.questionsDownloaded} of ${progress.questionsExpected} questions downloaded`
+                : progress.phaseLabel}
+            </Text>
+          </View>
+        ) : null}
+
+        {controller.state === 'STARTING' || (authority === 'ACTIVE' && examReady) ? (
+          <View style={redesignStyles.inlineStatus}>
+            <ActivityIndicator size="small" color={theme.primary} />
+            <Text style={[redesignStyles.inlineStatusText, { color: theme.primary }]}>Launching Exam Browser...</Text>
+          </View>
+        ) : null}
+
+        {packDownloadError ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Retry download"
+            onPress={() => void controller.retryPackDownload()}
+            style={[redesignStyles.smallAction, { backgroundColor: theme.primary }]}
+          >
+            <Text style={[redesignStyles.smallActionText, { color: theme.white }]}>Retry download</Text>
+          </Pressable>
+        ) : null}
+
+        {isTerminal ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Return Home"
+            onPress={onExit}
+            style={[redesignStyles.smallAction, { backgroundColor: theme.primary }]}
+          >
+            <Text style={[redesignStyles.smallActionText, { color: theme.white }]}>Return Home</Text>
+          </Pressable>
+        ) : null}
+
+        {isDeclined ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Return to Join Screen"
+            onPress={() => void onDeclinedAdmission()}
+            style={[redesignStyles.smallAction, { backgroundColor: theme.primary }]}
+          >
+            <Text style={[redesignStyles.smallActionText, { color: theme.white }]}>Return to Join Screen</Text>
+          </Pressable>
+        ) : null}
+      </View>
+
+      {showWhileWaiting ? (
+        <View style={[redesignStyles.card, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+          <Text style={[redesignStyles.cardTitle, { color: theme.text }]}>While you wait</Text>
+          <LobbyWaitRow text="Keep this screen open" theme={theme} />
+          <LobbyWaitRow text="Passing score is 75%" theme={theme} />
+          <LobbyWaitRow text="Put away other devices" theme={theme} />
+        </View>
+      ) : null}
+
+      <View style={[redesignStyles.networkRow, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+        <View style={[redesignStyles.networkDot, { backgroundColor: proctorReconnecting ? theme.error : theme.successText }]} />
+        <Text style={[redesignStyles.networkText, { color: theme.secondaryText }]}>
+          {proctorReconnecting
+            ? 'PROCTOR RECONNECTING · SAVED PROGRESS PRESERVED'
+            : `LOCAL LINK ACTIVE · PULSE ${new Date(lastSeen).toLocaleTimeString()}`}
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Refresh lobby status"
+          onPress={() => void controller.lobbyQuery.refetch()}
+          style={redesignStyles.refreshButton}
+        >
+          <RefreshCw size={16} color={theme.primary} />
+        </Pressable>
+      </View>
+    </ExamineeRedesignChrome>
+  );
+}
+
+function LobbyInfoItem({
+  label,
+  value,
+  theme,
+}: {
+  label: string;
+  value: string;
+  theme: ReturnType<typeof useExamineeRedesignTheme>;
+}) {
+  return (
+    <View style={redesignStyles.infoItem}>
+      <Text style={[redesignStyles.infoLabel, { color: theme.secondaryText }]}>{label}</Text>
+      <Text style={[redesignStyles.infoValue, { color: theme.text }]} numberOfLines={2}>{value}</Text>
+    </View>
+  );
+}
+
+function LobbyWaitRow({
+  text,
+  theme,
+}: {
+  text: string;
+  theme: ReturnType<typeof useExamineeRedesignTheme>;
+}) {
+  return (
+    <View style={redesignStyles.waitRow}>
+      <Text style={[redesignStyles.waitCheck, { color: theme.secondaryText }]}>✓</Text>
+      <Text style={[redesignStyles.waitText, { color: theme.secondaryText }]}>{text}</Text>
+    </View>
+  );
+}
+
+const redesignStyles = StyleSheet.create({
+  card: {
+    borderWidth: 1,
+    borderRadius: examineeRedesignLayout.cardRadius,
+    padding: examineeRedesignLayout.cardPadding,
+    gap: 12,
+  },
+  connectionChip: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  connectionDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  connectionText: {
+    fontSize: 16,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  identityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  avatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  identityCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  identityName: {
+    fontSize: 21,
+    lineHeight: 27,
+    fontFamily: 'Poppins_700Bold',
+  },
+  identityProgram: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontFamily: 'Poppins_400Regular',
+  },
+  detailsCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  infoItem: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  infoLabel: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'Poppins_400Regular',
+  },
+  infoValue: {
+    fontSize: 16,
+    lineHeight: 23,
+    fontFamily: 'Poppins_700Bold',
+  },
+  statusCard: {
+    borderWidth: 1,
+    borderRadius: examineeRedesignLayout.cardRadius,
+    padding: examineeRedesignLayout.cardPadding,
+    gap: 10,
+  },
+  statusTitle: {
+    fontSize: 21,
+    lineHeight: 28,
+    fontFamily: 'Poppins_700Bold',
+  },
+  statusBody: {
+    fontSize: 16,
+    lineHeight: 25,
+    fontFamily: 'Poppins_400Regular',
+  },
+  downloadBlock: {
+    gap: 7,
+    marginTop: 4,
+  },
+  downloadHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  downloadLabel: {
+    fontSize: 14,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  downloadPercent: {
+    fontSize: 14,
+    fontFamily: 'Poppins_700Bold',
+  },
+  progressTrack: {
+    height: 8,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  downloadDetail: {
+    fontSize: 13,
+    lineHeight: 19,
+    fontFamily: 'Poppins_400Regular',
+  },
+  inlineStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  inlineStatusText: {
+    fontSize: 14,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  smallAction: {
+    minHeight: 46,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  smallActionText: {
+    fontSize: 15,
+    fontFamily: 'Poppins_700Bold',
+  },
+  cardTitle: {
+    fontSize: 21,
+    lineHeight: 28,
+    fontFamily: 'Poppins_700Bold',
+  },
+  waitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  waitCheck: {
+    fontSize: 22,
+    lineHeight: 24,
+    fontFamily: 'Poppins_400Regular',
+  },
+  waitText: {
+    flex: 1,
+    fontSize: 17,
+    lineHeight: 25,
+    fontFamily: 'Poppins_400Regular',
+  },
+  networkRow: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  networkBanner: {
+    minHeight: 44,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    justifyContent: 'center',
+  },
+  networkBannerText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  networkDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  networkText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  refreshButton: {
+    padding: 5,
+  },
+  footer: {
+    paddingTop: 14,
+  },
+  secondaryButton: {
+    minHeight: examineeRedesignLayout.buttonHeight,
+    borderRadius: examineeRedesignLayout.buttonRadius,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  secondaryButtonText: {
+    fontSize: 18,
+    fontFamily: 'Poppins_700Bold',
   },
 });

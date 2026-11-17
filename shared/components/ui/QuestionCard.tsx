@@ -6,6 +6,7 @@ import { choiceKeys } from '@/shared/utils';
 import { OptionRow } from './OptionRow';
 import { AppButton, Row } from './primitives';
 import { useFontScale, useThemeTokens } from '@/shared/contexts/ThemeContext';
+import { PracticePointerArrow } from '@/features/practice/components/PracticePointerArrow';
 
 export interface QuestionCardProps {
   question: Question;
@@ -16,6 +17,8 @@ export interface QuestionCardProps {
   isFlagged: boolean;
   onToggleFlag: () => void;
   disabled?: boolean;
+  onFlagButtonLayout?: (rect: { x: number; y: number; width: number; height: number; borderRadius?: number }) => void;
+  tutorialPointer?: 'choice' | 'flag' | null;
 }
 
 function cleanChoiceText(rawText: string): string {
@@ -67,6 +70,8 @@ function QuestionCardComponent({
   isFlagged,
   onToggleFlag,
   disabled = false,
+  onFlagButtonLayout,
+  tutorialPointer,
 }: QuestionCardProps) {
   const { theme } = useThemeTokens();
   const fontScale = useFontScale();
@@ -142,35 +147,62 @@ function QuestionCardComponent({
       </Text>
 
       {/* 4 Full-width OptionRows */}
-      <View style={styles.optionsList}>
-        {keys.map((key) => {
-          const body = getChoiceLabel(question, key);
-          return (
-            <OptionRow
-              key={key}
-              optionKey={key}
-              text={body}
-              isSelected={selectedAnswer === key}
-              onSelect={handleSelect}
-              disabled={disabled}
-              fontScale={fontScale}
-              theme={theme}
+      <View style={{ position: 'relative' }}>
+        {tutorialPointer === 'choice' && (
+          <View style={styles.choicePointerAnchor} pointerEvents="none">
+            <PracticePointerArrow
+              direction="down"
+              label="TAP AN ANSWER CHOICE (A, B, C, D)"
             />
-          );
-        })}
+          </View>
+        )}
+        <View style={styles.optionsList}>
+          {keys.map((key) => {
+            const body = getChoiceLabel(question, key);
+            return (
+              <OptionRow
+                key={key}
+                optionKey={key}
+                text={body}
+                isSelected={selectedAnswer === key}
+                onSelect={handleSelect}
+                disabled={disabled}
+                fontScale={fontScale}
+                theme={theme}
+              />
+            );
+          })}
+        </View>
       </View>
 
       {/* Full-width 44px Mark as Not Sure Button */}
-      <AppButton
-        onPress={onToggleFlag}
-        disabled={disabled}
-        accessibilityLabel={isFlagged ? 'Marked as not sure. Tap to unmark.' : 'Mark as not sure'}
-        variant={isFlagged ? 'flag' : 'outline'}
-        label={isFlagged ? 'Marked as not sure' : 'Mark as not sure'}
-        icon={(color) => <Flag size={18} color={color} strokeWidth={2} fill={isFlagged ? theme.notSure.dot : 'transparent'} />}
+      <View
+        onLayout={(e) => {
+          const { x, y, width, height } = e.nativeEvent.layout;
+          if (width > 0 && height > 0) {
+            onFlagButtonLayout?.({ x, y, width, height, borderRadius: 12 });
+          }
+        }}
         style={styles.notSureBtn}
       >
-      </AppButton>
+        {tutorialPointer === 'flag' && (
+          <View style={styles.flagPointerAnchor} pointerEvents="none">
+            <PracticePointerArrow
+              direction="down"
+              label="TAP 'MARK AS NOT SURE'"
+            />
+          </View>
+        )}
+        <AppButton
+          onPress={onToggleFlag}
+          disabled={disabled}
+          accessibilityLabel={isFlagged ? 'Marked as not sure. Tap to unmark.' : 'Mark as not sure'}
+          variant={isFlagged ? 'flag' : 'outline'}
+          label={isFlagged ? 'Marked as not sure' : 'Mark as not sure'}
+          icon={(color) => <Flag size={18} color={color} strokeWidth={2} fill={isFlagged ? theme.notSure.dot : 'transparent'} />}
+          style={{ width: '100%' }}
+        />
+      </View>
     </View>
   );
 }
@@ -188,7 +220,9 @@ function areQuestionCardPropsEqual(prev: QuestionCardProps, next: QuestionCardPr
     prev.isFlagged === next.isFlagged &&
     prev.disabled === next.disabled &&
     prev.onSelect === next.onSelect &&
-    prev.onToggleFlag === next.onToggleFlag
+    prev.onToggleFlag === next.onToggleFlag &&
+    prev.onFlagButtonLayout === next.onFlagButtonLayout &&
+    prev.tutorialPointer === next.tutorialPointer
   );
 }
 
@@ -234,5 +268,15 @@ const styles = StyleSheet.create({
   notSureBtn: {
     width: '100%',
     marginTop: 12,
+  },
+  choicePointerAnchor: {
+    alignItems: 'center',
+    marginBottom: 8,
+    zIndex: 99999,
+  },
+  flagPointerAnchor: {
+    alignItems: 'center',
+    marginBottom: 6,
+    zIndex: 99999,
   },
 });

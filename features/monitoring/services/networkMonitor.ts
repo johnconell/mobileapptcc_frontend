@@ -24,13 +24,23 @@ export async function evaluateAndSwitchNetworkMode(): Promise<boolean> {
       void syncStudentDisconnects();
     }
 
+    const peerInfo = PeerExamServer.info();
+    if (peerInfo.code && peerInfo.status !== 'ended') {
+      // The proctor listener must follow Wi-Fi/DHCP changes even when the
+      // lobby screen is not mounted (for example while the app is backgrounded
+      // or the proctor is viewing another route). This is LAN-only and never
+      // depends on internet reachability.
+      await PeerExamServer.refreshHostIp();
+      return false;
+    }
+
     const { PeerExamClient } = await import('@/features/examinations/services/peerExamClient');
     if (await PeerExamClient.isActive()) {
       // Examinee is bound to the proctor phone. Cloud outage must not disable LAN polls.
       return false;
     }
 
-    if (PeerExamServer.info().running) return false;
+    if (peerInfo.running) return false;
 
     if (!isConnected || (isWifi && netState.isInternetReachable === false)) {
       if (await OfflineStore.hasPack()) await OfflineStore.setOfflineMode(true);

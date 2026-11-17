@@ -32,10 +32,12 @@ import { Card, Button, EmptyState, StatusChip } from '@/shared/components/ui';
 import { Skeleton, SkeletonCard } from '@/shared/components/ui/Skeleton';
 import { useSkeletonLoadingTimeout } from '@/components/skeleton';
 import { ProctorScheduleRow, type ScheduleEntry } from '@/features/schedules/components/ProctorScheduleRow';
+import { MyExaminationSchedule } from '@/features/schedules/components/MyExaminationSchedule';
 import { useSchedules } from '@/features/schedules/hooks/useSchedules';
 import {
   getServerClockEstimate,
   ScheduleRepository,
+  type OfficialExaminationDay,
 } from '@/features/schedules/repositories/ScheduleRepository';
 import { AuthRepository } from '@/features/authentication/repositories/AuthRepository';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
@@ -52,6 +54,7 @@ import type { ExamSchedule, ExamSession } from '@/shared/types';
 import { confirmProctorLogout } from '@/features/authentication/utils/confirmProctorLogout';
 import { useHardwareBack } from '@/shared/hooks/useHardwareBack';
 import { useAppTheme } from '@/shared/hooks/useAppTheme';
+import { useScheduleRedesignTheme } from '@/features/schedules/components/scheduleRedesignTheme';
 import { userFacingError } from '@/shared/utils/userFacingError';
 import { extractNumericScheduleId, matchOpenedRoom } from '@/features/schedules/utils/examScheduleStatus';
 import {
@@ -88,6 +91,7 @@ export default function ProctorExaminationTabScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors, isDark } = useAppTheme();
+  const scheduleTheme = useScheduleRedesignTheme();
   const queryClient = useQueryClient();
   const profile = useProctorStore((s) => s.profile);
   const setProfile = useProctorStore((s) => s.setProfile);
@@ -114,6 +118,7 @@ export default function ProctorExaminationTabScreen() {
 
   // Tracks multiple expanded schedules simultaneously
   const [scheduleEntries, setScheduleEntries] = useState<ScheduleEntry[]>([]);
+  const [officialDays, setOfficialDays] = useState<OfficialExaminationDay[]>([]);
   const [scheduleEntriesLoading, setScheduleEntriesLoading] = useState(false);
   const [scheduleEntriesError, setScheduleEntriesError] = useState<string | null>(null);
   const [scheduleEntriesAttempt, setScheduleEntriesAttempt] = useState(0);
@@ -186,7 +191,7 @@ export default function ProctorExaminationTabScreen() {
     if (!profile) {
       void AuthRepository.getCachedSessionFast().then((session) => {
         if (session) setProfile(session);
-        else router.replace('/(proctor)/login' as any);
+        else router.replace({ pathname: '/', params: { stay: '1', from: 'logout' } } as any);
       });
     }
   }, [profile, setProfile, router]);
@@ -250,6 +255,16 @@ export default function ProctorExaminationTabScreen() {
           setScheduleEntriesError('Unable to load examination time slots.');
         }
       });
+    return () => {
+      active = false;
+    };
+  }, [schedulesQuery.data, scheduleEntriesAttempt]);
+
+  useEffect(() => {
+    let active = true;
+    void ScheduleRepository.getOfficialExaminationDays().then((days) => {
+      if (active) setOfficialDays(days);
+    });
     return () => {
       active = false;
     };
@@ -623,11 +638,7 @@ export default function ProctorExaminationTabScreen() {
   const hasPreviousDays =
     currentMonthDays.length > 0 || olderMonthGroups.some(([, days]) => days.length > 0);
   const scheduleSections = useMemo(
-    () => [
-      { key: 'today', title: 'Today', kind: 'today' },
-      { key: 'upcoming', title: 'Upcoming', kind: 'upcoming' },
-      { key: 'previous', title: 'Previous Schedules', kind: 'previous' },
-    ],
+    () => [{ key: 'my-schedule', title: 'My Schedule', kind: 'schedule' }],
     [],
   );
 
@@ -687,12 +698,12 @@ export default function ProctorExaminationTabScreen() {
     : 'Examination Schedule';
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top, backgroundColor: colors.background }]}>
+    <View style={[styles.screen, { paddingTop: insets.top, backgroundColor: scheduleTheme.background }]}>
       {/* 1. REFERENCE HEADER NAV BAR (Avatar on Left, Search/Logout on Right) */}
-      <View style={[styles.navBar, { backgroundColor: colors.background }]}>
+      <View style={[styles.navBar, { backgroundColor: scheduleTheme.background }]}>
         {/* Proctor Avatar Circle */}
-        <View style={[styles.navAvatarCircle, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-          <Text style={[styles.navAvatarText, { color: colors.textPrimary }]}>
+        <View style={[styles.navAvatarCircle, { backgroundColor: scheduleTheme.surface, borderColor: scheduleTheme.border }]}>
+          <Text style={[styles.navAvatarText, { color: scheduleTheme.text }]}>
             {profile?.displayName
               ? profile.displayName
                   .split(' ')
@@ -711,25 +722,25 @@ export default function ProctorExaminationTabScreen() {
             style={[
               styles.navIconBtn,
               {
-                backgroundColor: isSearchOpen ? '#7A1F2B' : colors.card,
-                borderColor: isSearchOpen ? '#7A1F2B' : colors.cardBorder,
+                backgroundColor: isSearchOpen ? scheduleTheme.primary : scheduleTheme.surface,
+                borderColor: isSearchOpen ? scheduleTheme.primary : scheduleTheme.border,
               },
             ]}
             onPress={() => setIsSearchOpen(!isSearchOpen)}
             accessibilityLabel="Search Schedules"
             hitSlop={8}
           >
-            <Search size={18} color={isSearchOpen ? '#FFFFFF' : colors.textPrimary} />
+            <Search size={18} color={isSearchOpen ? '#FFFFFF' : scheduleTheme.text} />
           </Pressable>
 
           <Pressable
             accessibilityRole="button"
-            style={[styles.navIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
+            style={[styles.navIconBtn, { backgroundColor: scheduleTheme.surface, borderColor: scheduleTheme.border }]}
             onPress={() => confirmProctorLogout()}
             accessibilityLabel="Logout"
             hitSlop={8}
           >
-            <LogOut size={18} color="#7A1F2B" />
+            <LogOut size={18} color={colors.danger} />
           </Pressable>
         </View>
       </View>
@@ -742,7 +753,7 @@ export default function ProctorExaminationTabScreen() {
         ListHeaderComponent={
           <View style={styles.headerBlock}>
             {/* Screen Title Block */}
-            <View style={styles.screenTitleRow}>
+            <View style={[styles.screenTitleRow, { display: 'none' }]}>
               <Text style={[styles.screenHeading, { color: colors.textPrimary }]}>Examination Schedules</Text>
               <Text style={[styles.screenSubheading, { color: colors.textSecondary }]}>
                 {todayStatus.downloadedToday
@@ -756,7 +767,7 @@ export default function ProctorExaminationTabScreen() {
             <View
               style={[
                 styles.connectionChip,
-                { backgroundColor: internetAvailable ? colors.successMuted : colors.cardMuted },
+                { display: 'none', backgroundColor: internetAvailable ? colors.successMuted : colors.cardMuted },
               ]}
             >
               <View
@@ -775,6 +786,19 @@ export default function ProctorExaminationTabScreen() {
                   ? 'Online'
                   : 'Offline mode: showing downloaded schedules'}
               </Text>
+            </View>
+
+            <View style={[styles.screenTitleRow, { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }]}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.screenHeading, { color: scheduleTheme.text }]}>Examination Schedules</Text>
+                <Text style={[styles.screenSubheading, { color: scheduleTheme.secondaryText }]}>
+                  {formatManilaScheduleDate(todayIso, true)}
+                </Text>
+              </View>
+              <View style={[styles.connectionChip, { backgroundColor: internetAvailable ? scheduleTheme.successBackground : scheduleTheme.dangerBackground }]}>
+                <View style={[styles.connectionDot, { backgroundColor: internetAvailable ? scheduleTheme.successText : scheduleTheme.dangerText }]} />
+                <Text style={[styles.connectionText, { color: internetAvailable ? scheduleTheme.successText : scheduleTheme.dangerText }]}>Online</Text>
+              </View>
             </View>
 
             {/* Expandable Search Input */}
@@ -806,13 +830,13 @@ export default function ProctorExaminationTabScreen() {
                   backgroundColor:
                     packNotice.updateRequired || !todayStatus.downloadedToday
                       ? isDark
-                        ? '#1A1212'
+                        ? colors.dangerMuted
                         : '#FFF5F5'
                       : colors.card,
                   borderColor:
                     packNotice.updateRequired || !todayStatus.downloadedToday
                       ? isDark
-                        ? '#7A1F2B80'
+                        ? colors.cardBorder
                         : '#FECACA'
                       : colors.cardBorder,
                 },
@@ -823,8 +847,8 @@ export default function ProctorExaminationTabScreen() {
                   style={[
                     styles.packNoticeBtn,
                     {
-                      backgroundColor: isDark ? '#2A1414' : '#FEE2E2',
-                      borderColor: isDark ? '#7A1F2B70' : '#FECACA',
+                      backgroundColor: isDark ? colors.dangerMuted : '#FEE2E2',
+                      borderColor: isDark ? colors.cardBorder : '#FECACA',
                     },
                   ]}
                   onPress={() =>
@@ -846,7 +870,7 @@ export default function ProctorExaminationTabScreen() {
                   accessibilityLabel="Pack update notification"
                 >
                   <View style={styles.packNoticeIcon}>
-                    <Bell size={16} color="#DC2626" />
+                    <Bell size={16} color={colors.danger} />
                     {(packNotice.rescheduledSince > 0 ||
                       packNotice.rescheduledToday > 0 ||
                       packNotice.questionsChangedSince > 0 ||
@@ -865,7 +889,7 @@ export default function ProctorExaminationTabScreen() {
                     )}
                   </View>
                   <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={[styles.packNoticeTitle, { color: isDark ? '#FECACA' : '#991B1B' }]}>
+                    <Text style={[styles.packNoticeTitle, { color: colors.danger }]}>
                       {packNotice.reason === 'reschedule' || packNotice.rescheduledSince > 0
                         ? 'Students were rescheduled'
                         : packNotice.reason === 'questions' ||
@@ -876,7 +900,7 @@ export default function ProctorExaminationTabScreen() {
                             : 'Examination pack changed'}
                     </Text>
                     <Text
-                      style={[styles.packNoticeBody, { color: isDark ? '#FCA5A5' : '#B91C1C' }]}
+                      style={[styles.packNoticeBody, { color: colors.textSecondary }]}
                       numberOfLines={2}
                     >
                       {packNotice.message ||
@@ -891,14 +915,14 @@ export default function ProctorExaminationTabScreen() {
                   style={[
                     styles.packIconWrap,
                     todayStatus.downloadedToday && !packNotice.updateRequired
-                      ? { backgroundColor: isDark ? '#142918' : '#DCFCE7' }
-                      : { backgroundColor: isDark ? '#2A1414' : '#FEE2E2' },
+                      ? { backgroundColor: isDark ? colors.successMuted : '#DCFCE7' }
+                      : { backgroundColor: isDark ? colors.dangerMuted : '#FEE2E2' },
                   ]}
                 >
                   {todayStatus.downloadedToday && !packNotice.updateRequired ? (
-                    <CheckCircle2 size={18} color={isDark ? '#22C55E' : '#16A34A'} />
+                    <CheckCircle2 size={18} color={colors.success} />
                   ) : (
-                    <AlertTriangle size={18} color={isDark ? '#F87171' : '#DC2626'} />
+                    <AlertTriangle size={18} color={colors.danger} />
                   )}
                 </View>
                 <View style={{ flex: 1, minWidth: 0 }}>
@@ -930,7 +954,7 @@ export default function ProctorExaminationTabScreen() {
               </View>
 
               {packReadError ? (
-                <Text style={[styles.packSub, { color: isDark ? '#FCA5A5' : '#991B1B' }]} accessibilityRole="alert">
+                <Text style={[styles.packSub, { color: colors.danger }]} accessibilityRole="alert">
                   {packReadError} Refresh to retry; saved data was preserved.
                 </Text>
               ) : null}
@@ -992,6 +1016,31 @@ export default function ProctorExaminationTabScreen() {
           )
         }
         renderItem={({ item: section }) => {
+          if (section.kind === 'schedule') {
+            return (
+              <MyExaminationSchedule
+                entries={visibleEntries}
+                officialDays={officialDays}
+                todayIso={todayIso}
+                nowMs={scheduleNowMs}
+                openedRooms={openedRooms}
+                loading={showScheduleSkeleton}
+                error={
+                  scheduleLoadingError
+                    ? scheduleEntriesError ||
+                      (scheduleLoadingTimedOut
+                        ? 'Loading schedules took too long.'
+                        : 'Unable to load examination schedules.')
+                    : null
+                }
+                onRetry={retryScheduleLoading}
+                onOpen={(entry) => void handleSelectTimeSlot(entry.schedule, entry.session)}
+                needsPackUpdate={packNotice.updateRequired || !todayStatus.downloadedToday}
+                packUpdateBusy={refreshing}
+                onDownloadPack={() => void downloadPack()}
+              />
+            );
+          }
           if (section.kind === 'today') {
             return (
               <View style={styles.scheduleSection}>
@@ -1200,23 +1249,23 @@ export default function ProctorExaminationTabScreen() {
             onPress={() => !busy && setOpenModalVisible(false)}
           />
 
-          <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+          <View style={[styles.modalCard, { backgroundColor: colors.modal, borderColor: colors.cardBorder }]}>
             <View style={styles.modalHeader}>
               <View
                 style={[
                   styles.modalIconWrap,
-                  selectedSlot?.isOpened && styles.modalIconWrapOpened,
-                  selectedSlot?.isEnded && styles.modalIconWrapEnded,
+                  selectedSlot?.isOpened && { backgroundColor: isDark ? colors.successMuted : '#DCFCE7' },
+                  selectedSlot?.isEnded && { backgroundColor: isDark ? colors.cardMuted : '#E5E7EB' },
                 ]}
               >
                 <DoorOpen
                   size={22}
                   color={
                     selectedSlot?.isOpened
-                      ? '#22C55E'
+                      ? colors.success
                       : selectedSlot?.isEnded
-                        ? '#71717A'
-                        : '#7A1F2B'
+                        ? colors.textMuted
+                        : colors.accent
                   }
                 />
               </View>
@@ -1337,7 +1386,7 @@ export default function ProctorExaminationTabScreen() {
                 onPress={handleConfirmRoomAction}
                 style={{
                   flex: 1,
-                  backgroundColor: selectedSlot?.isEnded ? '#222222' : '#7A1F2B',
+                  backgroundColor: selectedSlot?.isEnded ? colors.cardMuted : colors.accent,
                 }}
               />
             </View>
@@ -1356,9 +1405,9 @@ export default function ProctorExaminationTabScreen() {
             style={StyleSheet.absoluteFill}
             onPress={() => setLockedSchedule(null)}
           />
-          <View style={[styles.lockedModalCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+          <View style={[styles.lockedModalCard, { backgroundColor: colors.modal, borderColor: colors.cardBorder }]}>
             <View style={styles.lockedModalTitleRow}>
-              <LockKeyhole size={21} color={isDark ? '#D7BC7A' : '#80621F'} />
+              <LockKeyhole size={21} color={colors.warning} />
               <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
                 Can&apos;t open this schedule
               </Text>
@@ -1409,7 +1458,7 @@ export default function ProctorExaminationTabScreen() {
                   setLockedSchedule(null);
                   scheduleListRef.current?.scrollToIndex({ index: 0, animated: true });
                 }}
-                style={[styles.lockedModalButton, { backgroundColor: '#7A1F2B' }]}
+                style={[styles.lockedModalButton, { backgroundColor: colors.accent }]}
               />
               <Button
                 title="OK"
@@ -1664,6 +1713,7 @@ const styles = StyleSheet.create({
     padding: 0,
   },
   packCard: {
+    display: 'none',
     borderWidth: 1,
     borderRadius: 16,
     padding: 14,
@@ -1765,6 +1815,7 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   legendContainer: {
+    display: 'none',
     borderRadius: 14,
     padding: 12,
     borderWidth: 1,

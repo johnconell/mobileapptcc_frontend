@@ -1,8 +1,9 @@
 import React from 'react';
 import { Text, View, StyleSheet } from 'react-native';
 import { GraduationCap } from 'lucide-react-native';
-import { colors, radii } from '@/shared/theme';
+import { colors } from '@/shared/theme';
 import { SCHOOL_SHORT } from '@/shared/constants';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 interface SchoolLogoProps {
   size?: 'sm' | 'md' | 'lg';
@@ -15,7 +16,11 @@ const sizes = {
 };
 
 export function SchoolLogo({ size = 'md' }: SchoolLogoProps) {
+  const { isDark, colors: themeColors } = useAppTheme();
   const s = sizes[size];
+  const primaryColor = isDark ? themeColors.accent : colors.primary;
+  const secondaryColor = isDark ? themeColors.accentGold : colors.secondary;
+
   return (
     <View style={styles.wrap}>
       <View
@@ -25,12 +30,14 @@ export function SchoolLogo({ size = 'md' }: SchoolLogoProps) {
             width: s.box,
             height: s.box,
             borderRadius: s.box * 0.28,
+            backgroundColor: primaryColor,
+            borderColor: secondaryColor,
           },
         ]}
       >
-        <GraduationCap size={s.icon} color={colors.secondary} />
+        <GraduationCap size={s.icon} color={isDark ? themeColors.card : secondaryColor} />
       </View>
-      <Text style={[styles.label, { fontSize: s.text }]}>{SCHOOL_SHORT}</Text>
+      <Text style={[styles.label, { fontSize: s.text, color: primaryColor }]}>{SCHOOL_SHORT}</Text>
     </View>
   );
 }

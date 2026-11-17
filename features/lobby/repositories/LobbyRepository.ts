@@ -14,7 +14,10 @@ import {
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { classifyPeerReconnectError } from '@/features/examinations/services/peerReconnectErrors';
 import { normalizePasskey } from '@/features/examinations/services/passkeyFormat';
-import { validateOfflineProctorRoom } from '@/features/examinations/services/offlineRoomAssignment';
+import {
+  countOfflineAssignedStudents,
+  validateOfflineProctorRoom,
+} from '@/features/examinations/services/offlineRoomAssignment';
 import { parsePeerQr, PeerExamServer, resolveNumericScheduleId } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
 import { DeviceService } from '@/shared/services/DeviceService';
@@ -36,6 +39,36 @@ type LobbyResponse = {
   data?: LobbySnapshot & {
     exam_session_id?: number;
   };
+};
+
+export type StudentHeartbeat = {
+  ok: boolean;
+  message?: string;
+  status?: string;
+  roomStatus?: string;
+  authorityStatus?: string;
+  startSeq?: number;
+  remainingSeconds?: number;
+  emergencySuspended?: boolean;
+  emergencySuspendedAt?: string | null;
+  emergencyReason?: string | null;
+  removed?: boolean;
+  sessionNotFound?: boolean;
+  myStatus?: string;
+  submissionConfirmed?: boolean;
+  submittedAt?: string | null;
+  serverTime?: string;
+  startedAt?: string;
+  endsAt?: string;
+  durationMinutes?: number;
+  approvalStatus?: 'pending' | 'approved' | 'declined';
+};
+
+export type PeerRejoinResult = {
+  ok: boolean;
+  pulse?: StudentHeartbeat;
+  message?: string;
+  terminal?: 'removed' | 'ended';
 };
 
 export type CloudExamSession = {
@@ -141,6 +174,8 @@ export function selectPreparedOfflineLobby(
     locallyClaimed: options.locallyClaimed,
     hasOtherActiveRoom: options.hasOtherActiveRoom,
     claimConfirmed: options.claimConfirmed,
+    assignedStudentCount: countOfflineAssignedStudents(pack.registrations, sid, roomId),
+    hasExistingActiveSession: options.locallyClaimed,
   });
   if (!authorization.ok) throw new Error(authorization.message);
 
@@ -514,7 +549,7 @@ export const LobbyRepository = {
           }>('/status', {
             method: 'POST',
             body: { participation_token: participation },
-            timeoutMs: 4000,
+            timeoutMs: 3000,
           });
           const { ExamLifecycle } = await import('@/features/examinations/services/examLifecycle');
           const roomStatus = pulse?.roomStatus || 'lobby_open';
@@ -741,8 +776,13 @@ export const LobbyRepository = {
     const peer = parsePeerQr(rawCode);
     if (peer) {
       await PeerExamClient.setTarget(peer);
+      if (!(await PeerExamClient.ensureReachable(peer))) {
+        throw new Error(
+          'Cannot reach the proctor. Make sure you are on the same WiFi as the proctor and try again.',
+        );
+      }
       try {
-        const resolved = await PeerExamClient.request<{
+        const resolved = await PeerExamClient.requestWithRetry<{
           schedule: ExamCodeValidation['schedule'];
           session: ExamCodeValidation['session'];
           examinationCode: string;
@@ -762,7 +802,7 @@ export const LobbyRepository = {
         const refreshed = await PeerExamClient.refreshHostFromCloud(peer.code);
         if (refreshed) {
           try {
-            const resolved = await PeerExamClient.request<{
+            const resolved = await PeerExamClient.requestWithRetry<{
               schedule: ExamCodeValidation['schedule'];
               session: ExamCodeValidation['session'];
               examinationCode: string;
@@ -804,7 +844,13 @@ export const LobbyRepository = {
     // If there is an active peer target, resolve via PeerExamClient
     if (await PeerExamClient.isActive()) {
       try {
-        const resolved = await PeerExamClient.request<{
+        const target = await PeerExamClient.getTarget();
+        if (!target || !(await PeerExamClient.ensureReachable(target))) {
+          throw new Error(
+            'Cannot reach the proctor. Make sure you are on the same WiFi as the proctor and try again.',
+          );
+        }
+        const resolved = await PeerExamClient.requestWithRetry<{
           schedule: ExamCodeValidation['schedule'];
           session: ExamCodeValidation['session'];
           examinationCode: string;
@@ -834,7 +880,12 @@ export const LobbyRepository = {
       const discovered = await discoverPeerExamHostByCode(code);
       if (discovered) {
         await PeerExamClient.setTarget(discovered);
-        const resolved = await PeerExamClient.request<{
+        if (!(await PeerExamClient.ensureReachable(discovered))) {
+          throw new Error(
+            'Cannot reach the proctor. Make sure you are on the same WiFi as the proctor and try again.',
+          );
+        }
+        const resolved = await PeerExamClient.requestWithRetry<{
           schedule: ExamCodeValidation['schedule'];
           session: ExamCodeValidation['session'];
           examinationCode: string;
@@ -1562,28 +1613,7 @@ export const LobbyRepository = {
     }
   },
 
-  async sendHeartbeat(): Promise<{
-    ok: boolean;
-    message?: string;
-    status?: string;
-    roomStatus?: string;
-    authorityStatus?: string;
-    startSeq?: number;
-    remainingSeconds?: number;
-    emergencySuspended?: boolean;
-    emergencySuspendedAt?: string | null;
-    emergencyReason?: string | null;
-    removed?: boolean;
-    sessionNotFound?: boolean;
-    myStatus?: string;
-    submissionConfirmed?: boolean;
-    submittedAt?: string | null;
-    serverTime?: string;
-    startedAt?: string;
-    endsAt?: string;
-    durationMinutes?: number;
-    approvalStatus?: 'pending' | 'approved' | 'declined';
-  }> {
+  async sendHeartbeat(): Promise<StudentHeartbeat> {
     // Peer LAN is the exam network. Never skip it because cloud is offline.
     if (await PeerExamClient.isActive()) {
       const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
@@ -1631,7 +1661,7 @@ export const LobbyRepository = {
             module_ready: readiness.moduleReady,
             package_hash: hash,
           },
-          timeoutMs: 4000,
+          timeoutMs: 3000,
         });
         return {
           ok: true,
@@ -1719,6 +1749,98 @@ export const LobbyRepository = {
         myStatus: isRemoved ? 'terminated' : undefined,
         sessionNotFound,
         message: classifyPeerReconnectError(msg),
+      };
+    }
+  },
+
+  /**
+   * Rejoin a peer-hosted attempt after a LAN route or socket drop. The saved
+   * passkey is used only as the existing attempt credential; the student is
+   * never asked to type it again, and the server returns the same token for
+   * the same device.
+   */
+  async rejoinPeerStudent(): Promise<PeerRejoinResult> {
+    if (!(await PeerExamClient.isActive())) {
+      return { ok: false, message: 'Peer examination is not active.' };
+    }
+
+    const token = await appStorage.getItem(STORAGE_KEYS.participationToken);
+    const code = await getStoredCode();
+    const passkey = await appStorage.getItem('tcc.student.exam.passkey');
+    if (!token || !code || !passkey) {
+      return { ok: false, message: 'Saved examination participation is incomplete.' };
+    }
+
+    const deviceId = await DeviceService.getDeviceId().catch(() => '');
+    let savedProgress: Record<string, any> = {};
+    try {
+      const raw = await appStorage.getItem(STORAGE_KEYS.studentProgress);
+      if (raw) savedProgress = JSON.parse(raw) as Record<string, any>;
+    } catch {
+      savedProgress = {};
+    }
+
+    try {
+      const { ExamPreloader } = await import('@/features/examinations/services/examPreloader');
+      const readiness = ExamPreloader.getProgress();
+      const hash = (await ExamPreloader.getPreloadedHash()) || '';
+      const joined = await PeerExamClient.requestWithRetry<{
+        registration_id?: number;
+        participation_token?: string;
+        lobby?: LobbySnapshot;
+      }>('/join', {
+        method: 'POST',
+        body: {
+          code,
+          passkey: normalizePasskey(passkey),
+          gmail: savedProgress.student?.email || undefined,
+          student_pack_hash: hash,
+          package_hash: hash,
+          is_ready: Boolean(readiness.moduleReady && readiness.hashVerified && readiness.percent >= 100),
+          download_percent: readiness.percent,
+          hash_verified: readiness.hashVerified,
+          module_ready: readiness.moduleReady,
+          participation_token: token,
+          device_id: deviceId,
+        },
+        timeoutMs: 3000,
+      });
+
+      if (joined.participation_token) {
+        await appStorage.setItem(STORAGE_KEYS.participationToken, joined.participation_token);
+        await appStorage.setItem(
+          STORAGE_KEYS.studentProgress,
+          JSON.stringify({
+            ...savedProgress,
+            registrationId: joined.registration_id ?? savedProgress.registrationId,
+            participationToken: joined.participation_token,
+            peer: true,
+          }),
+        );
+      }
+
+      const pulse = await this.sendHeartbeat();
+      if (pulse.removed || pulse.myStatus === 'terminated') {
+        return { ok: false, pulse, terminal: 'removed', message: 'Removed by proctor' };
+      }
+      if (pulse.sessionNotFound) {
+        return { ok: false, pulse, terminal: 'ended', message: 'Session ended' };
+      }
+      return pulse.ok
+        ? { ok: true, pulse }
+        : { ok: false, pulse, message: pulse.message || 'Cannot reach the proctor' };
+    } catch (error) {
+      const message = classifyPeerReconnectError(
+        error instanceof Error ? error.message : 'Reconnect failed.',
+      );
+      return {
+        ok: false,
+        terminal: message === 'Removed by proctor'
+          ? 'removed'
+          : message === 'Session ended'
+            ? 'ended'
+            : undefined,
+        message,
       };
     }
   },

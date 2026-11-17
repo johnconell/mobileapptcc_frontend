@@ -3,23 +3,16 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   Text,
-  TextInput,
   View,
   StyleSheet,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useForm, Controller } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { CheckSquare, ShieldCheck, Square } from 'lucide-react-native';
-import {
-  ExamProcessActions,
-  ExamProcessButton,
-  ExamProcessChrome,
-  ExamProcessOk,
-} from '@/features/examinations/components/ExamProcessChrome';
+import { Check } from 'lucide-react-native';
+import { ExamineeRedesignChrome } from '@/features/examinations/components/ExamineeRedesignChrome';
 import { LobbyRepository } from '@/features/lobby/repositories/LobbyRepository';
 import { assertCampusWifiForJoin } from '@/features/monitoring/services/campusWifiGate';
 import { ExamPreloader } from '@/features/examinations/services/examPreloader';
@@ -31,7 +24,11 @@ import {
 import { appStorage } from '@/shared/services/storage';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useLobbyStore } from '@/features/lobby/stores/lobbyStore';
-import { examProcess } from '@/shared/theme/examProcess';
+import {
+  examineeRedesignLayout,
+  type ExamineeRedesignTheme,
+  useExamineeRedesignTheme,
+} from '@/shared/theme/examineeRedesign';
 import { userFacingError } from '@/shared/utils/userFacingError';
 
 const gmailSchema = z.object({
@@ -45,7 +42,6 @@ const gmailSchema = z.object({
       'Use a Gmail address (example@gmail.com)',
     ),
 });
-
 type ConfirmationValues = z.infer<typeof gmailSchema>;
 
 const STUDENT_SCHEDULE_KEY = 'tcc.student.exam.schedule';
@@ -53,10 +49,10 @@ type StudentScheduleMeta = { scheduleTitle: string; examDate: string; timeSlot: 
 
 function formatManilaExamDate(value: string): string {
   const raw = value.trim();
-  if (!raw) return 'Schedule date unavailable';
+  if (!raw) return 'To be announced';
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
   const parsed = dateOnly
-    ? new Date(`${dateOnly[1]}-${dateOnly[2]}-${dateOnly[3]}T12:00:00+08:00`)
+    ? new Date(dateOnly[1] + '-' + dateOnly[2] + '-' + dateOnly[3] + 'T12:00:00+08:00')
     : new Date(raw);
   if (!Number.isFinite(parsed.getTime())) return raw;
   return new Intl.DateTimeFormat('en-PH', {
@@ -77,15 +73,15 @@ function formatManilaTime(value: string): string {
   if (hour > 23 || minute > 59) return raw;
   const suffix = hour >= 12 ? 'PM' : 'AM';
   const displayHour = hour % 12 || 12;
-  return `${displayHour}:${String(minute).padStart(2, '0')} ${suffix}`;
+  return displayHour + ':' + String(minute).padStart(2, '0') + ' ' + suffix;
 }
 
 function formatManilaTimeRange(value: string): string {
   const raw = value.trim();
-  if (!raw) return 'Schedule time unavailable';
+  if (!raw) return 'To be announced';
   const parts = raw.split(/\s*(?:-|–|—|to)\s*/i);
   return parts.length === 2
-    ? `${formatManilaTime(parts[0])} - ${formatManilaTime(parts[1])}`
+    ? formatManilaTime(parts[0]) + ' - ' + formatManilaTime(parts[1])
     : formatManilaTime(raw);
 }
 
@@ -110,7 +106,7 @@ export default function StudentConfirmationScreen() {
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] =
     React.useState<ExamPackProgress>(INITIAL_PACK_PROGRESS);
-  const [showAgreement, setShowAgreement] = React.useState(Boolean(verifiedStudent));
+  const proceedAfterIdentityRef = React.useRef(false);
   const [agreed, setAgreed] = React.useState(false);
   const [scheduleMeta, setScheduleMeta] = React.useState<StudentScheduleMeta>({
     scheduleTitle: params.scheduleTitle || 'Entrance Examination',
@@ -156,7 +152,7 @@ export default function StudentConfirmationScreen() {
     if (verifiedStudent && scannedSessionId) {
       if (agreedAt) {
         router.replace('/(student)/lobby');
-      } else setShowAgreement(true);
+      }
       return;
     }
     if (!selectedStudent || !scannedSessionId) {
@@ -168,7 +164,6 @@ export default function StudentConfirmationScreen() {
     setSelectedStudent(null);
     setVerifiedStudent(null);
     setAgreedAt(null);
-    setShowAgreement(false);
     router.replace('/(student)/passkey');
   }, [router, setSelectedStudent, setVerifiedStudent, setAgreedAt]);
 
@@ -182,11 +177,11 @@ export default function StudentConfirmationScreen() {
         requireServer: !String(scannedSessionId).startsWith('offline-'),
       });
       if (!gate.ok) {
-        setJoinError(gate.message ?? 'Campus Wi‑Fi required to join.');
+        setJoinError(gate.message ?? 'Campus Wi-Fi required to join.');
         return;
       }
 
-      setStatusMessage('Receiving questions from the examination room…');
+      setStatusMessage('Receiving questions from the examination room...');
       const effectivePasskey =
         examPasskey || (await appStorage.getItem('tcc.student.exam.passkey')) || '';
 
@@ -222,7 +217,6 @@ export default function StudentConfirmationScreen() {
         email: email.trim().toLowerCase(),
       };
       setVerifiedStudent(verified);
-      setShowAgreement(true);
     } catch (error) {
       setJoinError(userFacingError(error, 'Unable to join examination. Please try again.'));
     } finally {
@@ -264,6 +258,12 @@ export default function StudentConfirmationScreen() {
     }
   };
 
+  React.useEffect(() => {
+    if (!proceedAfterIdentityRef.current || !verifiedStudent || !agreed || joining) return;
+    proceedAfterIdentityRef.current = false;
+    void handleProceed();
+  }, [verifiedStudent, agreed, joining, handleProceed]);
+
   const onConfirmWithForm = handleSubmit(async (values) => {
     await confirmIdentity(values.email);
   });
@@ -272,242 +272,344 @@ export default function StudentConfirmationScreen() {
     if (selectedStudent) await confirmIdentity(selectedStudent.email);
   };
 
+  const theme = useExamineeRedesignTheme();
+
   if (!selectedStudent || !scannedSessionId) {
     return (
-      <ExamProcessChrome step={2} title="Confirm Identity" stepLabel="Step 3 of 6 · Confirm">
-        <Text style={styles.hint}>Loading…</Text>
-      </ExamProcessChrome>
+      <ExamineeRedesignChrome step={2} title="Is this you?" stepLabel="Step 3 of 6 · Confirm">
+        <Text style={[styles.hint, { color: theme.secondaryText }]}>Loading...</Text>
+      </ExamineeRedesignChrome>
     );
   }
 
+  const formattedDate = formatManilaExamDate(scheduleMeta.examDate);
+  const formattedTime = formatManilaTimeRange(scheduleMeta.timeSlot);
+  const roomValue =
+    scheduleMeta.scheduleTitle.trim() && scheduleMeta.scheduleTitle.trim() !== 'Entrance Examination'
+      ? scheduleMeta.scheduleTitle.trim()
+      : 'To be announced';
+  const timeRoomValue =
+    formattedTime === 'To be announced' || roomValue === 'To be announced'
+      ? 'To be announced'
+      : formattedTime + ' · ' + roomValue;
+  const emailValue = hasGmail ? selectedStudent.email : 'To be announced';
+  const submitDisabled = !agreed || joining || isSubmitting;
+
+  const handleAgreementPress = () => {
+    if (verifiedStudent) {
+      void handleProceed();
+      return;
+    }
+    proceedAfterIdentityRef.current = true;
+    void onConfirmExisting();
+  };
+
   return (
     <KeyboardAvoidingView
-      style={styles.flex}
+      style={[styles.flex, { backgroundColor: theme.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ExamProcessChrome step={2} title="Confirm Identity" stepLabel="Step 3 of 6 · Confirm" onBack={goBack}>
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-          {!showAgreement ? (
-            <>
-              <Text style={styles.intro}>
-                {hasGmail
-                  ? 'Confirm that this is your record. Your examination key matched this registration.'
-                  : 'Confirm that this is your record, then enter your Gmail address for results.'}
+      <ExamineeRedesignChrome
+        step={2}
+        title="Is this you?"
+        stepLabel="Step 3 of 6 · Confirm"
+        onBack={goBack}
+        footer={
+          <View style={styles.actions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Not me"
+              disabled={joining || isSubmitting}
+              onPress={goBack}
+              style={[
+                styles.secondaryButton,
+                { backgroundColor: theme.secondaryCard },
+                (joining || isSubmitting) && styles.disabledButton,
+              ]}
+            >
+              <Text style={[styles.secondaryButtonText, { color: theme.text }]}>Not me</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Agree and continue"
+              disabled={submitDisabled}
+              onPress={handleAgreementPress}
+              style={[
+                styles.primaryButton,
+                { backgroundColor: theme.primary },
+                submitDisabled && styles.disabledButton,
+              ]}
+            >
+              <Text style={[styles.primaryButtonText, { color: theme.white }]}>
+                {joining ? statusMessage || 'Please wait...' : 'Agree & Continue'}
               </Text>
-
-        <ReadOnlyField label="Full Name" value={selectedStudent.fullName} />
-        <ReadOnlyField label="Desired Program" value={selectedStudent.programName} />
-        {hasGmail ? (
-          <ReadOnlyField label="Gmail" value={selectedStudent.email} />
-        ) : (
-          <View style={styles.field}>
-            <Text style={styles.label}>Gmail Address</Text>
-            <Controller
-              control={control}
-              name="email"
-              render={({ field: { onChange, onBlur, value } }) => (
-                <TextInput
-                  style={[styles.input, Boolean(errors.email) && styles.inputInvalid]}
-                  placeholder="yourname@gmail.com"
-                  placeholderTextColor={examProcess.muted}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="email-address"
-                  textContentType="emailAddress"
-                  value={value}
-                  onChangeText={onChange}
-                  onBlur={onBlur}
-                />
-              )}
-            />
-            {errors.email?.message ? (
-              <Text style={styles.error}>{errors.email.message}</Text>
-            ) : (
-              <Text style={styles.hint}>Required so your score can be emailed later</Text>
-            )}
+            </Pressable>
           </View>
-        )}
+        }
+      >
+        <Text style={[styles.intro, { color: theme.secondaryText }]}>
+          Confirm your registration details before you continue.
+        </Text>
 
-              <ExamProcessOk visible={Boolean(statusMessage && joining)}>
-                {downloadProgress.percent > 0 ? `${statusMessage}\n${downloadProgress.phaseLabel}` : statusMessage}
-              </ExamProcessOk>
+        <View style={[styles.identityCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+          <IdentityRow label="Name" value={selectedStudent.fullName} theme={theme} />
+          <IdentityRow label="Program" value={selectedStudent.programName} theme={theme} />
+          <IdentityRow label="Gmail" value={emailValue} theme={theme} />
+          <IdentityRow label="Date" value={formattedDate} theme={theme} />
+          <IdentityRow label="Time · Room" value={timeRoomValue} theme={theme} last />
+        </View>
 
-            {joinError ? <Text style={styles.error}>{joinError}</Text> : null}
+        <Text style={[styles.lockedNote, { color: theme.secondaryText }]}>
+          Details are locked from your registration. Wrong info? Tell the proctor.
+        </Text>
 
-              <ExamProcessActions>
-                <ExamProcessButton title="Back" variant="back" onPress={goBack} disabled={joining || isSubmitting} />
-                <ExamProcessButton title="Continue" variant="submit" loading={joining || isSubmitting} onPress={hasGmail ? onConfirmExisting : onConfirmWithForm} />
-              </ExamProcessActions>
-            </>
-          ) : (
-            <AgreementContent
-              scheduleTitle={scheduleMeta.scheduleTitle}
-              examDate={formatManilaExamDate(scheduleMeta.examDate)}
-              timeSlot={formatManilaTimeRange(scheduleMeta.timeSlot)}
-              agreed={agreed}
-              proceeding={joining}
-              pinStatusText={statusMessage}
-              onToggle={() => setAgreed((value) => !value)}
-              onProceed={() => void handleProceed()}
-              joinError={joinError}
-            />
-          )}
-        </ScrollView>
-      </ExamProcessChrome>
+        <AgreementContent
+          agreed={agreed}
+          proceeding={joining}
+          pinStatusText={statusMessage}
+          progress={downloadProgress}
+          onToggle={() => setAgreed((value) => !value)}
+          joinError={joinError}
+          theme={theme}
+        />
+      </ExamineeRedesignChrome>
     </KeyboardAvoidingView>
   );
 }
 
+function IdentityRow({
+  label,
+  value,
+  last = false,
+  theme,
+}: {
+  label: string;
+  value: string;
+  last?: boolean;
+  theme: ExamineeRedesignTheme;
+}) {
+  return (
+    <View style={[styles.identityRow, !last && { borderBottomColor: theme.cardBorder, borderBottomWidth: 1 }]}>
+      <Text style={[styles.identityLabel, { color: theme.secondaryText }]}>{label}</Text>
+      <Text style={[styles.identityValue, { color: theme.text }]}>{value || 'To be announced'}</Text>
+    </View>
+  );
+}
+
 function AgreementContent({
-  scheduleTitle,
-  examDate,
-  timeSlot,
   agreed,
   proceeding,
   pinStatusText,
+  progress,
   joinError,
   onToggle,
-  onProceed,
+  theme,
 }: {
-  scheduleTitle: string;
-  examDate: string;
-  timeSlot: string;
   agreed: boolean;
   proceeding: boolean;
   pinStatusText: string | null;
+  progress: ExamPackProgress;
   joinError: string | null;
   onToggle: () => void;
-  onProceed: () => void;
+  theme: ExamineeRedesignTheme;
 }) {
   return (
     <>
-      <View style={styles.metaCard}>
-        <Text style={styles.metaTitle}>{scheduleTitle}</Text>
-        <View style={styles.metaRow}>
-          <MetaItem label="Date" value={examDate} />
-          <MetaItem label="Time" value={timeSlot} />
-        </View>
-      </View>
-      <View style={styles.rulesSection}>
-        <View style={styles.rulesHeader}>
-          <View style={styles.rulesIconWrap}><ShieldCheck size={18} color={examProcess.accent} /></View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.rulesTitle}>Terms &amp; Agreement</Text>
-            <Text style={styles.rulesSubtitle}>Proctoring Standards &amp; Examinee Guidelines</Text>
-          </View>
-        </View>
+      <View style={[styles.rulesCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
+        <Text style={[styles.rulesTitle, { color: theme.text }]}>Exam rules</Text>
         <View style={styles.rulesList}>
-          <RuleRow bold="Verification: " body="Examinees must join with the proctor QR code or room code on the same Join screen." />
-          <RuleRow bold={Platform.OS === 'android' ? 'Mandatory App Pinning: ' : 'Mandatory Guided Access: '} body={Platform.OS === 'android' ? "Screen Pinning is required before the examination starts, after the proctor approves your request." : 'Guided Access is required on iPhone/iPad before the examination starts, after proctor approval.'} />
-          <RuleRow bold="Unauthorized Electronics: " body="Secondary phones, smartwatches, and external electronic aids are strictly prohibited." />
-          <RuleRow bold="Duration & Timer: " body="Session is strictly timed; auto-submits when countdown reaches 00:00." />
-          <RuleRow bold="Screen Lockdown: " body="The exam runs in full-screen locked mode. Do not switch apps during the examination." />
-          <RuleRow bold="Results: " body="Official results will be sent to your registered Gmail after the session." />
+          <RuleLine text="Your screen will be pinned. Do not switch apps." theme={theme} />
+          <RuleLine text="No second phones or smartwatches." theme={theme} />
+          <RuleLine text="The timer auto-submits at 00:00." theme={theme} />
+          <RuleLine text="Results are sent to your Gmail." theme={theme} />
         </View>
+        <Pressable
+          style={styles.checkboxRow}
+          onPress={onToggle}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: agreed }}
+        >
+          <View
+            style={[
+              styles.checkbox,
+              {
+                backgroundColor: agreed ? theme.primary : 'transparent',
+                borderColor: agreed ? theme.primary : theme.cardBorder,
+              },
+            ]}
+          >
+            {agreed ? <Check size={16} color={theme.white} strokeWidth={3} /> : null}
+          </View>
+          <Text style={[styles.checkboxLabel, { color: theme.text }]}>I understand and agree</Text>
+        </Pressable>
       </View>
-      <Pressable style={styles.checkboxRow} onPress={onToggle} accessibilityRole="checkbox" accessibilityState={{ checked: agreed }}>
-        {agreed ? <CheckSquare size={22} color={examProcess.accent} /> : <Square size={22} color={examProcess.muted} />}
-        <Text style={styles.checkboxLabel}>I have read, understand, and agree to the examination rules and security requirements above.</Text>
-      </Pressable>
-      {pinStatusText ? <Text style={styles.pinStatusHint}>{pinStatusText}</Text> : null}
-      {joinError ? <Text style={styles.error}>{joinError}</Text> : null}
-      <ExamProcessActions>
-        <ExamProcessButton title={proceeding ? pinStatusText || 'Entering Lobby...' : 'Got It'} variant="submit" loading={proceeding} disabled={!agreed || proceeding} onPress={onProceed} />
-      </ExamProcessActions>
+
+      {pinStatusText ? (
+        <View style={[styles.statusCard, { backgroundColor: theme.successBackground, borderColor: theme.cardBorder }]}>
+          <Text style={[styles.statusText, { color: theme.successText }]}>
+            {progress.percent > 0
+              ? pinStatusText + '\n' + progress.phaseLabel
+              : pinStatusText}
+          </Text>
+        </View>
+      ) : null}
+      {joinError ? <Text style={[styles.error, { color: theme.error }]}>{joinError}</Text> : null}
     </>
   );
 }
 
-function MetaItem({ label, value }: { label: string; value: string }) {
-  return <View style={styles.metaItem}><Text style={styles.metaLabel}>{label}</Text><Text style={styles.metaValue}>{value}</Text></View>;
-}
-
-function RuleRow({ bold, body }: { bold: string; body: string }) {
-  return <View style={styles.ruleRow}><Text style={styles.ruleBullet}>•</Text><Text style={styles.ruleText}><Text style={styles.ruleBold}>{bold}</Text>{body}</Text></View>;
-}
-
-function ReadOnlyField({ label, value }: { label: string; value: string }) {
+function RuleLine({ text, theme }: { text: string; theme: ExamineeRedesignTheme }) {
   return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
-      <View style={styles.readonly}>
-        <Text style={styles.value}>{value}</Text>
-      </View>
+    <View style={styles.ruleRow}>
+      <Text style={[styles.ruleBullet, { color: theme.secondaryText }]}>•</Text>
+      <Text style={[styles.ruleText, { color: theme.secondaryText }]}>{text}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: examProcess.pageBg },
-  scrollContent: { paddingBottom: 28, gap: 16 },
+  flex: { flex: 1 },
+  hint: {
+    fontSize: 14,
+    fontFamily: 'Poppins_400Regular',
+  },
   intro: {
-    fontSize: 14,
-    lineHeight: 21,
-    color: examProcess.muted,
-    marginBottom: 14,
-    fontFamily: examProcess.fontRegular,
+    fontSize: 16,
+    lineHeight: 23,
+    fontFamily: 'Poppins_400Regular',
   },
-  field: { marginBottom: 12, gap: 6 },
-  label: {
-    fontSize: 14,
-    fontFamily: examProcess.fontMedium,
-    color: examProcess.ink,
-  },
-  readonly: {
-    minHeight: 48,
-    borderRadius: examProcess.radiusControl,
+  identityCard: {
     borderWidth: 1,
-    borderColor: examProcess.inputBorder,
-    backgroundColor: examProcess.inputBg,
-    paddingHorizontal: 14,
+    borderRadius: examineeRedesignLayout.cardRadius,
+    paddingHorizontal: examineeRedesignLayout.cardPadding,
+  },
+  identityRow: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+  },
+  identityLabel: {
+    width: 86,
+    flexShrink: 0,
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: 'Poppins_400Regular',
+  },
+  identityValue: {
+    flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
+    textAlign: 'right',
+    fontSize: 16,
+    lineHeight: 22,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  lockedNote: {
+    textAlign: 'center',
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: 'Poppins_400Regular',
+    paddingHorizontal: 6,
+  },
+  rulesCard: {
+    borderWidth: 1,
+    borderRadius: examineeRedesignLayout.cardRadius,
+    padding: examineeRedesignLayout.cardPadding,
+    gap: 16,
+  },
+  rulesTitle: {
+    fontSize: 22,
+    lineHeight: 28,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  rulesList: {
+    gap: 10,
+  },
+  ruleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  ruleBullet: {
+    width: 14,
+    fontSize: 15,
+    lineHeight: 21,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  ruleText: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 15,
+    lineHeight: 21,
+    fontFamily: 'Poppins_400Regular',
+  },
+  checkboxRow: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 3,
+    borderWidth: 2,
+    alignItems: 'center',
     justifyContent: 'center',
   },
-  value: {
-    fontSize: 15,
-    fontFamily: examProcess.fontMedium,
-    color: examProcess.ink,
+  checkboxLabel: {
+    flex: 1,
+    fontSize: 16,
+    lineHeight: 22,
+    fontFamily: 'Poppins_600SemiBold',
   },
-  input: {
-    backgroundColor: examProcess.inputBg,
+  statusCard: {
     borderWidth: 1,
-    borderColor: examProcess.inputBorder,
-    borderRadius: examProcess.radiusControl,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    fontFamily: examProcess.fontRegular,
-    color: examProcess.ink,
-    width: '100%',
+    borderRadius: 14,
+    padding: 12,
   },
-  inputInvalid: { borderColor: examProcess.error },
+  statusText: {
+    fontSize: 13,
+    lineHeight: 19,
+    fontFamily: 'Poppins_500Medium',
+  },
   error: {
-    marginTop: 6,
     fontSize: 13,
-    color: examProcess.error,
-    fontFamily: examProcess.fontMedium,
+    lineHeight: 18,
+    fontFamily: 'Poppins_500Medium',
   },
-  hint: {
-    fontSize: 13,
-    color: examProcess.muted,
-    fontFamily: examProcess.fontRegular,
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 12,
+    marginTop: examineeRedesignLayout.gap,
   },
-  metaCard: { backgroundColor: examProcess.cardBg, borderRadius: examProcess.radiusCard, borderWidth: 1, borderColor: examProcess.cardBorder, padding: 16, gap: 12 },
-  metaTitle: { fontSize: 16, fontFamily: examProcess.fontSemiBold, color: examProcess.ink, textAlign: 'center' },
-  metaRow: { flexDirection: 'row', justifyContent: 'space-around' },
-  metaItem: { alignItems: 'center', gap: 2 },
-  metaLabel: { fontSize: 10, fontFamily: examProcess.fontMedium, color: examProcess.muted, textTransform: 'uppercase', letterSpacing: 0.5 },
-  metaValue: { fontSize: 14, fontFamily: examProcess.fontSemiBold, color: examProcess.ink },
-  rulesSection: { backgroundColor: examProcess.cardBg, borderRadius: examProcess.radiusCard, borderWidth: 1, borderColor: examProcess.cardBorder, padding: 16, gap: 14 },
-  rulesHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  rulesIconWrap: { width: 36, height: 36, borderRadius: examProcess.radiusControl, backgroundColor: examProcess.accentSoft, alignItems: 'center', justifyContent: 'center' },
-  rulesTitle: { fontSize: 14, fontFamily: examProcess.fontSemiBold, color: examProcess.ink },
-  rulesSubtitle: { fontSize: 12, fontFamily: examProcess.fontRegular, color: examProcess.muted },
-  rulesList: { gap: 10 },
-  ruleRow: { flexDirection: 'row', gap: 8 },
-  ruleBullet: { fontSize: 14, color: examProcess.accent, fontFamily: examProcess.fontSemiBold, marginTop: 1 },
-  ruleText: { flex: 1, fontSize: 13, lineHeight: 20, color: examProcess.ink, fontFamily: examProcess.fontRegular },
-  ruleBold: { fontFamily: examProcess.fontSemiBold, color: examProcess.ink },
-  checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 8 },
-  checkboxLabel: { flex: 1, fontSize: 14, lineHeight: 22, color: examProcess.ink, fontFamily: examProcess.fontMedium },
-  pinStatusHint: { fontSize: 13, fontFamily: examProcess.fontMedium, color: examProcess.accent, textAlign: 'center', marginVertical: 6 },
+  secondaryButton: {
+    flex: 0.9,
+    minHeight: examineeRedesignLayout.buttonHeight,
+    borderRadius: examineeRedesignLayout.buttonRadius,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryButton: {
+    flex: 1.8,
+    minHeight: examineeRedesignLayout.buttonHeight,
+    borderRadius: examineeRedesignLayout.buttonRadius,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  secondaryButtonText: {
+    fontSize: 16,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  primaryButtonText: {
+    fontSize: 16,
+    fontFamily: 'Poppins_600SemiBold',
+  },
+  disabledButton: {
+    opacity: 0.5,
+  },
 });
+// End of confirmation screen styles.

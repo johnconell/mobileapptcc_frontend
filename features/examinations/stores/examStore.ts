@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { ChoiceKey, ExamAnswer, ExamTerminationReason, Question } from '@/shared/types';
 import { EXAM_DURATION_MINUTES } from '@/shared/constants';
+import type { ChoiceDisplayMap } from '@/features/synchronization/services/offlineExamRepository';
 import {
   type TimerStateStatus,
   type TimeSyncMetadata,
@@ -36,12 +37,14 @@ export type RestoreProgressPayload = {
   attemptId?: string;
   timeSync?: TimeSyncMetadata;
   revision?: number;
+  choiceMaps?: Record<string, ChoiceDisplayMap>;
 };
 
 interface ExamState {
   sessionId: string | null;
   attemptId: string | null;
   questions: Question[];
+  choiceMaps: Record<string, ChoiceDisplayMap>;
   currentIndex: number;
   answers: Record<string, ExamAnswer>;
   flags: Record<string, boolean>;
@@ -64,7 +67,7 @@ interface ExamState {
 
   setSessionId: (sessionId: string) => void;
   setAttemptId: (attemptId: string) => void;
-  setQuestions: (questions: Question[]) => void;
+  setQuestions: (questions: Question[], choiceMaps?: Record<string, ChoiceDisplayMap>) => void;
   setCurrentIndex: (index: number) => void;
   selectAnswer: (questionId: string, answer: ChoiceKey) => void;
   toggleFlag: (questionId: string) => void;
@@ -95,6 +98,7 @@ const initialState = {
   sessionId: null as string | null,
   attemptId: null as string | null,
   questions: [] as Question[],
+  choiceMaps: {} as Record<string, ChoiceDisplayMap>,
   currentIndex: 0,
   answers: {} as Record<string, ExamAnswer>,
   flags: {} as Record<string, boolean>,
@@ -122,14 +126,21 @@ export const useExamStore = create<ExamState>((set, get) => ({
 
   setAttemptId: (attemptId) => set({ attemptId }),
 
-  setQuestions: (questions) => {
+  setQuestions: (questions, choiceMaps) => {
     const answers: Record<string, ExamAnswer> = {};
     const flags: Record<string, boolean> = {};
     questions.forEach((q) => {
       answers[q.id] = { questionId: q.id, selectedAnswer: null, answeredAt: null };
       flags[q.id] = false;
     });
-    set({ questions, answers, flags, currentIndex: 0, checkpointRevision: 0 });
+    set({
+      questions,
+      answers,
+      flags,
+      currentIndex: 0,
+      checkpointRevision: 0,
+      choiceMaps: choiceMaps ?? {},
+    });
   },
 
   setCurrentIndex: (currentIndex) =>
@@ -224,6 +235,7 @@ export const useExamStore = create<ExamState>((set, get) => ({
       answers,
       flags: flags ?? state.flags,
       navMode: navMode ?? state.navMode,
+      choiceMaps: payload.choiceMaps ?? state.choiceMaps,
       currentIndex:
         typeof payload.currentIndex === 'number'
           ? Math.min(Math.max(0, payload.currentIndex), Math.max(0, state.questions.length - 1))

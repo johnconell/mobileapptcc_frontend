@@ -1,6 +1,6 @@
 import { STORAGE_KEYS } from '@/shared/constants';
 import { apiRequest } from '@/shared/services/api';
-import { OfflineExamRepository } from '@/features/synchronization/services/offlineExamRepository';
+import { OfflineExamRepository, type ChoiceDisplayMap } from '@/features/synchronization/services/offlineExamRepository';
 import { OfflineStore } from '@/features/synchronization/services/offlineStore';
 import { PeerExamClient } from '@/features/examinations/services/peerExamClient';
 import { ExamPreloader } from '@/features/examinations/services/examPreloader';
@@ -156,6 +156,7 @@ export const QuestionRepository = {
       deadline?: string | null;
       scheduleClosingTime?: string | null;
       timeSync?: TimeSyncMetadata;
+      choiceMaps?: Record<string, ChoiceDisplayMap>;
     },
   ): Promise<{ saved: boolean; savedAt: string | null }> {
     if (await PeerExamClient.isActive()) {
@@ -180,6 +181,7 @@ export const QuestionRepository = {
             deadline: checkpoint?.deadline,
             schedule_closing_time: checkpoint?.scheduleClosingTime,
             time_sync: checkpoint?.timeSync,
+            choice_maps: checkpoint?.choiceMaps,
           },
         });
         return { saved: true, savedAt: checkpointSavedAt };
@@ -239,6 +241,7 @@ export const QuestionRepository = {
     sessionId: string;
     studentId: string;
     answers: Record<string, string | null>;
+    choiceMaps?: Record<string, ChoiceDisplayMap>;
     idempotencyKey?: string;
     attemptId?: string;
   }): Promise<{
@@ -262,6 +265,7 @@ export const QuestionRepository = {
         body: {
           participation_token: token,
           answers: payload.answers,
+          choice_maps: payload.choiceMaps,
           idempotency_key: payload.idempotencyKey,
           attempt_id: payload.attemptId,
         },

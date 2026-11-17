@@ -15,6 +15,7 @@ import {
   Shield,
   Moon,
   Sun,
+  Smartphone,
   ChevronRight,
   Sparkles,
   Type,
@@ -66,14 +67,14 @@ export default function ProctorSettingsScreen() {
           <Pressable
             accessibilityRole="button"
             style={[styles.navIconBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-            onPress={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')}
-            accessibilityLabel={themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            onPress={() => setThemeMode(isDark ? 'light' : 'dark')}
+            accessibilityLabel={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
             hitSlop={8}
           >
-            {themeMode === 'dark' ? (
-              <Moon size={18} color="#C4A35A" />
+            {isDark ? (
+              <Moon size={18} color={colors.warning} />
             ) : (
-              <Sun size={18} color="#B45309" />
+              <Sun size={18} color={colors.warning} />
             )}
           </Pressable>
           <Pressable
@@ -83,7 +84,7 @@ export default function ProctorSettingsScreen() {
             accessibilityLabel="Logout"
             hitSlop={8}
           >
-            <LogOut size={18} color="#7A1F2B" />
+            <LogOut size={18} color={colors.danger} />
           </Pressable>
         </View>
       </View>
@@ -99,10 +100,11 @@ export default function ProctorSettingsScreen() {
           style={[
             styles.profileCard,
             { backgroundColor: colors.card, borderColor: colors.cardBorder },
+            isDark && { shadowColor: 'transparent', elevation: 0 },
           ]}
         >
           <View style={[styles.avatarCircle, { backgroundColor: colors.tabBarActive }]}>
-            <User size={30} color="#FFFFFF" />
+            <User size={30} color={isDark ? colors.card : '#FFFFFF'} />
           </View>
           <View style={styles.profileInfo}>
             <Text
@@ -117,7 +119,7 @@ export default function ProctorSettingsScreen() {
               numberOfLines={1}
               maxFontSizeMultiplier={fontMultiplier}
             >
-              {profile?.username || 'proctor@example.com'}
+              {profile?.username ? `@${profile.username}` : 'Proctor account'}
             </Text>
             <View style={[styles.roleBadge, { backgroundColor: colors.accentMuted }]}>
               <Text
@@ -142,6 +144,7 @@ export default function ProctorSettingsScreen() {
           style={[
             styles.menuCard,
             { backgroundColor: colors.card, borderColor: colors.cardBorder },
+            isDark && { shadowColor: 'transparent', elevation: 0 },
           ]}
         >
           {/* Account Settings */}
@@ -168,7 +171,7 @@ export default function ProctorSettingsScreen() {
                 style={[styles.menuSub, { color: colors.textSecondary }]}
                 maxFontSizeMultiplier={fontMultiplier}
               >
-                Personal details, password & login activity
+          Personal details and login activity
               </Text>
             </View>
             <ChevronRight size={18} color={colors.textMuted} />
@@ -187,6 +190,7 @@ export default function ProctorSettingsScreen() {
           style={[
             styles.menuCard,
             { backgroundColor: colors.card, borderColor: colors.cardBorder },
+            isDark && { shadowColor: 'transparent', elevation: 0 },
           ]}
         >
           {/* Appearance & Theme (Functional Modal) */}
@@ -222,7 +226,7 @@ export default function ProctorSettingsScreen() {
           variant="outline"
           size="lg"
           fullWidth
-          style={{ borderColor: '#7A1F2B', marginTop: 10 }}
+          style={{ borderColor: colors.danger, marginTop: 10 }}
           onPress={doLogout}
         />
 
@@ -242,7 +246,7 @@ export default function ProctorSettingsScreen() {
           <View
             style={[
               styles.modalSheet,
-              { backgroundColor: colors.card, borderColor: colors.cardBorder },
+              { backgroundColor: colors.modal, borderColor: colors.cardBorder },
             ]}
           >
             {/* Modal Header */}
@@ -289,7 +293,7 @@ export default function ProctorSettingsScreen() {
                   ]}
                   maxFontSizeMultiplier={fontMultiplier}
                 >
-                  Light Mode
+                  Light
                 </Text>
                 {themeMode === 'light' && (
                   <Check size={14} color={colors.accent} style={styles.optionCheck} />
@@ -316,9 +320,36 @@ export default function ProctorSettingsScreen() {
                   ]}
                   maxFontSizeMultiplier={fontMultiplier}
                 >
-                  Dark Mode
+                  Dark
                 </Text>
                 {themeMode === 'dark' && (
+                  <Check size={14} color={colors.accent} style={styles.optionCheck} />
+                )}
+              </Pressable>
+
+              {/* System Mode */}
+              <Pressable
+                style={[
+                  styles.optionBtn,
+                  { backgroundColor: colors.cardMuted, borderColor: colors.cardBorder },
+                  themeMode === 'system' && {
+                    borderColor: colors.accent,
+                    backgroundColor: colors.accentMuted,
+                  },
+                ]}
+                onPress={() => setThemeMode('system')}
+              >
+                <Smartphone size={20} color={themeMode === 'system' ? colors.accent : colors.textMuted} />
+                <Text
+                  style={[
+                    styles.optionText,
+                    { color: themeMode === 'system' ? colors.accent : colors.textSecondary },
+                  ]}
+                  maxFontSizeMultiplier={fontMultiplier}
+                >
+                  System
+                </Text>
+                {themeMode === 'system' && (
                   <Check size={14} color={colors.accent} style={styles.optionCheck} />
                 )}
               </Pressable>

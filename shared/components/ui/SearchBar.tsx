@@ -1,7 +1,8 @@
 import React from 'react';
 import { TextInput, View, StyleSheet, TextInputProps } from 'react-native';
 import { Search } from 'lucide-react-native';
-import { colors, radii } from '@/shared/theme';
+import { radii } from '@/shared/theme';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 interface SearchBarProps extends TextInputProps {
   value: string;
@@ -9,15 +10,16 @@ interface SearchBarProps extends TextInputProps {
 }
 
 export function SearchBar({ value, onChangeText, placeholder = 'Search…', ...props }: SearchBarProps) {
+  const { colors: themeColors } = useAppTheme();
   return (
-    <View style={styles.wrap}>
-      <Search size={18} color={colors.inkMuted} />
+    <View style={[styles.wrap, { backgroundColor: themeColors.searchBg, borderColor: themeColors.inputBorder }]}>
+      <Search size={18} color={themeColors.textMuted} />
       <TextInput
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={colors.inkMuted}
-        style={styles.input}
+        placeholderTextColor={themeColors.textMuted}
+        style={[styles.input, { color: themeColors.textPrimary }]}
         {...props}
       />
     </View>
@@ -29,9 +31,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: colors.border,
     borderRadius: radii.md,
     paddingHorizontal: 14,
     minHeight: 48,
@@ -39,7 +39,6 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     fontSize: 15,
-    color: colors.ink,
     paddingVertical: 10,
   },
 });

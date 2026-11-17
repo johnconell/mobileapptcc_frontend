@@ -8,6 +8,7 @@ import {
   FlatList,
 } from 'react-native';
 import { colors, radii, shadows } from '@/shared/theme';
+import { useAppTheme } from '@/shared/hooks/useAppTheme';
 
 interface SelectOption {
   label: string;
@@ -31,33 +32,40 @@ export function SelectField({
   error,
   onChange,
 }: SelectFieldProps) {
+  const { colors: themeColors, isDark } = useAppTheme();
   const [open, setOpen] = React.useState(false);
   const selected = options.find((o) => o.value === value);
 
   return (
     <View style={styles.wrap}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={[styles.label, { color: themeColors.textSecondary }]}>{label}</Text>
       <Pressable
         onPress={() => setOpen(true)}
-        style={[styles.field, error ? styles.fieldError : null]}
+        style={[
+          styles.field,
+          {
+            backgroundColor: isDark ? themeColors.inputBg : themeColors.card,
+            borderColor: error ? themeColors.danger : themeColors.inputBorder,
+          },
+        ]}
       >
-        <Text style={[styles.value, !selected && styles.placeholder]}>
+        <Text style={[styles.value, { color: selected ? themeColors.textPrimary : themeColors.textMuted }]}>
           {selected?.label ?? placeholder}
         </Text>
       </Pressable>
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? <Text style={[styles.error, { color: themeColors.danger }]}>{error}</Text> : null}
 
       <Modal transparent visible={open} animationType="fade" onRequestClose={() => setOpen(false)}>
-        <View style={styles.overlay}>
+        <View style={[styles.overlay, { backgroundColor: themeColors.overlay }]}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} />
-          <View style={styles.sheet}>
-            <Text style={styles.sheetTitle}>{label}</Text>
+          <View style={[styles.sheet, { backgroundColor: isDark ? '#222730' : themeColors.modal, borderTopWidth: isDark ? 1 : 0, borderColor: themeColors.cardBorder }]}>
+            <Text style={[styles.sheetTitle, { color: themeColors.textPrimary }]}>{label}</Text>
             <FlatList
               data={options}
               keyExtractor={(item) => item.value}
               renderItem={({ item }) => (
                 <Pressable
-                  style={[styles.option, item.value === value && styles.optionActive]}
+                  style={[styles.option, item.value === value && { backgroundColor: themeColors.accentMuted }]}
                   onPress={() => {
                     onChange(item.value);
                     setOpen(false);
@@ -66,7 +74,8 @@ export function SelectField({
                   <Text
                     style={[
                       styles.optionText,
-                      item.value === value && styles.optionTextActive,
+                      { color: item.value === value ? themeColors.accent : themeColors.textPrimary },
+                      item.value === value && { fontWeight: '700' },
                     ]}
                   >
                     {item.label}

@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { STORAGE_KEYS } from '@/shared/constants';
+import type { ChoiceDisplayMap } from '@/features/synchronization/services/offlineExamRepository';
 import {
   writeEncryptedFile,
   readEncryptedFile,
@@ -38,6 +39,7 @@ export interface FinalizedSubmission {
   applicantCode: string;
   studentName?: string;
   answers: Record<string, string | null>;
+  choiceMaps?: Record<string, ChoiceDisplayMap>;
   finalReason: 'submitted' | 'time_expired' | 'proctor_terminated';
   status: SubmissionDeliveryStatus;
   destination: SubmissionDestination;
