@@ -19,6 +19,10 @@ export interface QuestionCardProps {
   disabled?: boolean;
   onFlagButtonLayout?: (rect: { x: number; y: number; width: number; height: number; borderRadius?: number }) => void;
   tutorialPointer?: 'choice' | 'flag' | null;
+  firstChoiceRef?: React.Ref<View>;
+  firstChoiceOnPress?: (action: () => void) => void;
+  flagButtonRef?: React.Ref<View>;
+  flagButtonOnPress?: (action: () => void) => void;
 }
 
 function cleanChoiceText(rawText: string): string {
@@ -72,6 +76,10 @@ function QuestionCardComponent({
   disabled = false,
   onFlagButtonLayout,
   tutorialPointer,
+  firstChoiceRef,
+  firstChoiceOnPress,
+  flagButtonRef,
+  flagButtonOnPress,
 }: QuestionCardProps) {
   const { theme } = useThemeTokens();
   const fontScale = useFontScale();
@@ -165,10 +173,14 @@ function QuestionCardComponent({
                 optionKey={key}
                 text={body}
                 isSelected={selectedAnswer === key}
-                onSelect={handleSelect}
                 disabled={disabled}
                 fontScale={fontScale}
                 theme={theme}
+                testID={key === 'A' && firstChoiceRef ? 'tutorial-first-choice' : undefined}
+                nativeRef={key === 'A' ? firstChoiceRef : undefined}
+                onSelect={key === 'A' && firstChoiceOnPress
+                  ? (choice) => firstChoiceOnPress(() => handleSelect(choice))
+                  : handleSelect}
               />
             );
           })}
@@ -177,6 +189,8 @@ function QuestionCardComponent({
 
       {/* Full-width 44px Mark as Not Sure Button */}
       <View
+        testID={flagButtonRef ? 'tutorial-mark-not-sure' : undefined}
+        ref={flagButtonRef}
         onLayout={(e) => {
           const { x, y, width, height } = e.nativeEvent.layout;
           if (width > 0 && height > 0) {
@@ -194,7 +208,7 @@ function QuestionCardComponent({
           </View>
         )}
         <AppButton
-          onPress={onToggleFlag}
+          onPress={flagButtonOnPress ? () => flagButtonOnPress(onToggleFlag) : onToggleFlag}
           disabled={disabled}
           accessibilityLabel={isFlagged ? 'Marked as not sure. Tap to unmark.' : 'Mark as not sure'}
           variant={isFlagged ? 'flag' : 'outline'}
@@ -223,6 +237,10 @@ function areQuestionCardPropsEqual(prev: QuestionCardProps, next: QuestionCardPr
     prev.onToggleFlag === next.onToggleFlag &&
     prev.onFlagButtonLayout === next.onFlagButtonLayout &&
     prev.tutorialPointer === next.tutorialPointer
+    && prev.firstChoiceRef === next.firstChoiceRef
+    && prev.firstChoiceOnPress === next.firstChoiceOnPress
+    && prev.flagButtonRef === next.flagButtonRef
+    && prev.flagButtonOnPress === next.flagButtonOnPress
   );
 }
 

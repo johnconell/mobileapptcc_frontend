@@ -22,6 +22,10 @@ export interface BottomBarProps {
   onQuestionsButtonLayout?: (rect: { x: number; y: number; width: number; height: number; borderRadius?: number }) => void;
   onSubmitButtonLayout?: (rect: { x: number; y: number; width: number; height: number; borderRadius?: number }) => void;
   tutorialPointer?: 'questions' | 'submit' | null;
+  questionsTutorialRef?: React.Ref<View>;
+  submitTutorialRef?: React.Ref<View>;
+  onQuestionsTutorialPress?: (action: () => void) => void;
+  onSubmitTutorialPress?: (action: () => void) => void;
 }
 
 function BottomBarComponent({
@@ -34,6 +38,10 @@ function BottomBarComponent({
   onQuestionsButtonLayout,
   onSubmitButtonLayout,
   tutorialPointer,
+  questionsTutorialRef,
+  submitTutorialRef,
+  onQuestionsTutorialPress,
+  onSubmitTutorialPress,
 }: BottomBarProps) {
   const { theme, isDark } = useThemeTokens();
   const insets = useSafeAreaInsets();
@@ -97,6 +105,8 @@ function BottomBarComponent({
       <View style={styles.actionsRow}>
         {/* Left: Questions Button */}
         <View
+          testID={questionsTutorialRef ? 'tutorial-questions-button' : undefined}
+          ref={questionsTutorialRef}
           onLayout={(e) => {
             const { x, y, width, height } = e.nativeEvent.layout;
             if (width > 0 && height > 0) {
@@ -114,7 +124,7 @@ function BottomBarComponent({
             </View>
           )}
           <AppButton
-            onPress={onOpenQuestions}
+            onPress={onQuestionsTutorialPress ? () => onQuestionsTutorialPress(onOpenQuestions) : onOpenQuestions}
             disabled={disabled}
             accessibilityLabel={`Questions navigator, ${flaggedCount} flagged`}
             style={[styles.questionsBtn, { width: '100%' }]}
@@ -133,6 +143,8 @@ function BottomBarComponent({
 
         {/* Right: Submit Exam Button (only filled button) */}
         <View
+          testID={submitTutorialRef ? 'tutorial-submit' : undefined}
+          ref={submitTutorialRef}
           onLayout={(e) => {
             const { x, y, width, height } = e.nativeEvent.layout;
             if (width > 0 && height > 0) {
@@ -150,7 +162,7 @@ function BottomBarComponent({
             </View>
           )}
           <AppButton
-            onPress={onSubmit}
+            onPress={onSubmitTutorialPress ? () => onSubmitTutorialPress(onSubmit) : onSubmit}
             disabled={disabled}
             accessibilityLabel="Submit exam"
             variant="filled"

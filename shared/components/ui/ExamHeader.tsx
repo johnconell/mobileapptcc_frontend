@@ -20,12 +20,16 @@ export interface ExamHeaderProps {
   selectedCategory?: string | null;
   onSelectCategory?: (key: string | null) => void;
   disabled?: boolean;
+  timerTutorialRef?: React.Ref<View>;
+  timerTestID?: string;
 }
 
 function ExamHeaderComponent({
   remainingSeconds,
   totalDurationSeconds = 3600,
   disabled = false,
+  timerTutorialRef,
+  timerTestID,
 }: ExamHeaderProps) {
   const { theme, isDark, toggleTheme } = useThemeTokens();
   const fontScale = useFontScale();
@@ -108,6 +112,8 @@ function ExamHeaderComponent({
         <TimerCard
           remainingSeconds={remainingSeconds}
           totalDurationSeconds={totalDurationSeconds}
+          nativeRef={timerTutorialRef}
+          testID={timerTestID}
         />
       </View>
 

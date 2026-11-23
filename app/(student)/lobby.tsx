@@ -50,6 +50,10 @@ import {
 } from '@/shared/theme/examineeRedesign';
 import { ExamineeRedesignChrome } from '@/features/examinations/components/ExamineeRedesignChrome';
 import { usePeerAutoReconnect } from '@/features/monitoring/hooks/usePeerAutoReconnect';
+import { PracticeModeChip } from '@/features/practice/components/PracticeModeChip';
+import type { PracticeApplicant } from '@/features/practice/practiceTypes';
+import { usePracticeStore } from '@/features/practice/practiceStore';
+import { usePracticeTutorialTarget } from '@/features/practice/components/PracticeTutorialProvider';
 
 /**
  * DETERMINISTIC LOBBY STATES
@@ -1071,16 +1075,22 @@ const styles = StyleSheet.create({
 
 type LobbyControllerSnapshot = ReturnType<typeof useLobbyController>;
 
-function LobbyRedesign({
-  controller,
+export function LobbyRedesign({
+  controller: suppliedController,
   onExit,
   onDeclinedAdmission,
+  practiceMode = false,
+  practiceApplicant,
 }: {
-  controller: LobbyControllerSnapshot;
+  controller?: LobbyControllerSnapshot;
   onExit: () => void;
   onDeclinedAdmission: () => Promise<void>;
+  practiceMode?: boolean;
+  practiceApplicant?: PracticeApplicant;
 }) {
   const theme = useExamineeRedesignTheme();
+  const lobbyTutorial = usePracticeTutorialTarget('tutorial-lobby-card');
+  const controller = suppliedController ?? createPracticeLobbyController(practiceApplicant);
   const {
     lobbyData,
     currentStudent,
@@ -1158,6 +1168,7 @@ function LobbyRedesign({
         </View>
       }
     >
+      {practiceMode ? <PracticeModeChip /> : null}
       <View
         style={[
           redesignStyles.connectionChip,
@@ -1200,6 +1211,8 @@ function LobbyRedesign({
       </View>
 
       <View
+        testID={practiceMode ? 'tutorial-lobby-card' : undefined}
+        ref={practiceMode ? lobbyTutorial.ref : undefined}
         style={[
           redesignStyles.statusCard,
           {
@@ -1295,6 +1308,64 @@ function LobbyRedesign({
         </Pressable>
       </View>
     </ExamineeRedesignChrome>
+  );
+}
+
+function createPracticeLobbyController(applicant?: PracticeApplicant): LobbyControllerSnapshot {
+  const now = Date.now();
+  const progress: ExamPackProgress = {
+    ...INITIAL_PACK_PROGRESS,
+    percent: 100,
+    questionsDownloaded: 25,
+    questionsExpected: 25,
+    moduleReady: true,
+    hashVerified: true,
+    configurationComplete: true,
+  };
+  return {
+    lobbyData: {
+      session: {
+        batchNumber: applicant?.batchNumber || 'Practice batch',
+        timeLabel: applicant?.timeSlot || 'Practice session',
+        roomName: applicant?.roomName || 'Practice room',
+      },
+    },
+    currentStudent: applicant ? {
+      fullName: applicant.fullName,
+      programName: applicant.programName,
+    } : null,
+    isStale: false,
+    progress,
+    packDownloadError: null,
+    authority: 'WAITING',
+    pulseOk: true,
+    approvalStatus: 'approved',
+    lastSeen: now,
+    networkBanner: null,
+    state: 'DASHBOARD',
+    error: null,
+    lobbyQuery: { isError: false, refetch: async () => undefined },
+    retryPackDownload: async () => undefined,
+  } as unknown as LobbyControllerSnapshot;
+}
+
+export function PracticeWaitingRoom({ applicant }: { applicant: PracticeApplicant }) {
+  const router = useRouter();
+  const tutorialIndex = usePracticeStore((state) => state.tutorialIndex);
+  const tutorialActive = usePracticeStore((state) => state.tutorialActive);
+  useEffect(() => {
+    if (tutorialActive && tutorialIndex === 3) return;
+    const timer = setTimeout(() => router.replace('/practice/exam' as any), 1800);
+    return () => clearTimeout(timer);
+  }, [router, tutorialIndex, tutorialActive]);
+
+  return (
+    <LobbyRedesign
+      practiceMode
+      practiceApplicant={applicant}
+      onExit={() => router.replace('/practice/confirmation' as any)}
+      onDeclinedAdmission={async () => undefined}
+    />
   );
 }
 

@@ -21,6 +21,10 @@ export interface QuestionNavigatorSheetProps {
   flags: Record<string, boolean>;
   currentIndex: number;
   onJumpToQuestion: (index: number) => void;
+  tutorialQuestionNumber?: number;
+  tutorialQuestionRef?: React.Ref<View>;
+  tutorialOverlay?: React.ReactNode;
+  tutorialOnScroll?: () => void;
 }
 
 function categoryKeyOf(question: Question): string {
@@ -35,6 +39,10 @@ function QuestionNavigatorSheetComponent({
   flags,
   currentIndex,
   onJumpToQuestion,
+  tutorialQuestionNumber,
+  tutorialQuestionRef,
+  tutorialOverlay,
+  tutorialOnScroll,
 }: QuestionNavigatorSheetProps) {
   const { theme, isDark } = useThemeTokens();
   const { height: windowHeight } = useWindowDimensions();
@@ -126,6 +134,8 @@ function QuestionNavigatorSheetComponent({
             style={styles.gridScroll}
             contentContainerStyle={styles.gridContent}
             showsVerticalScrollIndicator
+            onMomentumScrollEnd={tutorialOnScroll}
+            onScrollEndDrag={tutorialOnScroll}
           >
             {categoriesData.map((category) => {
               // Chunk items into exact rows of 5 buttons each
@@ -177,6 +187,8 @@ function QuestionNavigatorSheetComponent({
                           return (
                             <Pressable
                               key={question.id}
+                              testID={number === tutorialQuestionNumber ? 'tutorial-question-5' : undefined}
+                              ref={number === tutorialQuestionNumber ? tutorialQuestionRef : undefined}
                               onPress={() => handleSelectQuestion(index)}
                               accessibilityRole="button"
                               accessibilityLabel={`Question ${number}${flagged ? ', marked as not sure' : ''}${answered ? ', answered' : ', unanswered'}${current ? ', current question' : ''}`}
@@ -240,6 +252,7 @@ function QuestionNavigatorSheetComponent({
             })}
           </ScrollView>
         </View>
+        {tutorialOverlay}
       </View>
     </Modal>
   );

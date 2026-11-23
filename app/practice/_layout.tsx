@@ -4,6 +4,7 @@ import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useThemeTokens } from '@/shared/contexts/ThemeContext';
 import { ErrorBoundary } from '@/shared/components/ErrorBoundary';
+import { PracticeTutorialProvider } from '@/features/practice/components/PracticeTutorialProvider';
 
 export default function PracticeLayout() {
   const { theme } = useThemeTokens();
@@ -14,6 +15,7 @@ export default function PracticeLayout() {
         fallbackTitle="Practice Mode Error"
         fallbackMessage="Practice mode encountered an unexpected display issue. Your mock examination progress is preserved in memory."
       >
+        <PracticeTutorialProvider>
         <View style={{ flex: 1, backgroundColor: theme.surface0 }}>
           <Stack
             screenOptions={{
@@ -50,6 +52,7 @@ export default function PracticeLayout() {
             <Stack.Screen name="completed" />
           </Stack>
         </View>
+        </PracticeTutorialProvider>
       </ErrorBoundary>
     </SafeAreaProvider>
   );

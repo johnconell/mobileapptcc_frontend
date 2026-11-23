@@ -30,6 +30,9 @@ import {
   useExamineeRedesignTheme,
 } from '@/shared/theme/examineeRedesign';
 import { userFacingError } from '@/shared/utils/userFacingError';
+import { PracticeModeChip } from '@/features/practice/components/PracticeModeChip';
+import { usePracticeStore } from '@/features/practice/practiceStore';
+import { usePracticeTutorialTarget } from '@/features/practice/components/PracticeTutorialProvider';
 
 const gmailSchema = z.object({
   email: z
@@ -85,7 +88,7 @@ function formatManilaTimeRange(value: string): string {
     : formatManilaTime(raw);
 }
 
-export default function StudentConfirmationScreen() {
+export function StudentConfirmationScreen({ practiceMode = false }: { practiceMode?: boolean }) {
   const router = useRouter();
   const params = useLocalSearchParams<{
     scheduleTitle?: string;
@@ -101,6 +104,9 @@ export default function StudentConfirmationScreen() {
   const setAgreedAt = useStudentStore((s) => s.setAgreedAt);
   const setSelectedStudent = useStudentStore((s) => s.setSelectedStudent);
   const setSnapshot = useLobbyStore((s) => s.setSnapshot);
+  const practiceAgreed = usePracticeStore((s) => s.agreed);
+  const setPracticeAgreed = usePracticeStore((s) => s.setAgreed);
+  const agreeTutorial = usePracticeTutorialTarget('tutorial-agree');
   const [joinError, setJoinError] = React.useState<string | null>(null);
   const [joining, setJoining] = React.useState(false);
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
@@ -108,6 +114,7 @@ export default function StudentConfirmationScreen() {
     React.useState<ExamPackProgress>(INITIAL_PACK_PROGRESS);
   const proceedAfterIdentityRef = React.useRef(false);
   const [agreed, setAgreed] = React.useState(false);
+  const isAgreed = practiceMode ? practiceAgreed : agreed;
   const [scheduleMeta, setScheduleMeta] = React.useState<StudentScheduleMeta>({
     scheduleTitle: params.scheduleTitle || 'Entrance Examination',
     examDate: params.examDate || '',
@@ -115,6 +122,14 @@ export default function StudentConfirmationScreen() {
   });
 
   React.useEffect(() => {
+    if (practiceMode) {
+      setScheduleMeta({
+        scheduleTitle: 'Practice Examination',
+        examDate: '2026-11-20',
+        timeSlot: '08:00 AM - 09:30 AM',
+      });
+      return;
+    }
     void (async () => {
       const fromRoute: StudentScheduleMeta = {
         scheduleTitle: params.scheduleTitle || 'Entrance Examination',
@@ -133,7 +148,7 @@ export default function StudentConfirmationScreen() {
         // Keep explicit unavailable labels; never invent a schedule.
       }
     })();
-  }, [params.scheduleTitle, params.examDate, params.timeSlot]);
+  }, [params.scheduleTitle, params.examDate, params.timeSlot, practiceMode]);
 
   const hasGmail = Boolean(selectedStudent?.email?.trim());
 
@@ -149,6 +164,7 @@ export default function StudentConfirmationScreen() {
   React.useEffect(() => ExamPreloader.subscribe(setDownloadProgress), []);
 
   React.useEffect(() => {
+    if (practiceMode) return;
     if (verifiedStudent && scannedSessionId) {
       if (agreedAt) {
         router.replace('/(student)/lobby');
@@ -158,14 +174,14 @@ export default function StudentConfirmationScreen() {
     if (!selectedStudent || !scannedSessionId) {
       router.replace('/(student)/passkey');
     }
-  }, [selectedStudent, scannedSessionId, verifiedStudent, agreedAt, router]);
+  }, [selectedStudent, scannedSessionId, verifiedStudent, agreedAt, router, practiceMode]);
 
   const goBack = React.useCallback(() => {
     setSelectedStudent(null);
     setVerifiedStudent(null);
     setAgreedAt(null);
-    router.replace('/(student)/passkey');
-  }, [router, setSelectedStudent, setVerifiedStudent, setAgreedAt]);
+    router.replace(practiceMode ? '/practice/passkey' as any : '/(student)/passkey');
+  }, [router, setSelectedStudent, setVerifiedStudent, setAgreedAt, practiceMode]);
 
   const confirmIdentity = async (email: string) => {
     if (!selectedStudent) return;
@@ -293,9 +309,13 @@ export default function StudentConfirmationScreen() {
       ? 'To be announced'
       : formattedTime + ' · ' + roomValue;
   const emailValue = hasGmail ? selectedStudent.email : 'To be announced';
-  const submitDisabled = !agreed || joining || isSubmitting;
+  const submitDisabled = !isAgreed || joining || isSubmitting;
 
   const handleAgreementPress = () => {
+    if (practiceMode) {
+      router.replace('/practice/lobby' as any);
+      return;
+    }
     if (verifiedStudent) {
       void handleProceed();
       return;
@@ -347,6 +367,7 @@ export default function StudentConfirmationScreen() {
           </View>
         }
       >
+        {practiceMode ? <PracticeModeChip /> : null}
         <Text style={[styles.intro, { color: theme.secondaryText }]}>
           Confirm your registration details before you continue.
         </Text>
@@ -364,17 +385,29 @@ export default function StudentConfirmationScreen() {
         </Text>
 
         <AgreementContent
-          agreed={agreed}
+          agreed={isAgreed}
           proceeding={joining}
           pinStatusText={statusMessage}
           progress={downloadProgress}
-          onToggle={() => setAgreed((value) => !value)}
+          onToggle={() => {
+            const toggle = () => {
+              if (practiceMode) setPracticeAgreed(!practiceAgreed);
+              else setAgreed((value) => !value);
+            };
+            if (practiceMode) agreeTutorial.run(toggle);
+            else toggle();
+          }}
+          agreementRef={practiceMode ? agreeTutorial.ref : undefined}
           joinError={joinError}
           theme={theme}
         />
       </ExamineeRedesignChrome>
     </KeyboardAvoidingView>
   );
+}
+
+export default function StudentConfirmationScreenRoute() {
+  return <StudentConfirmationScreen />;
 }
 
 function IdentityRow({
@@ -403,6 +436,7 @@ function AgreementContent({
   progress,
   joinError,
   onToggle,
+  agreementRef,
   theme,
 }: {
   agreed: boolean;
@@ -411,6 +445,7 @@ function AgreementContent({
   progress: ExamPackProgress;
   joinError: string | null;
   onToggle: () => void;
+  agreementRef?: React.Ref<View>;
   theme: ExamineeRedesignTheme;
 }) {
   return (
@@ -424,6 +459,8 @@ function AgreementContent({
           <RuleLine text="Results are sent to your Gmail." theme={theme} />
         </View>
         <Pressable
+          testID={agreementRef ? 'tutorial-agree' : undefined}
+          ref={agreementRef}
           style={styles.checkboxRow}
           onPress={onToggle}
           accessibilityRole="checkbox"

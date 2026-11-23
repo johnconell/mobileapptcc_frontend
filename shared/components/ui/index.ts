@@ -32,6 +32,7 @@ export { TimerCard } from './TimerCard';
 export { CategoryDropdown, type CategoryItem } from './CategoryDropdown';
 export { ExamHeader } from './ExamHeader';
 export { BottomBar } from './BottomBar';
+export { ExamViewToggle, type ExamViewToggleProps } from './ExamViewToggle';
 export { QuestionNavigatorSheet } from './QuestionNavigatorSheet';
 export { SubmitConfirmDialog } from './SubmitConfirmDialog';
 export { AppButton, Row } from './primitives';

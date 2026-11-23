@@ -19,17 +19,21 @@ import { ChevronLeft, ChevronRight, Layers, List } from 'lucide-react-native';
 
 import {
   BottomBar,
+  ExamViewToggle,
   ExamHeader,
   QuestionCard,
+  QuestionNavigatorSheet,
   SubmitConfirmDialog,
   Row,
   type CategoryItem,
 } from '@/shared/components/ui';
-import { PracticeQuestionNavigatorSheet } from '@/features/practice/components/PracticeQuestionNavigatorSheet';
+import { ExamQuestionWorkspace, type ExamQuestionWorkspaceHandle } from '@/features/examinations/components/ExamQuestionWorkspace';
 import { useThemeTokens } from '@/shared/contexts/ThemeContext';
-import { PracticeBadge } from '@/features/practice/components/PracticeBadge';
-import { PracticeTutorialOverlay } from '@/features/practice/components/PracticeTutorialOverlay';
-import { PracticePointerArrow } from '@/features/practice/components/PracticePointerArrow';
+import { PracticeModeChip } from '@/features/practice/components/PracticeModeChip';
+import {
+  PracticeTutorialModalHost,
+  usePracticeTutorialTarget,
+} from '@/features/practice/components/PracticeTutorialProvider';
 import { usePracticeStore } from '@/features/practice/practiceStore';
 import { buildCategoryProgress } from '@/features/examinations/components/ExamCategoryNav';
 import { isConfirmPhrase } from '@/features/examinations/services/submitGate';
@@ -46,8 +50,14 @@ function PracticeExamScreenInner() {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const { theme, isDark } = useThemeTokens();
 
-  const flatListRef = useRef<FlatList<Question>>(null);
-  const modeSwitchRef = useRef<View>(null);
+  const flatListRef = useRef<ExamQuestionWorkspaceHandle>(null);
+  const timerTutorial = usePracticeTutorialTarget('tutorial-timer');
+  const viewToggleTutorial = usePracticeTutorialTarget('tutorial-view-toggle');
+  const choiceTutorial = usePracticeTutorialTarget('tutorial-first-choice');
+  const flagTutorial = usePracticeTutorialTarget('tutorial-mark-not-sure');
+  const questionsTutorial = usePracticeTutorialTarget('tutorial-questions-button');
+  const submitTutorial = usePracticeTutorialTarget('tutorial-submit');
+  const questionFiveTutorial = usePracticeTutorialTarget('tutorial-question-5', 'modal');
 
   // Store state & selectors
   const questions = usePracticeStore((s) => s.questions);
@@ -63,23 +73,21 @@ function PracticeExamScreenInner() {
   const navMode = usePracticeStore((s) => s.navMode);
   const setNavMode = usePracticeStore((s) => s.setNavMode);
   const submitPractice = usePracticeStore((s) => s.submitPractice);
+  const submittedAt = usePracticeStore((s) => s.submittedAt);
 
   // Tutorial state
+  const setTutorialPaused = usePracticeStore((s) => s.setTutorialPaused);
+  const completeTutorial = usePracticeStore((s) => s.completeTutorial);
+  const tutorialIndex = usePracticeStore((s) => s.tutorialIndex);
   const tutorialActive = usePracticeStore((s) => s.tutorialActive);
-  const tutorialStep = usePracticeStore((s) => s.tutorialStep);
-  const setTutorialStep = usePracticeStore((s) => s.setTutorialStep);
-  const nextTutorialStep = usePracticeStore((s) => s.nextTutorialStep);
   const skipTutorial = usePracticeStore((s) => s.skipTutorial);
-  const visitedQuestions = usePracticeStore((s) => s.visitedQuestions);
-  const hasFlaggedQ1 = usePracticeStore((s) => s.hasFlaggedQ1);
 
   // Modals & Overlay Conflict Prevention
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string | null | undefined>(undefined);
+  const autoSubmitStarted = useRef(false);
 
-  const isOverlayActive = submitConfirmOpen || navigatorOpen;
-  const isInteractiveTutorialActive = tutorialActive && !isOverlayActive;
 
   // Independent practice timer
   useEffect(() => {
@@ -88,6 +96,14 @@ function PracticeExamScreenInner() {
     }, 1000);
     return () => clearInterval(timer);
   }, [decrementTimer]);
+
+  useEffect(() => {
+    if (remainingSeconds > 0 || submittedAt || autoSubmitStarted.current) return;
+    autoSubmitStarted.current = true;
+    completeTutorial();
+    submitPractice();
+    router.replace('/practice/submitting' as any);
+  }, [remainingSeconds, submittedAt, completeTutorial, submitPractice, router]);
 
   // Compute categories
   const categories = useMemo(() => buildCategoryProgress(questions, answers), [questions, answers]);
@@ -115,16 +131,13 @@ function PracticeExamScreenInner() {
   const handleJumpToQuestion = useCallback(
     (index: number) => {
       setCurrentIndex(index);
-      if (tutorialActive && tutorialStep === 'jump_question_5') {
-        setTutorialStep('review_submit');
-      }
       if (navMode === 'scroll') {
         setTimeout(() => {
-          flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0 });
+          flatListRef.current?.scrollToIndex(index, true);
         }, 50);
       }
     },
-    [navMode, setCurrentIndex, tutorialActive, tutorialStep, setTutorialStep],
+    [navMode, setCurrentIndex],
   );
 
   const handleSelectCategory = useCallback(
@@ -144,7 +157,7 @@ function PracticeExamScreenInner() {
   const handleConfirmSubmit = (typedPhrase: string) => {
     if (isConfirmPhrase(typedPhrase)) {
       setSubmitConfirmOpen(false);
-      skipTutorial();
+      completeTutorial();
       submitPractice();
       router.replace('/practice/submitting' as any);
     }
@@ -153,20 +166,27 @@ function PracticeExamScreenInner() {
   const handleReviewUnanswered = () => {
     setSubmitConfirmOpen(false);
     setNavigatorOpen(true);
+    setTutorialPaused(false);
   };
 
   const openNavigator = () => {
     setSubmitConfirmOpen(false);
     setNavigatorOpen(true);
-    // If student was guided to open navigator
-    if (tutorialActive && tutorialStep === 'open_navigator') {
-      setTutorialStep('jump_question_5');
-    }
+  };
+
+  const closeNavigator = () => {
+    setNavigatorOpen(false);
+    if (tutorialActive && tutorialIndex === 9) skipTutorial();
   };
 
   const openSubmitConfirmation = () => {
     setNavigatorOpen(false);
     setSubmitConfirmOpen(true);
+  };
+
+  const closeSubmitConfirmation = () => {
+    setSubmitConfirmOpen(false);
+    setTutorialPaused(false);
   };
 
   return (
@@ -178,6 +198,8 @@ function PracticeExamScreenInner() {
         <ExamHeader
           remainingSeconds={remainingSeconds}
           totalDurationSeconds={totalDurationSeconds}
+          timerTestID="tutorial-timer"
+          timerTutorialRef={timerTutorial.ref}
           categories={categoriesList}
           selectedCategory={
             selectedCategoryFilter === undefined
@@ -191,13 +213,7 @@ function PracticeExamScreenInner() {
         />
       </View>
 
-      {/* Practice Mode Notice Chip */}
-      <View style={{ paddingHorizontal: 16, paddingTop: 6 }}>
-        <PracticeBadge
-          label="PRACTICE MODE · 25 QUESTIONS"
-          sublabel="Try all navigation, review, and submission controls"
-        />
-      </View>
+      <View style={{ paddingHorizontal: 16, paddingTop: 6 }}><PracticeModeChip /></View>
 
       {/* 2. Info Row: "X of 25 answered" on left, "Scroll | One by one" on right */}
       <Row style={styles.infoRow}>
@@ -210,218 +226,41 @@ function PracticeExamScreenInner() {
           {` of ${total} answered`}
         </Text>
 
-        {/* Labeled Mode Switch: Scroll / One by one with direct pointing arrow */}
-        <View style={{ position: 'relative' }}>
-          {tutorialActive && tutorialStep === 'mode_toggle' && (
-            <View style={styles.modeSwitchPointerWrapper} pointerEvents="none">
-              <PracticePointerArrow
-                direction="down"
-                label="SWITCH VIEW (Scroll / One by one)"
-              />
-            </View>
-          )}
-          <View
-            style={[
-              styles.modeSwitch,
-              {
-                backgroundColor: theme.surfaceAlt,
-                borderColor: theme.border,
-              },
-            ]}
-          >
-          <Pressable
-            onPress={() => setNavMode('scroll')}
-            accessibilityRole="button"
-            accessibilityLabel="Scroll mode"
-            style={[
-              styles.modeSegment,
-              navMode === 'scroll' && {
-                backgroundColor: theme.accent,
-              },
-            ]}
-          >
-            <List
-              size={14}
-              color={navMode === 'scroll' ? theme.onAccent : theme.textSecondary}
-              strokeWidth={2}
-            />
-            <Text
-              numberOfLines={1}
-              style={[
-                styles.modeSegmentText,
-                {
-                  color: navMode === 'scroll' ? theme.onAccent : theme.textSecondary,
-                  fontWeight: navMode === 'scroll' ? '600' : '400',
-                },
-              ]}
-            >
-              Scroll
-            </Text>
-          </Pressable>
+        <ExamViewToggle
+          testID="tutorial-view-toggle"
+          tutorialRef={viewToggleTutorial.ref}
+          onTutorialPress={viewToggleTutorial.run}
+          mode={navMode}
+          onToggle={() => setNavMode(navMode === 'scroll' ? 'one_at_a_time' : 'scroll')}
+        />
+      </Row>
 
-          <Pressable
-            onPress={() => setNavMode('one_at_a_time')}
-            accessibilityRole="button"
-            accessibilityLabel="One by one mode"
-            style={[
-              styles.modeSegment,
-              navMode === 'one_at_a_time' && {
-                backgroundColor: theme.accent,
-              },
-            ]}
-          >
-            <Layers
-              size={14}
-              color={navMode === 'one_at_a_time' ? theme.onAccent : theme.textSecondary}
-              strokeWidth={2}
-            />
-            <Text
-              numberOfLines={1}
-              style={[
-                styles.modeSegmentText,
-                {
-                  color: navMode === 'one_at_a_time' ? theme.onAccent : theme.textSecondary,
-                  fontWeight: navMode === 'one_at_a_time' ? '600' : '400',
-                },
-              ]}
-            >
-              One by one
-            </Text>
-          </Pressable>
-        </View>
-      </View>
-    </Row>
-
-      {/* 3. Question Area */}
-      <View style={styles.questionArea}>
-        {navMode === 'scroll' ? (
-          <FlatList
-            ref={flatListRef}
-            data={questions}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item, index }) => (
-              <QuestionCard
-                question={item}
-                questionNumber={item.number ?? index + 1}
-                totalQuestions={total}
-                selectedAnswer={answers[item.id]?.selectedAnswer ?? null}
-                isFlagged={Boolean(flags[item.id])}
-                onSelect={(choice) => selectAnswer(item.id, choice)}
-                onToggleFlag={() => toggleFlag(item.id)}
-                tutorialPointer={
-                  isInteractiveTutorialActive && (item.id === 'p1' || index === 0)
-                    ? tutorialStep === 'select_choice'
-                      ? 'choice'
-                      : tutorialStep === 'flag_question'
-                        ? 'flag'
-                        : null
-                    : null
-                }
-                disabled={false}
-              />
-            )}
-            contentContainerStyle={styles.scrollListContent}
-            showsVerticalScrollIndicator={false}
+      {/* 3. Question Area: same workspace used by the real examination */}
+      <ExamQuestionWorkspace
+        ref={flatListRef}
+        questions={questions}
+        currentIndex={safeIndex}
+        navMode={navMode}
+        onTutorialScrollEnd={viewToggleTutorial.remeasure}
+        onCurrentIndexChange={setCurrentIndex}
+        onVisibleIndexChange={(index) => setCurrentIndex(index)}
+        renderQuestion={(question, index) => (
+          <QuestionCard
+            question={question}
+            questionNumber={question.number ?? index + 1}
+            totalQuestions={total}
+            selectedAnswer={answers[question.id]?.selectedAnswer ?? null}
+            isFlagged={Boolean(flags[question.id])}
+            onSelect={(choice) => selectAnswer(question.id, choice)}
+            onToggleFlag={() => toggleFlag(question.id)}
+            firstChoiceRef={index === 0 ? choiceTutorial.ref : undefined}
+            firstChoiceOnPress={index === 0 ? choiceTutorial.run : undefined}
+            flagButtonRef={index === 0 ? flagTutorial.ref : undefined}
+            flagButtonOnPress={index === 0 ? flagTutorial.run : undefined}
+            disabled={false}
           />
-        ) : (
-          <ScrollView
-            style={styles.oneByOneScroll}
-            contentContainerStyle={styles.oneByOneContent}
-            showsVerticalScrollIndicator={false}
-          >
-            {activeQuestion ? (
-              <>
-                <View>
-                  <QuestionCard
-                    question={activeQuestion}
-                    questionNumber={activeQuestion.number ?? safeIndex + 1}
-                    totalQuestions={total}
-                    selectedAnswer={answers[activeQuestion.id]?.selectedAnswer ?? null}
-                    isFlagged={Boolean(flags[activeQuestion.id])}
-                    onSelect={(choice) => selectAnswer(activeQuestion.id, choice)}
-                    onToggleFlag={() => toggleFlag(activeQuestion.id)}
-                    tutorialPointer={
-                      isInteractiveTutorialActive && safeIndex === 0
-                        ? tutorialStep === 'select_choice'
-                          ? 'choice'
-                          : tutorialStep === 'flag_question'
-                            ? 'flag'
-                            : null
-                        : null
-                    }
-                    disabled={false}
-                  />
-                </View>
-
-                {/* Previous & Next Navigation Controls */}
-                <Row style={styles.oneByOneNavControls}>
-                  <View style={{ position: 'relative' }}>
-                    {isInteractiveTutorialActive && tutorialStep === 'return_marked' && (
-                      <View style={styles.navBtnPointerWrapper} pointerEvents="none">
-                        <PracticePointerArrow
-                          direction="down"
-                          label="TAP PREVIOUS (BACK TO Q1)"
-                        />
-                      </View>
-                    )}
-                    <Pressable
-                      onPress={() => setCurrentIndex(Math.max(0, safeIndex - 1))}
-                      disabled={safeIndex <= 0}
-                      accessibilityRole="button"
-                      accessibilityLabel="Previous question"
-                      style={[
-                        styles.oneByOneNavBtn,
-                        {
-                          backgroundColor: theme.surfaceAlt,
-                          borderColor: theme.border,
-                        },
-                      ]}
-                    >
-                      <ChevronLeft size={18} color={theme.accentText} strokeWidth={2.2} />
-                      <Text numberOfLines={1} style={[styles.oneByOneNavBtnText, { color: theme.accentText }]}>
-                        Previous
-                      </Text>
-                    </Pressable>
-                  </View>
-
-                  <Text numberOfLines={1} style={[styles.oneByOneCenterIndex, { color: theme.textSecondary }]}>
-                    {`Q. ${safeIndex + 1} of ${total}`}
-                  </Text>
-
-                  <View style={{ position: 'relative' }}>
-                    {isInteractiveTutorialActive && tutorialStep === 'navigate_next' && (
-                      <View style={styles.navBtnPointerWrapper} pointerEvents="none">
-                        <PracticePointerArrow
-                          direction="down"
-                          label="TAP NEXT"
-                        />
-                      </View>
-                    )}
-                    <Pressable
-                      onPress={() => setCurrentIndex(Math.min(total - 1, safeIndex + 1))}
-                      disabled={safeIndex >= total - 1}
-                      accessibilityRole="button"
-                      accessibilityLabel="Next question"
-                      style={[
-                        styles.oneByOneNavBtn,
-                        {
-                          backgroundColor: theme.surfaceAlt,
-                          borderColor: theme.border,
-                        },
-                      ]}
-                    >
-                      <Text numberOfLines={1} style={[styles.oneByOneNavBtnText, { color: theme.accentText }]}>
-                        Next
-                      </Text>
-                      <ChevronRight size={18} color={theme.accentText} strokeWidth={2.2} />
-                    </Pressable>
-                  </View>
-                </Row>
-              </>
-            ) : null}
-          </ScrollView>
         )}
-      </View>
+      />
 
       {/* 4. Fixed Bottom Bar */}
       <BottomBar
@@ -430,28 +269,29 @@ function PracticeExamScreenInner() {
         flaggedCount={flaggedCount}
         onOpenQuestions={openNavigator}
         onSubmit={openSubmitConfirmation}
-        tutorialPointer={
-          isInteractiveTutorialActive && tutorialStep === 'open_navigator'
-            ? 'questions'
-            : isInteractiveTutorialActive && tutorialStep === 'review_submit'
-              ? 'submit'
-              : null
-        }
+        questionsTutorialRef={questionsTutorial.ref}
+        onQuestionsTutorialPress={questionsTutorial.run}
+        submitTutorialRef={submitTutorial.ref}
+        onSubmitTutorialPress={submitTutorial.run}
         disabled={false}
       />
 
       {/* Practice Question Navigator Sheet with Question 5 Spotlight */}
-      <PracticeQuestionNavigatorSheet
+      <QuestionNavigatorSheet
         visible={navigatorOpen}
-        onClose={() => setNavigatorOpen(false)}
+        onClose={closeNavigator}
         questions={questions}
         answers={answers}
         flags={flags}
         currentIndex={safeIndex}
-        onJumpToQuestion={handleJumpToQuestion}
-        highlightQuestionNumber={tutorialActive && tutorialStep === 'jump_question_5' ? 5 : undefined}
-        isTutorialStep={tutorialActive && tutorialStep === 'jump_question_5'}
-        onSkipTutorial={skipTutorial}
+        onJumpToQuestion={(index) => {
+          if (index === 4) questionFiveTutorial.run(() => handleJumpToQuestion(index));
+          else handleJumpToQuestion(index);
+        }}
+        tutorialQuestionNumber={5}
+        tutorialQuestionRef={questionFiveTutorial.ref}
+        tutorialOverlay={<PracticeTutorialModalHost />}
+        tutorialOnScroll={questionFiveTutorial.remeasure}
       />
 
       {/* Submit Confirmation Dialog */}
@@ -461,120 +301,12 @@ function PracticeExamScreenInner() {
         unansweredCount={unanswered}
         flaggedCount={flaggedCount}
         totalQuestions={total}
-        onClose={() => setSubmitConfirmOpen(false)}
+        onClose={closeSubmitConfirmation}
         onReview={handleReviewUnanswered}
         onSubmit={handleConfirmSubmit}
       />
 
       {/* ─── INTERACTIVE ONBOARDING TUTORIAL GATED STEPS ─── */}
-      {isInteractiveTutorialActive ? (
-        <>
-          {/* Step 1: Screen Overview */}
-          <PracticeTutorialOverlay
-            visible={tutorialStep === 'overview'}
-            stepNumber={1}
-            totalSteps={8}
-            title="Screen Overview & Timer"
-            description="Welcome to your examination! Notice the Countdown Timer at the top right, and the Subject Category dropdown at the top to filter question categories."
-            cardPlacement="center"
-            onNext={() => setTutorialStep('mode_toggle')}
-            onSkip={skipTutorial}
-          />
-
-          {/* Step 2: Scroll or One by One Mode */}
-          <PracticeTutorialOverlay
-            visible={tutorialStep === 'mode_toggle'}
-            stepNumber={2}
-            totalSteps={8}
-            title="Step 2: Scroll or One by One"
-            description="Choose your preferred view! Tap 'Scroll' to see all questions in a continuous list, or 'One by one' to focus on a single question at a time with Next/Previous buttons. Try toggling anytime!"
-            cardPlacement="bottom"
-            onNext={() => setTutorialStep('select_choice')}
-            onSkip={skipTutorial}
-          />
-
-          {/* Step 3: Select an Answer (Action-gated) */}
-          <PracticeTutorialOverlay
-            visible={tutorialStep === 'select_choice'}
-            stepNumber={3}
-            totalSteps={8}
-            title="Step 3: Select an Answer"
-            description="Tap an answer choice (A, B, C, or D) to select your answer. The selection will highlight immediately with a green checkmark."
-            actionRequired={true}
-            actionHint="Tap any choice (A, B, C, or D) on Question 1 to continue"
-            cardPlacement="top"
-            onSkip={skipTutorial}
-          />
-
-          {/* Step 4: Mark as Not Sure (Action-gated) */}
-          <PracticeTutorialOverlay
-            visible={tutorialStep === 'flag_question'}
-            stepNumber={4}
-            totalSteps={8}
-            title="Step 4: Mark as Not Sure"
-            description="Unsure about an answer? Tap 'Mark as not sure' below the choices. This flags the question with an orange badge so you can easily review it later!"
-            actionRequired={!hasFlaggedQ1}
-            actionHint="Tap 'Mark as not sure' below the question choices"
-            cardPlacement="top"
-            onNext={() => setTutorialStep('navigate_next')}
-            onSkip={skipTutorial}
-          />
-
-          {/* Step 5: Navigate to Next Questions (Action-gated: visit 3 questions) */}
-          <PracticeTutorialOverlay
-            visible={tutorialStep === 'navigate_next'}
-            stepNumber={5}
-            totalSteps={8}
-            title="Step 5: Go to Next Question"
-            description={`Tap 'Next' to move forward through Questions 2 and 3. Answer each question as you go! (${visitedQuestions.size}/3 questions visited).`}
-            actionRequired={visitedQuestions.size < 3}
-            actionHint="Tap 'Next' to visit at least 3 questions and select an answer for each"
-            cardPlacement="top"
-            onNext={() => setTutorialStep('return_marked')}
-            onSkip={skipTutorial}
-          />
-
-          {/* Step 6: Return to Marked Question (Action-gated) */}
-          <PracticeTutorialOverlay
-            visible={tutorialStep === 'return_marked'}
-            stepNumber={6}
-            totalSteps={8}
-            title="Step 6: Return to Marked Question"
-            description="Great! You visited 3 questions and Question 1 is marked. Now return to Question 1 using 'Previous' to review your flagged answer."
-            actionRequired={safeIndex !== 0}
-            actionHint="Navigate back to Question 1 (tap 'Previous')"
-            cardPlacement="top"
-            onNext={() => setTutorialStep('open_navigator')}
-            onSkip={skipTutorial}
-          />
-
-          {/* Step 7: Open Questions Navigator */}
-          <PracticeTutorialOverlay
-            visible={tutorialStep === 'open_navigator' && !navigatorOpen}
-            stepNumber={7}
-            totalSteps={8}
-            title="Step 7: Click 'Questions' Navigator"
-            description="Tap the 'Questions' button in the bottom bar to open the Jump to Question grid and view the status of all 25 questions."
-            actionRequired={true}
-            actionHint="Tap 'Questions' in the bottom bar to open the sheet"
-            cardPlacement="top"
-            onNext={openNavigator}
-            onSkip={skipTutorial}
-          />
-
-          {/* Step 8: Final Review & Submission */}
-          <PracticeTutorialOverlay
-            visible={tutorialStep === 'review_submit'}
-            stepNumber={8}
-            totalSteps={8}
-            title="Step 8: Final Submission Confirmation"
-            description="When finished, tap 'Submit exam'. You will see your answer statistics and type 'EXAM SUBMIT' to finalize your examination."
-            cardPlacement="top"
-            onNext={skipTutorial}
-            onSkip={skipTutorial}
-          />
-        </>
-      ) : null}
     </View>
   );
 }

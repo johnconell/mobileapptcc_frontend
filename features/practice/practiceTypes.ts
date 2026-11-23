@@ -58,6 +58,9 @@ export interface PracticeState {
   // Interactive Onboarding Tutorial State
   tutorialActive: boolean;
   tutorialStep: PracticeTutorialStepId;
+  tutorialIndex: number;
+  tutorialComplete: boolean;
+  tutorialPaused: boolean;
   visitedQuestions: Set<number>;
   hasFlaggedQ1: boolean;
   hasAnsweredCurrent: boolean;
@@ -80,4 +83,9 @@ export interface PracticeState {
   setTutorialStep: (step: PracticeTutorialStepId) => void;
   nextTutorialStep: () => void;
   skipTutorial: () => void;
+  advanceTutorial: () => void;
+  setTutorialIndex: (index: number) => void;
+  setTutorialPaused: (paused: boolean) => void;
+  completeTutorial: () => void;
+  replayTutorial: () => void;
 }

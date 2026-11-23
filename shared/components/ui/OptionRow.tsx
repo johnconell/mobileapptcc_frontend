@@ -11,6 +11,8 @@ export interface OptionRowProps {
   disabled?: boolean;
   fontScale?: number;
   theme: ExamTheme;
+  testID?: string;
+  nativeRef?: React.Ref<View>;
 }
 
 function OptionRowComponent({
@@ -21,9 +23,13 @@ function OptionRowComponent({
   disabled = false,
   fontScale = 1.0,
   theme,
+  testID,
+  nativeRef,
 }: OptionRowProps) {
   return (
     <Pressable
+      ref={nativeRef}
+      testID={testID}
       onPress={() => onSelect(optionKey)}
       disabled={disabled}
       accessibilityRole="radio"
@@ -80,7 +86,9 @@ function areOptionRowPropsEqual(prev: OptionRowProps, next: OptionRowProps) {
     prev.disabled === next.disabled &&
     prev.fontScale === next.fontScale &&
     prev.onSelect === next.onSelect &&
-    prev.theme === next.theme
+    prev.theme === next.theme &&
+    prev.testID === next.testID &&
+    prev.nativeRef === next.nativeRef
   );
 }
 

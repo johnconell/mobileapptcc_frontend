@@ -5,6 +5,7 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 import { Check, Mail, RotateCcw, Home } from 'lucide-react-native';
 import { ExamineeRedesignChrome } from '@/features/examinations/components/ExamineeRedesignChrome';
 import { PracticeBadge } from '@/features/practice/components/PracticeBadge';
+import { PracticeModeChip } from '@/features/practice/components/PracticeModeChip';
 import { usePracticeStore } from '@/features/practice/practiceStore';
 import {
   examineeRedesignLayout,
@@ -18,6 +19,8 @@ export default function PracticeCompletedScreen() {
   const questions = usePracticeStore((s) => s.questions);
   const restartPractice = usePracticeStore((s) => s.restartPractice);
   const resetPractice = usePracticeStore((s) => s.resetPractice);
+  const tutorialComplete = usePracticeStore((s) => s.tutorialComplete);
+  const replayTutorial = usePracticeStore((s) => s.replayTutorial);
 
   const answeredCount = Object.values(answers).filter(
     (a) => a && a.selectedAnswer != null,
@@ -34,6 +37,11 @@ export default function PracticeCompletedScreen() {
     router.replace('/' as any);
   };
 
+  const handleReplayTutorial = () => {
+    replayTutorial();
+    router.replace('/practice/scan' as any);
+  };
+
   const nextSteps = [
     'Proctor syncs the examination results',
     'TCC sends official score to registered Gmail',
@@ -43,14 +51,14 @@ export default function PracticeCompletedScreen() {
   return (
     <ExamineeRedesignChrome
       step={5}
-      title=""
+      title={tutorialComplete ? "You're ready" : ''}
       stepLabel="Step 6 of 6 · Done"
       footer={
         <View style={styles.footerButtons}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Restart Practice"
-            onPress={handleRestart}
+            accessibilityLabel={tutorialComplete ? 'Replay tutorial' : 'Restart Practice'}
+            onPress={tutorialComplete ? handleReplayTutorial : handleRestart}
             style={[
               styles.secondaryButton,
               { backgroundColor: theme.secondaryCard, borderColor: theme.cardBorder },
@@ -58,7 +66,7 @@ export default function PracticeCompletedScreen() {
           >
             <RotateCcw size={18} color={theme.text} />
             <Text style={[styles.secondaryButtonText, { color: theme.text }]}>
-              Restart Practice
+              {tutorialComplete ? 'Replay tutorial' : 'Restart Practice'}
             </Text>
           </Pressable>
 
@@ -77,20 +85,20 @@ export default function PracticeCompletedScreen() {
       }
     >
       <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.content}>
-        <PracticeBadge
-          label="PRACTICE COMPLETE · SIMULATION FINISHED"
-          sublabel="25-question walkthrough completed · Ready for the real exam"
-        />
+        {tutorialComplete ? <PracticeModeChip /> : <PracticeBadge
+          label={tutorialComplete ? 'TUTORIAL COMPLETE' : 'PRACTICE COMPLETE · SIMULATION FINISHED'}
+          sublabel={tutorialComplete ? 'You know each step of the real exam.' : '25-question walkthrough completed · Ready for the real exam'}
+        />}
 
         <View style={[styles.resultIcon, { backgroundColor: theme.primary }]}>
           <Check size={58} color={theme.gold} strokeWidth={3.2} />
         </View>
 
         <Text style={[styles.title, { color: theme.text }]}>
-          Practice Examination Completed
+          {tutorialComplete ? "You're ready" : 'Practice Examination Completed'}
         </Text>
         <Text style={[styles.subtitle, { color: theme.secondaryText }]}>
-          You have successfully experienced the complete examinee workflow!
+          {tutorialComplete ? 'You know each step of the real exam.' : 'You have successfully experienced the complete examinee workflow!'}
         </Text>
 
         {/* Practice Stats Card */}

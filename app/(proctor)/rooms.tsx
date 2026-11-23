@@ -1009,6 +1009,9 @@ function RoomsRedesign({
             <Text style={[roomRedesignStyles.sectionLabel, { color: theme.primary }]}>
               {assignedRoomId ? 'YOUR ROOM' : `AVAILABLE ROOMS · ${rooms.length}`}
             </Text>
+            <Text style={[roomRedesignStyles.actionHint, { color: theme.secondaryText }]}>
+              Tap Claim Room or Open Room to enter the examination lobby.
+            </Text>
           </View>
         }
         ListEmptyComponent={
@@ -1017,6 +1020,13 @@ function RoomsRedesign({
         renderItem={({ item, index }) => {
           const presentation = getRoomPresentation(item);
           const isYourRoom = item.id === assignedRoomId;
+          const canShowRoomAction = item.canOpen && !presentation.hasNoStudents && !presentation.isAssignedToOther;
+          const roomActionDisabled = busy || (
+            item.status !== 'ended' &&
+            item.status !== 'lobby_open' &&
+            item.status !== 'in_progress' &&
+            scheduleAvailability !== 'available'
+          );
           const roomActionLabel = item.status === 'lobby_open' || item.status === 'in_progress'
             ? 'Enter Lobby'
             : item.status === 'ended'
@@ -1031,16 +1041,16 @@ function RoomsRedesign({
                   OTHER ROOMS · {otherRoomCount}
                 </Text>
               ) : null}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`${item.roomName}, ${presentation.indicatorLabel}`}
-                onPress={() => onSelectRoom(item)}
-              >
-                <View style={[roomRedesignStyles.roomCard, {
-                  backgroundColor: isYourRoom ? theme.surface : theme.mutedSurface,
-                  borderColor: isYourRoom ? theme.primary : theme.mutedSurface,
-                  borderWidth: isYourRoom ? 2 : 0,
-                }]}>
+              <View style={[roomRedesignStyles.roomCard, {
+                backgroundColor: isYourRoom ? theme.surface : theme.mutedSurface,
+                borderColor: isYourRoom ? theme.primary : theme.mutedSurface,
+                borderWidth: isYourRoom ? 2 : 0,
+              }]}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`${item.roomName}, ${presentation.indicatorLabel}`}
+                  onPress={() => onSelectRoom(item)}
+                >
                   <View style={roomRedesignStyles.roomRow}>
                     <View style={[roomRedesignStyles.iconWrap, { backgroundColor: isYourRoom ? theme.primaryTint : theme.surface }]}>
                       {isYourRoom || presentation.isOpen
@@ -1068,18 +1078,20 @@ function RoomsRedesign({
                     </View>
                     <RoomStatusPill label={presentation.indicatorLabel} tone={presentation.chipTone} theme={theme} />
                   </View>
-                  {isYourRoom ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={busy}
-                      onPress={() => onSelectRoom(item)}
-                      style={[roomRedesignStyles.primaryAction, { backgroundColor: theme.primary }, busy && roomRedesignStyles.disabledAction]}
-                    >
-                      <Text style={roomRedesignStyles.primaryActionText}>{roomActionLabel}</Text>
-                    </Pressable>
-                  ) : null}
-                </View>
-              </Pressable>
+                </Pressable>
+                {canShowRoomAction ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`${roomActionLabel} for ${item.roomName}`}
+                    disabled={roomActionDisabled}
+                    onPress={() => onSelectRoom(item)}
+                    style={[roomRedesignStyles.primaryAction, { backgroundColor: theme.primary }, roomActionDisabled && roomRedesignStyles.disabledAction]}
+                  >
+                    <DoorOpen size={18} color="#FFFFFF" />
+                    <Text style={roomRedesignStyles.primaryActionText}>{roomActionLabel}</Text>
+                  </Pressable>
+                ) : null}
+              </View>
             </View>
           );
         }}
@@ -1193,6 +1205,7 @@ const roomRedesignStyles = StyleSheet.create({
   heroTime: { fontSize: 32, lineHeight: 36, fontWeight: '800', letterSpacing: -1 },
   heroMeta: { fontSize: 13, fontWeight: '600', opacity: 0.9 },
   sectionLabel: { fontSize: 12, fontWeight: '800', letterSpacing: 1.2 },
+  actionHint: { fontSize: 12, lineHeight: 18, fontWeight: '600', marginTop: -8 },
   otherRoomsLabel: { marginTop: 8, marginBottom: 1 },
   roomItemWrap: { gap: 8 },
   roomCard: { borderRadius: 22, padding: 16, gap: 14 },
@@ -1205,7 +1218,7 @@ const roomRedesignStyles = StyleSheet.create({
   applicants: { flex: 1, minWidth: 0, fontSize: 12, fontWeight: '700' },
   statusPill: { maxWidth: 148, borderRadius: 12, paddingHorizontal: 9, paddingVertical: 5 },
   statusPillText: { fontSize: 11, lineHeight: 14, fontWeight: '700', textAlign: 'center' },
-  primaryAction: { minHeight: scheduleRedesignLayout.primaryButtonHeight, borderRadius: 16, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14, flex: 1 },
+  primaryAction: { minHeight: scheduleRedesignLayout.primaryButtonHeight, borderRadius: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 14, width: '100%' },
   primaryActionText: { fontSize: 16, fontWeight: '800', color: '#FFFFFF' },
   stateWrap: { paddingHorizontal: scheduleRedesignLayout.pagePadding, paddingTop: 20 },
   stateCard: { borderWidth: 1, borderRadius: 20, padding: 22, alignItems: 'center', gap: 9 },

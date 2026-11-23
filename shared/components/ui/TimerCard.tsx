@@ -6,11 +6,15 @@ import { getTimerColors } from '@/shared/theme/theme';
 interface TimerCardProps {
   remainingSeconds: number;
   totalDurationSeconds?: number;
+  testID?: string;
+  nativeRef?: React.Ref<View>;
 }
 
 function TimerCardComponent({
   remainingSeconds,
   totalDurationSeconds = 3600,
+  testID,
+  nativeRef,
 }: TimerCardProps) {
   const { theme } = useThemeTokens();
 
@@ -25,6 +29,8 @@ function TimerCardComponent({
 
   return (
     <View
+      ref={nativeRef}
+      testID={testID}
       style={[
         styles.card,
         {

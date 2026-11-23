@@ -24,6 +24,10 @@ import {
 } from '@/shared/theme/examineeRedesign';
 import { userFacingError } from '@/shared/utils/userFacingError';
 import { formatPasskey, isValidPasskey, normalizePasskey } from '@/features/examinations/services/passkeyFormat';
+import { PracticeModeChip } from '@/features/practice/components/PracticeModeChip';
+import { DEMO_PASSKEY, MOCK_APPLICANT, usePracticeStore } from '@/features/practice/practiceStore';
+import type { StudentRecord } from '@/shared/types';
+import { usePracticeTutorialTarget } from '@/features/practice/components/PracticeTutorialProvider';
 
 const schema = z.object({
   passkey: z
@@ -34,13 +38,16 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
-export default function StudentPasskeyScreen() {
+export function StudentPasskeyScreen({ practiceMode = false }: { practiceMode?: boolean }) {
   const router = useRouter();
   const scannedSessionId = useStudentStore((s) => s.scannedSessionId);
   const verifiedStudent = useStudentStore((s) => s.verifiedStudent);
   const agreedAt = useStudentStore((s) => s.agreedAt);
   const setSelectedStudent = useStudentStore((s) => s.setSelectedStudent);
   const setExamPasskey = useStudentStore((s) => s.setExamPasskey);
+  const setPracticePasskey = usePracticeStore((s) => s.setPasskey);
+  const keyChipTutorial = usePracticeTutorialTarget('tutorial-key-chip');
+  const storedPracticePasskey = usePracticeStore((s) => s.passkey);
   const [error, setError] = useState<string | null>(null);
 
   const storedPasskey = useStudentStore((s) => s.examPasskey);
@@ -52,7 +59,7 @@ export default function StudentPasskeyScreen() {
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { passkey: storedPasskey || '' },
+    defaultValues: { passkey: storedPasskey || (practiceMode ? storedPracticePasskey || DEMO_PASSKEY : '') },
   });
 
   React.useEffect(() => {
@@ -62,17 +69,19 @@ export default function StudentPasskeyScreen() {
   }, [storedPasskey, setValue]);
 
   React.useEffect(() => {
+    if (practiceMode) return;
     if (!scannedSessionId) {
       router.replace('/');
     }
-  }, [scannedSessionId, router]);
+  }, [scannedSessionId, router, practiceMode]);
 
   React.useEffect(() => {
+    if (practiceMode) return;
     if (verifiedStudent && scannedSessionId) {
       const nextRoute = agreedAt ? '/(student)/lobby' : '/(student)/confirmation';
       router.replace(nextRoute as any);
     }
-  }, [verifiedStudent, scannedSessionId, agreedAt, router]);
+  }, [verifiedStudent, scannedSessionId, agreedAt, router, practiceMode]);
 
   const theme = useExamineeRedesignTheme();
 
@@ -86,6 +95,27 @@ export default function StudentPasskeyScreen() {
 
   const onContinue = handleSubmit(async (values) => {
     setError(null);
+    if (practiceMode) {
+      const key = formatPasskey(values.passkey);
+      setPracticePasskey(key);
+      setExamPasskey(key);
+      setSelectedStudent({
+        id: MOCK_APPLICANT.id,
+        studentId: MOCK_APPLICANT.studentId,
+        firstName: 'Juan',
+        middleName: '',
+        lastName: 'Dela Cruz',
+        fullName: MOCK_APPLICANT.fullName,
+        email: MOCK_APPLICANT.email,
+        programId: 'practice-program',
+        programCode: 'PRACTICE',
+        programName: MOCK_APPLICANT.programName,
+        sex: 'Male',
+        avatarInitials: 'JD',
+      } as StudentRecord);
+      router.push('/practice/confirmation' as any);
+      return;
+    }
     try {
       const result = await LobbyRepository.validatePasskey(normalizePasskey(values.passkey));
       if (result.classification === 'already_completed') {
@@ -180,13 +210,13 @@ export default function StudentPasskeyScreen() {
         step={1}
         title="Examination Key"
         stepLabel="Step 2 of 6 · Key"
-        onBack={() => router.replace('/(student)/scan')}
+        onBack={() => router.replace(practiceMode ? '/practice/scan' as any : '/(student)/scan')}
         footer={
           <View style={styles.actions}>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Back"
-              onPress={() => router.replace('/(student)/scan')}
+              onPress={() => router.replace(practiceMode ? '/practice/scan' as any : '/(student)/scan')}
               style={[styles.secondaryButton, { backgroundColor: theme.secondaryCard }]}
             >
               <Text style={[styles.secondaryButtonText, { color: theme.text }]}>Back</Text>
@@ -209,6 +239,7 @@ export default function StudentPasskeyScreen() {
           </View>
         }
       >
+        {practiceMode ? <PracticeModeChip /> : null}
         <Text style={[styles.intro, { color: theme.secondaryText }]}>Type the unique key sent to your Gmail.</Text>
         <Controller
           control={control}
@@ -240,6 +271,19 @@ export default function StudentPasskeyScreen() {
         {errors.passkey?.message ? <Text style={[styles.error, { color: theme.error }]}>{errors.passkey.message}</Text> : null}
         {error ? <Text style={[styles.error, { color: theme.error }]}>{error}</Text> : null}
 
+        {practiceMode ? (
+          <Pressable
+            testID="tutorial-key-chip"
+            ref={keyChipTutorial.ref}
+            accessibilityRole="button"
+            accessibilityLabel="Practice key DEMO-1234. Tap to fill."
+            onPress={() => keyChipTutorial.run(() => setValue('passkey', DEMO_PASSKEY, { shouldValidate: true }))}
+            style={[styles.demoKeyChip, { backgroundColor: theme.warningBackground, borderColor: theme.warningBorder }]}
+          >
+            <Text style={[styles.demoKeyText, { color: theme.text }]}>Practice key · DEMO-1234 · Tap to fill</Text>
+          </Pressable>
+        ) : null}
+
         <View style={[styles.helpCard, { backgroundColor: theme.card, borderColor: theme.cardBorder }]}>
           <View style={styles.helpRow}>
             <View style={[styles.helpIcon, { backgroundColor: theme.primarySoft }]}>
@@ -263,6 +307,10 @@ export default function StudentPasskeyScreen() {
       </ExamineeRedesignChrome>
     </KeyboardAvoidingView>
   );
+}
+
+export default function StudentPasskeyScreenRoute() {
+  return <StudentPasskeyScreen />;
 }
 
 const styles = StyleSheet.create({
@@ -357,4 +405,6 @@ const styles = StyleSheet.create({
   buttonDisabled: {
     opacity: 0.55,
   },
+  demoKeyChip: { alignSelf: 'center', borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7, marginTop: 8 },
+  demoKeyText: { fontSize: 12, fontWeight: '600' },
 });

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { PRACTICE_QUESTIONS } from './mockQuestions';
 import type { PracticeApplicant, PracticeReceipt, PracticeState, PracticeTutorialStepId } from './practiceTypes';
 import type { ChoiceKey, ExamAnswer } from '@/shared/types';
+import { nextPracticeTutorialIndex } from './tutorialEngine';
 
 export const MOCK_APPLICANT: PracticeApplicant = {
   id: 'demo-student-001',
@@ -43,6 +44,9 @@ export const usePracticeStore = create<PracticeState>((set, get) => ({
 
   tutorialActive: true,
   tutorialStep: 'overview',
+  tutorialIndex: 0,
+  tutorialComplete: false,
+  tutorialPaused: false,
   visitedQuestions: new Set<number>([0]),
   hasFlaggedQ1: false,
   hasAnsweredCurrent: false,
@@ -187,6 +191,9 @@ export const usePracticeStore = create<PracticeState>((set, get) => ({
       receipt: null,
       tutorialActive: true,
       tutorialStep: 'overview',
+      tutorialIndex: 0,
+      tutorialComplete: false,
+      tutorialPaused: false,
       visitedQuestions: new Set<number>([0]),
       hasFlaggedQ1: false,
       hasAnsweredCurrent: false,
@@ -209,6 +216,9 @@ export const usePracticeStore = create<PracticeState>((set, get) => ({
       receipt: null,
       tutorialActive: true,
       tutorialStep: 'overview',
+      tutorialIndex: 0,
+      tutorialComplete: false,
+      tutorialPaused: false,
       visitedQuestions: new Set<number>([0]),
       hasFlaggedQ1: false,
       hasAnsweredCurrent: false,
@@ -238,5 +248,34 @@ export const usePracticeStore = create<PracticeState>((set, get) => ({
     }
   },
 
-  skipTutorial: () => set({ tutorialActive: false }),
+  skipTutorial: () => set({ tutorialActive: false, tutorialPaused: false }),
+
+  advanceTutorial: () =>
+    set((state) => ({ tutorialIndex: nextPracticeTutorialIndex(state.tutorialIndex) })),
+
+  setTutorialIndex: (tutorialIndex) => set({ tutorialIndex: Math.max(0, Math.min(10, tutorialIndex)) }),
+
+  setTutorialPaused: (tutorialPaused) => set({ tutorialPaused }),
+
+  completeTutorial: () => set({ tutorialActive: false, tutorialPaused: false, tutorialComplete: true }),
+
+  replayTutorial: () => set({
+    passkey: '',
+    agreed: false,
+    agreedAt: null,
+    answers: {},
+    flags: {},
+    currentIndex: 0,
+    remainingSeconds: PRACTICE_DURATION_SECONDS,
+    submittedAt: null,
+    receipt: null,
+    tutorialActive: true,
+    tutorialPaused: false,
+    tutorialComplete: false,
+    tutorialIndex: 0,
+    tutorialStep: 'overview',
+    visitedQuestions: new Set<number>([0]),
+    hasFlaggedQ1: false,
+    hasAnsweredCurrent: false,
+  }),
 }));

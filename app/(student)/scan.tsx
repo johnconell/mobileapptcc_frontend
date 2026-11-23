@@ -45,6 +45,9 @@ import {
 } from '@/shared/theme/examineeRedesign';
 import { userFacingError } from '@/shared/utils/userFacingError';
 import { debugEvent } from '@/shared/utils/debugDiagnostics';
+import { PracticeModeChip } from '@/features/practice/components/PracticeModeChip';
+import { usePracticeStore } from '@/features/practice/practiceStore';
+import { usePracticeTutorialTarget } from '@/features/practice/components/PracticeTutorialProvider';
 
 const codeSchema = z.object({
   code: z
@@ -96,7 +99,7 @@ async function resolvePeerTarget(target: PeerQrTarget) {
   });
 }
 
-export default function JoinExaminationScreen() {
+export function JoinExaminationScreen({ practiceMode = false }: { practiceMode?: boolean }) {
   const router = useRouter();
   const params = useLocalSearchParams<{ mode?: string }>();
   const reconnectMode = params.mode === 'reconnect';
@@ -112,6 +115,7 @@ export default function JoinExaminationScreen() {
   const [wifiConnected, setWifiConnected] = useState<boolean | null>(null);
   const [roomCodeFocused, setRoomCodeFocused] = useState(false);
   const setScannedSession = useStudentStore((s) => s.setScannedSession);
+  const skipScanTutorial = usePracticeTutorialTarget('tutorial-skip-scan');
   const lastScanAt = useRef(0);
 
   React.useEffect(() => {
@@ -121,6 +125,7 @@ export default function JoinExaminationScreen() {
   }, []);
 
   React.useEffect(() => {
+    if (practiceMode) return;
     let active = true;
     void retainExamineeWifiUsage();
     void getExamineeWifiState().then((state) => {
@@ -133,7 +138,7 @@ export default function JoinExaminationScreen() {
       active = false;
       unsubscribe();
     };
-  }, []);
+  }, [practiceMode]);
 
   React.useEffect(() => {
     debugEvent('scanner.permission', {
@@ -152,6 +157,7 @@ export default function JoinExaminationScreen() {
   }, [mode, scanning, busy, permission?.granted]);
 
   React.useEffect(() => {
+    if (practiceMode) return;
     if (
       mode !== 'scan' ||
       !permission ||
@@ -177,9 +183,10 @@ export default function JoinExaminationScreen() {
         setCameraError(null);
       }
     });
-  }, [mode, permission, requestPermission]);
+  }, [mode, permission, requestPermission, practiceMode]);
 
   React.useEffect(() => {
+    if (practiceMode) return;
     const subscription = AppState.addEventListener('change', (state) => {
       if (state !== 'active' || mode !== 'scan') return;
       permissionRequestStarted.current = false;
@@ -203,7 +210,7 @@ export default function JoinExaminationScreen() {
       }
     });
     return () => subscription.remove();
-  }, [mode, permission?.canAskAgain, permission?.granted, requestPermission]);
+  }, [mode, permission?.canAskAgain, permission?.granted, requestPermission, practiceMode]);
 
   const {
     control,
@@ -517,7 +524,13 @@ export default function JoinExaminationScreen() {
   };
 
   const close = () =>
-    reconnectMode ? router.back() : router.replace('/');
+    reconnectMode ? router.back() : router.replace(practiceMode ? '/practice' as any : '/');
+
+  const continuePractice = () => {
+    usePracticeStore.setState({ sessionCode: 'DEMO-ROOM' });
+    setScannedSession('practice-schedule', 'practice-session');
+    router.replace('/practice/passkey' as any);
+  };
 
   const cameraReady = Boolean(permission?.granted);
   return (
@@ -532,7 +545,34 @@ export default function JoinExaminationScreen() {
         stepLabel="Step 1 of 6 · Join"
         onBack={close}
         backLabel="Cancel"
-        footer={
+        footer={practiceMode ? (
+          <View style={styles.actions}>
+              <Pressable
+                testID="tutorial-skip-scan"
+                ref={skipScanTutorial.ref}
+                accessibilityRole="button"
+                accessibilityLabel="Skip scan"
+                onPress={() => skipScanTutorial.run(continuePractice)}
+                style={[styles.secondaryButton, { backgroundColor: theme.secondaryCard }]}
+              >
+                <Text style={[styles.secondaryButtonText, { color: theme.text }]}>Skip scan</Text>
+              </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Continue"
+              onPress={continuePractice}
+              style={[
+                styles.primaryButton,
+                styles.practicePrimaryButton,
+                { backgroundColor: theme.primary },
+              ]}
+            >
+              <Text style={[styles.primaryButtonText, { color: theme.white }]}>
+                Continue
+              </Text>
+            </Pressable>
+          </View>
+        ) : (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Continue"
@@ -548,8 +588,9 @@ export default function JoinExaminationScreen() {
               {isSubmitting || busy ? (mode === 'scan' ? 'Scanning…' : 'Verifying…') : 'Continue'}
             </Text>
           </Pressable>
-        }
+        )}
       >
+        {practiceMode ? <PracticeModeChip /> : null}
         <Text style={[styles.intro, { color: theme.secondaryText }]}>
           Scan the proctor&apos;s QR code, or type the room code below.
         </Text>
@@ -570,7 +611,7 @@ export default function JoinExaminationScreen() {
               <CameraView
                 style={StyleSheet.absoluteFill}
                 facing="back"
-                active={mode === 'scan' && scanning && !busy}
+                active={!practiceMode && mode === 'scan' && scanning && !busy}
                 onCameraReady={() => debugEvent('scanner.camera_ready')}
                 autofocus="on"
                 barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
@@ -582,7 +623,7 @@ export default function JoinExaminationScreen() {
                   );
                 }}
                 onBarcodeScanned={
-                  scanning && !busy
+                  !practiceMode && scanning && !busy
                     ? ({ data, type }) => {
                         if (type !== 'qr') {
                           debugEvent('scanner.scan_ignored', { reason: 'not_qr' });
@@ -678,7 +719,7 @@ export default function JoinExaminationScreen() {
                 onBlur();
                 setRoomCodeFocused(false);
               }}
-              onSubmitEditing={onVerifyCode}
+              onSubmitEditing={practiceMode ? continuePractice : onVerifyCode}
             />
           )}
         />
@@ -814,6 +855,10 @@ export default function JoinExaminationScreen() {
   );
 }
 
+export default function JoinExaminationScreenRoute() {
+  return <JoinExaminationScreen />;
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1 },
   intro: {
@@ -937,4 +982,15 @@ const styles = StyleSheet.create({
   buttonDisabled: {
     opacity: 0.55,
   },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  practicePrimaryButton: { flex: 1 },
+  secondaryButton: {
+    flex: 1,
+    minHeight: examineeRedesignLayout.buttonHeight,
+    borderRadius: examineeRedesignLayout.buttonRadius,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: examineeRedesignLayout.gap,
+  },
+  secondaryButtonText: { fontSize: 16, fontFamily: 'Poppins_600SemiBold' },
 });

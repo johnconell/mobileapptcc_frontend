@@ -31,6 +31,7 @@ import { STORAGE_KEYS } from '@/shared/constants';
 import { ThemeProvider, useThemeTokens } from '@/shared/contexts/ThemeContext';
 import {
   BottomBar,
+  ExamViewToggle,
   ExamHeader,
   QuestionCard,
   QuestionNavigatorSheet,
@@ -39,6 +40,7 @@ import {
   type CategoryItem,
 } from '@/shared/components/ui';
 import { ExamWifiDisconnectOverlay } from '@/features/examinations/components/ExamWifiDisconnectOverlay';
+import { ExamQuestionWorkspace, type ExamQuestionWorkspaceHandle } from '@/features/examinations/components/ExamQuestionWorkspace';
 import { buildCategoryProgress } from '@/features/examinations/components/ExamCategoryNav';
 import { useStudentStore } from '@/features/applicants/stores/studentStore';
 import { useExamStore, type ExamNavMode } from '@/features/examinations/stores/examStore';
@@ -136,7 +138,7 @@ function ExamScreenInner() {
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useThemeTokens();
 
-  const flatListRef = useRef<FlatList<Question>>(null);
+  const flatListRef = useRef<ExamQuestionWorkspaceHandle>(null);
 
   // Modals & Navigation state
   const [navigatorOpen, setNavigatorOpen] = useState(false);
@@ -1052,7 +1054,7 @@ function ExamScreenInner() {
       setCurrentIndex(index);
       if (navMode === 'scroll') {
         setTimeout(() => {
-          flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0 });
+          flatListRef.current?.scrollToIndex(index, true);
         }, 50);
       }
     },
@@ -1074,10 +1076,7 @@ function ExamScreenInner() {
 
   const keyExtractor = useCallback((item: Question) => item.id, []);
   const handleScrollToIndexFailed = useCallback((info: { index: number; averageItemLength: number }) => {
-    flatListRef.current?.scrollToOffset({
-      offset: info.averageItemLength * info.index,
-      animated: true,
-    });
+    flatListRef.current?.scrollToOffset(info.averageItemLength * info.index, true);
   }, []);
 
   useEffect(() => {
@@ -1085,7 +1084,7 @@ function ExamScreenInner() {
     const timer = setTimeout(() => {
       const index = useExamStore.getState().currentIndex;
       if (index > 0) {
-        flatListRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0 });
+        flatListRef.current?.scrollToIndex(index, false);
       }
     }, 0);
     return () => clearTimeout(timer);
@@ -1333,166 +1332,33 @@ function ExamScreenInner() {
           {` of ${total} answered`}
         </Text>
 
-        {/* Labeled Mode Switch: 32px tall */}
-        <View
-          style={[
-            styles.modeSwitch,
-            {
-              backgroundColor: theme.surfaceAlt,
-              borderColor: theme.border,
-            },
-          ]}
-        >
-          {/* Scroll Mode */}
-          <Pressable
-            onPress={() => handleSetNavMode('scroll')}
-            disabled={paused}
-            accessibilityRole="button"
-            accessibilityLabel="Scroll mode"
-            style={[
-              styles.modeSegment,
-              navMode === 'scroll' && {
-                backgroundColor: theme.accent,
-              },
-            ]}
-          >
-            <List
-              size={14}
-              color={navMode === 'scroll' ? theme.onAccent : theme.textSecondary}
-              strokeWidth={2}
-            />
-            <Text
-              numberOfLines={1}
-              style={[
-                styles.modeSegmentText,
-                {
-                  color: navMode === 'scroll' ? theme.onAccent : theme.textSecondary,
-                  fontWeight: navMode === 'scroll' ? '600' : '400',
-                },
-              ]}
-            >
-              Scroll
-            </Text>
-          </Pressable>
-
-          {/* One by one Mode */}
-          <Pressable
-            onPress={() => handleSetNavMode('one_at_a_time')}
-            disabled={paused}
-            accessibilityRole="button"
-            accessibilityLabel="One by one mode"
-            style={[
-              styles.modeSegment,
-              navMode === 'one_at_a_time' && {
-                backgroundColor: theme.accent,
-              },
-            ]}
-          >
-            <Layers
-              size={14}
-              color={navMode === 'one_at_a_time' ? theme.onAccent : theme.textSecondary}
-              strokeWidth={2}
-            />
-            <Text
-              numberOfLines={1}
-              style={[
-                styles.modeSegmentText,
-                {
-                  color: navMode === 'one_at_a_time' ? theme.onAccent : theme.textSecondary,
-                  fontWeight: navMode === 'one_at_a_time' ? '600' : '400',
-                },
-              ]}
-            >
-              One by one
-            </Text>
-          </Pressable>
-        </View>
+        <ExamViewToggle
+          mode={navMode}
+          onToggle={() => handleSetNavMode(navMode === 'scroll' ? 'one_at_a_time' : 'scroll')}
+          disabled={paused}
+        />
       </Row>
 
-      {/* 3. Question Area */}
-      <View style={styles.questionArea}>
-        {navMode === 'scroll' ? (
-          <FlatList
-            ref={flatListRef}
-            data={questions}
-            keyExtractor={keyExtractor}
-            renderItem={renderQuestionItem}
-            contentContainerStyle={styles.scrollListContent}
-            showsVerticalScrollIndicator={false}
-            removeClippedSubviews={Platform.OS === 'android'}
-            initialNumToRender={4}
-            maxToRenderPerBatch={4}
-            windowSize={7}
-            onViewableItemsChanged={onViewableItemsChanged}
-            viewabilityConfig={viewabilityConfig}
-            onScrollToIndexFailed={handleScrollToIndexFailed}
+      {/* 3. Question Area: one persistent workspace shared with practice mode */}
+      <ExamQuestionWorkspace
+        ref={flatListRef}
+        questions={questions}
+        currentIndex={safeIndex}
+        navMode={navMode}
+        disabled={paused}
+        onCurrentIndexChange={setCurrentIndex}
+        onVisibleIndexChange={(index) => useExamStore.getState().setCurrentIndex(index)}
+        renderQuestion={(question, index) => (
+          <ExamQuestionItem
+            question={question}
+            index={index}
+            totalQuestions={total}
+            disabled={paused}
+            onSelectChoice={handleSelectChoice}
+            onToggleFlag={handleToggleFlag}
           />
-        ) : (
-          <ScrollView
-            style={styles.oneByOneScroll}
-            contentContainerStyle={styles.oneByOneContent}
-            showsVerticalScrollIndicator={false}
-          >
-            {activeQuestion ? (
-              <>
-                <ExamQuestionItem
-                  question={activeQuestion}
-                  index={safeIndex}
-                  totalQuestions={total}
-                  disabled={paused}
-                  onSelectChoice={handleSelectChoice}
-                  onToggleFlag={handleToggleFlag}
-                />
-
-                {/* Previous & Next Buttons */}
-                <Row style={styles.oneByOneNavControls}>
-                  <Pressable
-                    onPress={() => setCurrentIndex(Math.max(0, safeIndex - 1))}
-                    disabled={safeIndex <= 0 || paused}
-                    accessibilityRole="button"
-                    accessibilityLabel="Previous question"
-                    style={[
-                      styles.oneByOneNavBtn,
-                      {
-                        backgroundColor: theme.surfaceAlt,
-                        borderColor: theme.border,
-                      },
-                    ]}
-                  >
-                    <ChevronLeft size={18} color={theme.accentText} strokeWidth={2.2} />
-                    <Text numberOfLines={1} style={[styles.oneByOneNavBtnText, { color: theme.accentText }]}>
-                      Previous
-                    </Text>
-                  </Pressable>
-
-                  <Text numberOfLines={1} style={[styles.oneByOneCenterIndex, { color: theme.textSecondary }]}>
-                    {`Q. ${safeIndex + 1} of ${total}`}
-                  </Text>
-
-                  <Pressable
-                    onPress={() => setCurrentIndex(Math.min(questions.length - 1, safeIndex + 1))}
-                    disabled={safeIndex >= questions.length - 1 || paused}
-                    accessibilityRole="button"
-                    accessibilityLabel="Next question"
-                    style={[
-                      styles.oneByOneNavBtn,
-                      {
-                        backgroundColor: theme.surfaceAlt,
-                        borderColor: theme.border,
-                      },
-                    ]}
-                  >
-                    <Text numberOfLines={1} style={[styles.oneByOneNavBtnText, { color: theme.accentText }]}>
-                      Next
-                    </Text>
-                    <ChevronRight size={18} color={theme.accentText} strokeWidth={2.2} />
-                  </Pressable>
-                </Row>
-              </>
-            ) : null}
-          </ScrollView>
         )}
-      </View>
+      />
 
       {/* 4. Fixed Bottom Bar (Progress Bar + Questions / Submit actions) */}
       <BottomBar
