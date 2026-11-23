@@ -44,6 +44,7 @@ import {
   useExamineeRedesignTheme,
 } from '@/shared/theme/examineeRedesign';
 import { userFacingError } from '@/shared/utils/userFacingError';
+import { debugEvent } from '@/shared/utils/debugDiagnostics';
 
 const codeSchema = z.object({
   code: z
@@ -60,6 +61,23 @@ type CodeForm = z.infer<typeof codeSchema>;
 type JoinMode = 'scan' | 'code';
 
 const PROCTOR_UNREACHABLE = 'PROCTOR_UNREACHABLE';
+const WIFI_CHECK_TIMEOUT_MS = 3000;
+
+async function raceWithFallback<T>(promise: Promise<T>, timeoutMs: number, fallback: T) {
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      resolve(fallback);
+    }, timeoutMs);
+  });
+  try {
+    return { value: await Promise.race([promise, timeout]), timedOut };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 async function resolvePeerTarget(target: PeerQrTarget) {
   await PeerExamClient.setTarget(target);
@@ -97,6 +115,12 @@ export default function JoinExaminationScreen() {
   const lastScanAt = useRef(0);
 
   React.useEffect(() => {
+    const mountedAt = Date.now();
+    debugEvent('scanner.mount', { initialMode: mode });
+    return () => debugEvent('scanner.unmount', { durationMs: Date.now() - mountedAt });
+  }, []);
+
+  React.useEffect(() => {
     let active = true;
     void retainExamineeWifiUsage();
     void getExamineeWifiState().then((state) => {
@@ -112,6 +136,22 @@ export default function JoinExaminationScreen() {
   }, []);
 
   React.useEffect(() => {
+    debugEvent('scanner.permission', {
+      granted: permission?.granted ?? null,
+      canAskAgain: permission?.canAskAgain ?? null,
+    });
+  }, [permission?.granted, permission?.canAskAgain]);
+
+  React.useEffect(() => {
+    debugEvent('scanner.state', {
+      mode,
+      scanning,
+      busy,
+      permissionGranted: permission?.granted ?? false,
+    });
+  }, [mode, scanning, busy, permission?.granted]);
+
+  React.useEffect(() => {
     if (
       mode !== 'scan' ||
       !permission ||
@@ -123,6 +163,10 @@ export default function JoinExaminationScreen() {
     }
     permissionRequestStarted.current = true;
     void requestPermission().then((result) => {
+      debugEvent('scanner.permission_result', {
+        granted: result.granted,
+        canAskAgain: result.canAskAgain,
+      });
       if (!result.granted) {
         setCameraError(
           result.canAskAgain
@@ -186,13 +230,49 @@ export default function JoinExaminationScreen() {
 
   const resolveAndJoin = async (input: string, type: 'qr' | 'code') => {
     if (busy) return;
+    const startedAt = Date.now();
+    debugEvent('join.start', { inputType: type });
     setBusy(true);
     if (type === 'qr') setScanning(false);
     setError(null);
 
     try {
-      await retainExamineeWifiUsage();
-      const wifiState = await getExamineeWifiState();
+      const wifiBinding = await raceWithFallback(
+        retainExamineeWifiUsage(),
+        WIFI_CHECK_TIMEOUT_MS,
+        undefined,
+      );
+      if (wifiBinding.timedOut) {
+        debugEvent('join.wifi_timeout', {
+          operation: 'retainExamineeWifiUsage',
+          timeoutMs: WIFI_CHECK_TIMEOUT_MS,
+        });
+      }
+
+      const netInfo = await raceWithFallback(
+        getExamineeWifiState(),
+        WIFI_CHECK_TIMEOUT_MS,
+        {
+          isWifi: false,
+          isConnected: false,
+          type: null,
+          isConnectionExpensive: null,
+        },
+      );
+      const wifiState = netInfo.value;
+      if (netInfo.timedOut) {
+        debugEvent('join.wifi_timeout', {
+          operation: 'NetInfo.fetch',
+          timeoutMs: WIFI_CHECK_TIMEOUT_MS,
+        });
+      }
+      debugEvent('join.wifi_state', {
+        isWifi: wifiState.isWifi,
+        isConnected: wifiState.isConnected,
+        type: wifiState.type,
+        isConnectionExpensive: wifiState.isConnectionExpensive,
+        netInfoTimedOut: netInfo.timedOut,
+      });
       if (!wifiState.isWifi) {
         setError('Connect to the exam WiFi.');
         return;
@@ -380,6 +460,11 @@ export default function JoinExaminationScreen() {
       await LobbyRepository.persistExaminationCode(code);
       throw new Error(PROCTOR_UNREACHABLE);
     } catch (err: any) {
+      debugEvent('join.error', {
+        elapsedMs: Date.now() - startedAt,
+        status: typeof err?.status === 'number' ? err.status : null,
+        errorName: err instanceof Error ? err.name : 'unknown',
+      });
       if (err?.status === 409) {
         setError('This student account has already joined this examination session from another device.');
       } else if (err?.status === 404) {
@@ -400,6 +485,7 @@ export default function JoinExaminationScreen() {
         setScanning(true);
       }
     } finally {
+      debugEvent('join.end', { elapsedMs: Date.now() - startedAt });
       setBusy(false);
     }
   };
@@ -485,9 +571,11 @@ export default function JoinExaminationScreen() {
                 style={StyleSheet.absoluteFill}
                 facing="back"
                 active={mode === 'scan' && scanning && !busy}
+                onCameraReady={() => debugEvent('scanner.camera_ready')}
                 autofocus="on"
                 barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
                 onMountError={({ message }) => {
+                  debugEvent('scanner.camera_error', { message });
                   setCameraError(
                     message ||
                       'The camera could not start. Allow camera access and try again, or enter the examination code manually.',
@@ -496,7 +584,15 @@ export default function JoinExaminationScreen() {
                 onBarcodeScanned={
                   scanning && !busy
                     ? ({ data, type }) => {
-                        if (type !== 'qr' || typeof data !== 'string' || !data.trim()) return;
+                        if (type !== 'qr') {
+                          debugEvent('scanner.scan_ignored', { reason: 'not_qr' });
+                          return;
+                        }
+                        if (typeof data !== 'string' || !data.trim()) {
+                          debugEvent('scanner.scan_ignored', { reason: 'empty_data' });
+                          return;
+                        }
+                        debugEvent('scanner.scan_received', { type });
                         void handlePayload(data);
                       }
                     : undefined
@@ -518,6 +614,10 @@ export default function JoinExaminationScreen() {
                     }
                     permissionRequestStarted.current = true;
                     void requestPermission().then((result) => {
+                      debugEvent('scanner.permission_result', {
+                        granted: result.granted,
+                        canAskAgain: result.canAskAgain,
+                      });
                       setCameraError(
                         result.granted
                           ? null

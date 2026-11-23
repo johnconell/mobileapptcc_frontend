@@ -21,18 +21,23 @@ function isConnectedToWifi(state: NetInfoState | null | undefined): boolean {
 export async function getExamineeWifiState(): Promise<{
   isWifi: boolean;
   isConnected: boolean;
+  type: string | null;
+  isConnectionExpensive: boolean | null;
 }> {
   try {
     const state = await NetInfo.fetch();
+    const details = state.details as { isConnectionExpensive?: boolean | null } | null;
     return {
       isWifi: isConnectedToWifi(state),
       isConnected: state.isConnected === true,
+      type: state.type ?? null,
+      isConnectionExpensive: details?.isConnectionExpensive ?? null,
     };
   } catch (error) {
     if (__DEV__) {
       console.warn('[EXAM WIFI] Could not read network state:', error);
     }
-    return { isWifi: false, isConnected: false };
+    return { isWifi: false, isConnected: false, type: null, isConnectionExpensive: null };
   }
 }
 

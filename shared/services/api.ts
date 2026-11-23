@@ -7,6 +7,7 @@ import {
 import { appStorage } from '@/shared/services/storage';
 import { authStorageKeys, isLocalApiMode } from '@/features/local-testing/localMode';
 import { localApiRequest } from '@/features/local-testing/localApiTransport';
+import { debugEvent } from '@/shared/utils/debugDiagnostics';
 
 const DEFAULT_API_URL = 'https://api.masterexam.pro/api/v1';
 
@@ -20,6 +21,12 @@ function normalizeBase(url: string): string {
     value = `http://${value}`;
   }
   return value;
+}
+
+function diagnosticPath(path: string): string {
+  return path
+    .split('?')[0]
+    .replace(/\/(?:\d+|[0-9a-f]{8}-[0-9a-f-]{27}|[A-Za-z0-9]{8,})(?=\/|$)/gi, '/:redacted');
 }
 
 /**
@@ -127,6 +134,13 @@ export async function apiRequest<T = unknown>(
   const base = normalizeBase(options.baseUrl || getApiBaseUrl());
   assertSecureApiBase(base);
   const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+  const requestStartedAt = Date.now();
+  const timeoutMs = options.timeoutMs ?? 5000;
+  debugEvent('api.request.start', {
+    url: `${new URL(base).origin}${path.startsWith('/') ? diagnosticPath(path) : `/${diagnosticPath(path)}`}`,
+    method,
+    timeoutMs,
+  });
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...(options.headers ?? {}),
@@ -146,7 +160,7 @@ export async function apiRequest<T = unknown>(
   let response: Response;
   let text: string;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 5000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     response = await fetch(url, {
       method,
@@ -155,7 +169,17 @@ export async function apiRequest<T = unknown>(
       signal: controller.signal,
     });
     text = await response.text();
+    debugEvent('api.request.response', {
+      url: `${new URL(base).origin}${path.startsWith('/') ? diagnosticPath(path) : `/${diagnosticPath(path)}`}`,
+      httpStatus: response.status,
+      elapsedMs: Date.now() - requestStartedAt,
+    });
   } catch {
+    debugEvent('api.request.error', {
+      url: `${new URL(base).origin}${path.startsWith('/') ? diagnosticPath(path) : `/${diagnosticPath(path)}`}`,
+      elapsedMs: Date.now() - requestStartedAt,
+      errorName: controller.signal.aborted ? 'AbortError' : 'NetworkError',
+    });
     const hint = lanApiOverride
       ? ' / campus Wi‑Fi and LAN IP'
       : isLoopbackApiHost(base) && requiresLanApiHost()

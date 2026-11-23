@@ -30,6 +30,7 @@ import {
   OfflineExamRepository,
 } from '@/features/synchronization/services/offlineExamRepository';
 import { useProctorStore } from '@/features/proctors/stores/proctorStore';
+import { logAppStart } from '@/shared/utils/debugDiagnostics';
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
@@ -212,6 +213,10 @@ export default function RootLayout() {
     Poppins_500Medium,
     Poppins_600SemiBold,
   });
+
+  useEffect(() => {
+    void logAppStart();
+  }, []);
 
   useEffect(() => {
     let cleanupNetwork: () => void = () => {};

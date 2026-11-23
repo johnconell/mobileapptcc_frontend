@@ -3,6 +3,7 @@ import { assertSecureApiBase } from '@/shared/services/apiReachability';
 import { PEER_PATH_PREFIX, PEER_PORT, type PeerQrTarget } from '@/features/examinations/services/peerExamServer';
 import { appStorage } from '@/shared/services/storage';
 import { Platform } from 'react-native';
+import { debugEvent } from '@/shared/utils/debugDiagnostics';
 import * as Crypto from 'expo-crypto';
 import { bytesToHex } from '@noble/ciphers/utils.js';
 import {
@@ -150,9 +151,16 @@ async function performSecureRequest<T>(
     ),
   );
   let activeChannel: (typeof channel) = null;
+  const requestStartedAt = Date.now();
+  const timeoutMs = options.timeoutMs ?? 5000;
+  debugEvent('peer.request.start', {
+    url: `${baseUrl(target)}${peerPath}`,
+    method,
+    timeoutMs,
+  });
 
   try {
-    activeChannel = await secureChannelFor(target, options.timeoutMs ?? 5000);
+    activeChannel = await secureChannelFor(target, timeoutMs);
     const sequence = activeChannel.sequence + 1;
     activeChannel.sequence = sequence;
     const message = encryptPeerPayload(
@@ -172,8 +180,13 @@ async function performSecureRequest<T>(
           body: JSON.stringify(message),
           signal,
         }),
-      options.timeoutMs ?? 5000,
+      timeoutMs,
     );
+    debugEvent('peer.request.response', {
+      url: `${baseUrl(target)}${peerPath}`,
+      httpStatus: response.status,
+      elapsedMs: Date.now() - requestStartedAt,
+    });
     const outer = await response.json().catch(() => null);
     if (!response.ok || !outer?.ciphertext) {
       channel = null;
@@ -198,6 +211,11 @@ async function performSecureRequest<T>(
       throw new Error('The proctor returned an invalid secure response.');
     }
     if (result.status < 200 || result.status >= 300 || json?.success === false) {
+      debugEvent('peer.request.result', {
+        url: `${baseUrl(target)}${peerPath}`,
+        responseStatus: result.status,
+        elapsedMs: Date.now() - requestStartedAt,
+      });
       const { classifyPeerStartupError } = await import('@/features/examinations/services/examReadiness');
       const rawMessage =
         (typeof json?.message === 'string' && json.message.trim()) ||
@@ -207,9 +225,19 @@ async function performSecureRequest<T>(
       (err as any).statusCode = result.status;
       throw err;
     }
+    debugEvent('peer.request.result', {
+      url: `${baseUrl(target)}${peerPath}`,
+      responseStatus: result.status,
+      elapsedMs: Date.now() - requestStartedAt,
+    });
     emitConnectionEvent('restored');
     return (json?.data !== undefined ? json.data : json) as T;
   } catch (error) {
+    debugEvent('peer.request.error', {
+      url: `${baseUrl(target)}${peerPath}`,
+      elapsedMs: Date.now() - requestStartedAt,
+      errorName: error instanceof Error ? error.name : 'unknown',
+    });
     if (isTransportFailure(error)) emitConnectionEvent('drop');
     if (channel === activeChannel) channel = null;
     throw error;
@@ -525,10 +553,21 @@ export const PeerExamClient = {
   ): Promise<T> {
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      const target = await this.getTarget();
+      debugEvent('peer.request_attempt', {
+        url: target ? `${baseUrl(target)}${path.startsWith('/') ? path : `/${path}`}` : null,
+        attempt: attempt + 1,
+        timeoutMs: options.timeoutMs ?? 5000,
+      });
       try {
         return await this.request<T>(path, options);
       } catch (error) {
         lastError = error;
+        debugEvent('peer.request_retry', {
+          attempt: attempt + 1,
+          willRetry: attempt === 0,
+          errorName: error instanceof Error ? error.name : 'unknown',
+        });
         if (attempt === 0) await wait(150);
       }
     }

@@ -2,6 +2,7 @@ import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
+  Dimensions,
   Modal,
   Platform,
   Pressable,
@@ -17,6 +18,7 @@ import { useThemeTokens } from '@/shared/contexts/ThemeContext';
 import { CheckCircle2, AlertCircle, Flag, Send } from 'lucide-react-native';
 import { isConfirmPhrase } from '@/features/examinations/services/submitGate';
 import { Row } from './primitives';
+import { debugEvent } from '@/shared/utils/debugDiagnostics';
 
 export interface SubmitConfirmDialogProps {
   visible: boolean;
@@ -51,7 +53,18 @@ function SubmitConfirmDialogComponent({
 
   const inputRef = useRef<TextInput>(null);
   const scrollViewRef = useRef<ScrollView>(null);
+  const renderCount = useRef(0);
+  renderCount.current += 1;
   const matches = isConfirmPhrase(text);
+
+  useEffect(() => {
+    if (process.env.EXPO_PUBLIC_DEBUG_DIAGNOSTICS !== '1') return;
+    const timer = setInterval(() => {
+      debugEvent('submit.render_rate', { rendersLastSecond: renderCount.current });
+      renderCount.current = 0;
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const safeTop = Math.max(insets.top, 16);
   const safeBottom = Math.max(insets.bottom, 16);
@@ -69,9 +82,11 @@ function SubmitConfirmDialogComponent({
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
     const showSub = Keyboard.addListener(showEvent, () => {
+      debugEvent('submit.keyboard', { state: 'show' });
       setKeyboardVisible(true);
     });
     const hideSub = Keyboard.addListener(hideEvent, () => {
+      debugEvent('submit.keyboard', { state: 'hide' });
       setKeyboardVisible(false);
     });
 
@@ -79,6 +94,16 @@ function SubmitConfirmDialogComponent({
       showSub.remove();
       hideSub.remove();
     };
+  }, []);
+
+  useEffect(() => {
+    const subscription = Dimensions.addEventListener('change', ({ window, screen }) => {
+      debugEvent('submit.dimensions', {
+        windowHeight: window.height,
+        screenHeight: screen.height,
+      });
+    });
+    return () => subscription.remove();
   }, []);
 
   const isContentTaller =
@@ -89,6 +114,7 @@ function SubmitConfirmDialogComponent({
   const shouldAlignTop = keyboardVisible || isContentTaller;
 
   const handleInputFocus = useCallback(() => {
+    debugEvent('submit.input_focus');
     setTimeout(() => {
       scrollViewRef.current?.scrollToEnd({ animated: true });
     }, 120);
@@ -379,6 +405,7 @@ function SubmitConfirmDialogComponent({
                   value={text}
                   onChangeText={setText}
                   onFocus={handleInputFocus}
+                  onBlur={() => debugEvent('submit.input_blur')}
                   placeholder="Type EXAM SUBMIT here"
                   placeholderTextColor={theme.textMuted}
                   autoCapitalize="characters"
