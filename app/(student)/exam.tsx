@@ -1515,18 +1515,6 @@ function ExamScreenInner() {
         onJumpToQuestion={handleJumpToQuestion}
       />
 
-      {/* Submit Confirmation Dialog */}
-      <SubmitConfirmDialog
-        visible={submitConfirmOpen && !wifiLocked && !roomEnded}
-        answeredCount={answered}
-        unansweredCount={unanswered}
-        flaggedCount={flaggedCount}
-        totalQuestions={total}
-        onClose={closeSubmitConfirmation}
-        onReview={reviewUnansweredAndFlagged}
-        onSubmit={confirmSubmit}
-      />
-
       {/* WiFi Disconnect Overlay */}
       <ExamWifiDisconnectOverlay
         visible={wifiLocked && !roomEnded && !isLeavingExam}
@@ -1546,6 +1534,18 @@ function ExamScreenInner() {
         }}
         onChangeWifiNetwork={handleChangeWifiNetwork}
         onExitEnded={leaveEndedExam}
+      />
+
+      {/* Submit confirmation must be last so it covers the footer and exam overlays. */}
+      <SubmitConfirmDialog
+        visible={submitConfirmOpen && !wifiLocked && !roomEnded}
+        answeredCount={answered}
+        unansweredCount={unanswered}
+        flaggedCount={flaggedCount}
+        totalQuestions={total}
+        onClose={closeSubmitConfirmation}
+        onReview={reviewUnansweredAndFlagged}
+        onSubmit={confirmSubmit}
       />
     </View>
   );

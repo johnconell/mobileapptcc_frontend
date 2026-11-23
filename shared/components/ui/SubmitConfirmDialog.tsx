@@ -1,9 +1,9 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
+  BackHandler,
   Keyboard,
   KeyboardAvoidingView,
   Dimensions,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -147,18 +147,24 @@ function SubmitConfirmDialogComponent({
     }
   }, [keyboardVisible, handleClose]);
 
+  useEffect(() => {
+    if (!visible) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleRequestClose();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [visible, handleRequestClose]);
+
+  if (!visible) return null;
+
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={handleRequestClose}
-    >
       <View
         style={[
           styles.overlay,
           { backgroundColor: `${isDark ? theme.bg : theme.text}73` },
         ]}
+        pointerEvents="auto"
       >
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -512,7 +518,6 @@ function SubmitConfirmDialogComponent({
           </ScrollView>
         </KeyboardAvoidingView>
       </View>
-    </Modal>
   );
 }
 
@@ -520,7 +525,9 @@ export const SubmitConfirmDialog = memo(SubmitConfirmDialogComponent);
 
 const styles = StyleSheet.create({
   overlay: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1_000_001,
+    elevation: 1_000_001,
   },
   keyboardAvoiding: {
     flex: 1,
